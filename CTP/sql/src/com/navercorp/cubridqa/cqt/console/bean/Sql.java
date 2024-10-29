@@ -44,6 +44,9 @@ public class Sql {
     // Only join graph xxx
     private boolean isJoingraph = false;
 
+    // Adds both join graph and query plan
+    private boolean isFullplan = false;
+
     private int type;
 
     private String result = "";
@@ -170,5 +173,13 @@ public class Sql {
 
     public void setJoingraph(boolean isJoingraph) {
         this.isJoingraph = isJoingraph;
+    }
+
+    public boolean isFullplan() {
+        return isFullplan;
+    }
+
+    public void setFullplan(boolean isFullplan) {
+        this.isFullplan = isFullplan;
     }
 }
