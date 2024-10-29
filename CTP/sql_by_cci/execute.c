@@ -58,6 +58,7 @@ typedef struct SqlStateStruct
   struct {
     bool hasqp; 
     bool onlyjg; /*join graph without queryplan */
+    bool hasfullp;
   };
 
   bool iscallwithoutvalue;
@@ -988,7 +989,7 @@ readFile (char *fileName)
   int ascii1 = 0, ascii2 = 0;
   char line[MAX_SQL_LEN];
   char sql_buf[MAXLINELENGH];
-  bool hasqp = 0,hasjg = 0;
+  bool hasqp = 0, hasjg = 0, hasfullp = 0;
 
   //initial the total sql count.
   total_sql = 0;
@@ -1015,6 +1016,12 @@ readFile (char *fileName)
 		  hasjg = 1;
 		  hasqp = 1;
 		}
+        else if (startswith (line, "--@fullplan"))
+    {
+      hasjg = 1;
+      hasqp = 1;
+      hasfullp = 1;
+    }
 	      else if (startswithCI (line, "--+ server-message") ||
 		       startswithCI (line, "--+server-message") ||
 		       startswithCI (line, "--+ holdcas") || startswithCI (line, "--+holdcas"))
@@ -1023,6 +1030,7 @@ readFile (char *fileName)
 		  strcpy (sqlstate[total_sql].sql, line);
 		  sqlstate[total_sql].hasqp = 0;
 		  sqlstate[total_sql].onlyjg = 0;
+      sqlstate[total_sql].hasfullp = 0;
 		  //if script like "? = call"
 		  sqlstate[total_sql].iscallwithoutvalue = 0;
 
@@ -1055,6 +1063,7 @@ readFile (char *fileName)
 		  strcpy (sqlstate[total_sql].sql, sql_buf);
 		  sqlstate[total_sql].hasqp = hasqp;
 		  sqlstate[total_sql].onlyjg = hasjg;
+      sqlstate[total_sql].hasfullp = hasfullp;
 		  //if script like "? = call"
 		  sqlstate[total_sql].iscallwithoutvalue = startswith (line, "?");
 
@@ -1064,6 +1073,7 @@ readFile (char *fileName)
 		  sql_len = 0;
 		  hasqp = 0;
 		  hasjg = 0;
+      hasfullp = 0;
 		}
 
 	      if (is_statement_end ())
@@ -1241,7 +1251,7 @@ formatjoingraph (FILE * fp, char *joingraph)
 }
 
 int
-dumptable (FILE * fp, int req, char con, bool hasqueryplan, bool onlyjoingraph)
+dumptable (FILE * fp, int req, char con, bool hasqueryplan, bool onlyjoingraph, bool hasfullplan)
 {
   int res = 0;
   int ind = 0, index_count = 0, col_count = 0, setsize = -1, index_set = 0;
@@ -1515,11 +1525,15 @@ _NEXT_MULTIPLE_LINE_SQL:
                {
                  formatjoingraph (fp, plan);
                }
+             else if (hasfullplan)
+               {
+                 formatfullplan (fp, plan);
+               }
              else
                {
-                 formatplan (fp, plan);
+                 formatqueryplan (fp, plan);
                }
-		  }
+      }
 	      }
 	    }
 
@@ -1770,6 +1784,7 @@ execute (FILE * fp, char conn, const SqlStateStruce *pSqlState)
   char *sql = pSqlState->sql;
   bool hasqueryplan = pSqlState->hasqp;
   bool onlyjoingraph = pSqlState->onlyjg;
+  bool hasfullplan = pSqlState->hasfullp;
 
   fprintf (fp, "===================================================\n");
 
@@ -1825,7 +1840,7 @@ execute (FILE * fp, char conn, const SqlStateStruce *pSqlState)
   if (cmd_type == CUBRID_STMT_SELECT || cmd_type == CUBRID_STMT_CALL || cmd_type == CUBRID_STMT_EVALUATE
       || cmd_type == CUBRID_STMT_GET_STATS)
     {
-      dumptable (fp, req, conn, hasqueryplan, onlyjoingraph);
+      dumptable (fp, req, conn, hasqueryplan, onlyjoingraph, hasfullplan);
       goto _END;
     }
   else if (cmd_type == CUBRID_STMT_UPDATE)
@@ -1845,7 +1860,11 @@ execute (FILE * fp, char conn, const SqlStateStruce *pSqlState)
 	        { 
 	          formatjoingraph (fp, plan);
 	        }
-	      else
+	      else if (hasfullplan)
+          {
+            formatfullplan (fp, plan);
+          }
+        else
 	        {
 	          formatplan (fp, plan);
 	        }
@@ -1874,7 +1893,7 @@ execute (FILE * fp, char conn, const SqlStateStruce *pSqlState)
       res_col_info = cci_get_result_info (req, &cmd_type, &col_count);
       if (cmd_type == CUBRID_STMT_SELECT || cmd_type == CUBRID_STMT_CALL)
 	{
-	  dumptable (fp, req, conn, hasqueryplan, onlyjoingraph);
+	  dumptable (fp, req, conn, hasqueryplan, onlyjoingraph, hasfullplan);
 	}
       else
 	{
@@ -1912,6 +1931,7 @@ executebind (FILE * fp, char conn, char *param, const SqlStateStruce *pSqlState)
   char *sql = pSqlState->sql;
   bool hasqueryplan = pSqlState->hasqp;
   bool onlyjoingraph = pSqlState->onlyjg;
+  bool hasfullplan = pSqlState->hasfullp;
   bool iscall = pSqlState->iscallwithoutvalue;
   fprintf (fp, "===================================================\n");
 
@@ -2036,7 +2056,7 @@ executebind (FILE * fp, char conn, char *param, const SqlStateStruce *pSqlState)
   res_col_info = cci_get_result_info (req, &cmd_type, &col_count);
   if (cmd_type == CUBRID_STMT_SELECT || cmd_type == CUBRID_STMT_CALL)
     {
-      dumptable (fp, req, conn, hasqueryplan, onlyjoingraph);
+      dumptable (fp, req, conn, hasqueryplan, onlyjoingraph, hasfullplan);
     }
   else
     {
@@ -2056,7 +2076,7 @@ executebind (FILE * fp, char conn, char *param, const SqlStateStruce *pSqlState)
 	  res_col_info = cci_get_result_info (req, &cmd_type, &col_count);
 	  if (cmd_type == CUBRID_STMT_SELECT || cmd_type == CUBRID_STMT_CALL)
 	    {
-	      dumptable (fp, req, conn, hasqueryplan, onlyjoingraph);
+	      dumptable (fp, req, conn, hasqueryplan, onlyjoingraph, hasfullplan);
 	    }
 	  else
 	    {
