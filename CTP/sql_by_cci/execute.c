@@ -1183,7 +1183,7 @@ formatjoingraph (FILE * fp, char *joingraph)
 {
   char *str, *p;
   int i, joingraphLen, newline;
-  bool queryplan_found = false; 
+  int joinflag = 0; 
   joingraphLen = strlen (joingraph);
   str = (char *) malloc (sizeof (char) * (joingraphLen + 1));
   memset (str, 0, sizeof (char) * (joingraphLen + 1));
@@ -1211,17 +1211,17 @@ formatjoingraph (FILE * fp, char *joingraph)
 
               if (startswith (p, "Join graph"))
                 {
-                  queryplan_found = false;
+                  joinflag = 1;
                   fprintf (fp, "%s", str);
                   continue;
                 }
               else if (startswith (p, "Query plan:"))
                 {
-                  queryplan_found = true;
+                  joinflag = 0;
                   continue;
                 }
 
-              if (!queryplan_found)
+              if (joinflag == 1)
                 {
                   // hide selectivity by rewriting it as 'sel ?'
                   replace_substring (str, "sel [0-9]+\\.[0-9]+", "sel ?");
