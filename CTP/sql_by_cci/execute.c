@@ -1250,6 +1250,117 @@ formatjoingraph (FILE * fp, char *joingraph)
     }
 }
 
+void
+formatfullplan (FILE * fp, char *queryPlan)
+{
+  char *str, *p;
+  int i, queryPlanLen, newline;
+  int isjoingraph = 0;
+  int isplan = 0;
+  int isstmt = 0;
+
+  queryPlanLen = strlen (queryPlan);
+  str = (char *) malloc (sizeof (char) * (queryPlanLen + 1));
+  memset (str, 0, sizeof (char) * (queryPlanLen + 1));
+  p = (char *) malloc (sizeof (char) * (queryPlanLen + 1));
+  memset (p, 0, sizeof (char) * (queryPlanLen + 1));
+  newline = 0;
+
+  if (queryPlan != NULL)
+    {
+      for (i = 0; i < queryPlanLen; i++)
+        {
+          if (queryPlan[i] == '\n')
+            {
+              strncpy (str, queryPlan + newline, i - newline + 1);
+              strncpy (p, queryPlan + newline, i - newline + 1);
+              str[i - newline + 1] = 0x00;
+              p[i - newline + 1] = 0x00;
+              newline = i + 1;
+
+              trimline (p);
+              if (strlen (p) == 0)
+                {
+                  continue;
+                }
+
+              if (startswith (p, "Join graph"))
+                {
+                  isjoingraph = 1;
+                  isplan = 0;
+                  isstmt = 0;
+                  fprintf (fp, "%s", str);
+                  continue;
+                }
+              else if (startswith (p, "Query plan:"))
+                {
+                  isplan = 1;
+                  isjoingraph = 0;
+                  isstmt = 0;
+                  fprintf (fp, "%s", str);
+                  continue;
+                }
+              else if (startswith (p, "Query stmt:"))
+                {
+                  isstmt = 1;
+                  isjoingraph = 0;
+                  isplan = 0;
+                  fprintf (fp, "%s", str);
+                  continue;
+                }
+              else if (startswith (p, "Trace Statistics:"))
+                {
+                  isjoingraph = 0;
+                  isplan = 0;
+                  isstmt = 0;
+                  fprintf (fp, "%s", str);
+                  continue;
+                }
+
+              // Process Join graph section
+              if (isjoingraph)
+                {
+                  replace_substring (str, "sel [0-9]+\\.[0-9]+", "sel ?");
+                  fprintf (fp, "%s", str);
+                  continue;
+                }
+
+              // Process Query plan section
+              if (isplan)
+                {
+                  trannum (str);
+                  fprintf (fp, "%s", str);
+                  continue;
+                }
+
+              // Process Query statement section with handling for certain lines
+              if (isstmt == 1)
+                {
+                  trannum (str);
+                  fprintf (fp, "%s", str);
+                  isstmt++;
+                  continue;
+                }
+              else if (isstmt == 2)
+                {
+                  trannum (str);
+                  if (strindex (str, "skip ORDER BY") > -1 || strindex (str, "skip GROUP BY") > -1)
+                    {
+                      fprintf (fp, "%s", str);
+                      isstmt = 0;
+                    }
+                  continue;
+                }
+            }
+        }
+      strncpy (str, queryPlan + newline, i - newline + 1);
+      str[i - newline + 1] = 0x00;
+      fprintf (fp, "%s", str);
+      free (str);
+      free (p);
+    }
+}
+
 int
 dumptable (FILE * fp, int req, char con, bool hasqueryplan, bool onlyjoingraph, bool hasfullplan)
 {
@@ -1531,7 +1642,7 @@ _NEXT_MULTIPLE_LINE_SQL:
                }
              else
                {
-                 formatqueryplan (fp, plan);
+                 formatplan (fp, plan);
                }
       }
 	      }
@@ -1576,6 +1687,10 @@ _PRINT_QUERY_PLAN:
       if (onlyjoingraph)
         {
            formatjoingraph (fp, plan);
+        }
+      else if (hasfullplan)
+        {
+           formatfullplan (fp, plan);
         }
       else
         {
