@@ -1018,9 +1018,8 @@ readFile (char *fileName)
 		}
         else if (startswith (line, "--@fullplan"))
     {
-      hasjg = 1;
-      hasqp = 1;
       hasfullp = 1;
+      hasqp = 1;
     }
 	      else if (startswithCI (line, "--+ server-message") ||
 		       startswithCI (line, "--+server-message") ||
@@ -1266,8 +1265,9 @@ formatfullplan (FILE * fp, char *queryPlan)
 
   queryPlanLen = strlen (queryPlan);
   str = (char *) malloc (sizeof (char) * (queryPlanLen + 1));
+  memset (str, 0, sizeof (char) * (queryPlanLen + 1));
   p = (char *) malloc (sizeof (char) * (queryPlanLen + 1));
-
+  memset (p, 0, sizeof (char) * (queryPlanLen + 1));
   if (str == NULL || p == NULL)
     {
       free (str);
@@ -1360,8 +1360,6 @@ formatfullplan (FILE * fp, char *queryPlan)
             }
         }
     }
-
-  // Final flush of remaining characters
   strncpy (str, queryPlan + newline, queryPlanLen - newline);
   str[queryPlanLen - newline] = '\0';
   fprintf (fp, "%s", str);
