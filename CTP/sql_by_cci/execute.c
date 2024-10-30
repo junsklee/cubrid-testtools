@@ -1183,7 +1183,7 @@ formatjoingraph (FILE * fp, char *joingraph)
 {
   char *str, *p;
   int i, joingraphLen, newline;
-  bool joingraph_found = false; 
+  bool queryplan_found = false; 
   joingraphLen = strlen (joingraph);
   str = (char *) malloc (sizeof (char) * (joingraphLen + 1));
   memset (str, 0, sizeof (char) * (joingraphLen + 1));
@@ -1211,33 +1211,30 @@ formatjoingraph (FILE * fp, char *joingraph)
 
               if (startswith (p, "Join graph"))
                 {
-                joingraph_found = true;
+                  queryplan_found = false;
                   fprintf (fp, "%s", str);
                   continue;
                 }
               else if (startswith (p, "Query plan:"))
                 {
-                  break;
+                  queryplan_found = true;
+                  continue;
                 }
-              else
+
+              if (!queryplan_found)
                 {
-                  if (joingraph_found)
-                   {
-                     regex_t regex;
-                     // hide selectivity rewriting '?'.
-                     replace_substring (str, "sel [0-9]+\\.[0-9]+", "sel ?");
-                     fprintf (fp, "%s", str);
-                     continue;
-                   }
+                  // hide selectivity by rewriting it as 'sel ?'
+                  replace_substring (str, "sel [0-9]+\\.[0-9]+", "sel ?");
+                  fprintf (fp, "%s", str);
                 }
             }
         }
       strncpy (str, joingraph + newline, i - newline + 1);
       str[i - newline + 1] = 0x00;
       fprintf (fp, "%s", str);
-      free (str);
-      free (p);
     }
+  free (str);
+  free (p);
 }
 
 int
