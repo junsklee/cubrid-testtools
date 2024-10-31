@@ -1184,55 +1184,67 @@ formatjoingraph (FILE * fp, char *joingraph)
   char *str, *p;
   int i, joingraphLen, newline;
   int joinflag = 0; 
+
+  if (joingraph == NULL)
+    {
+      return;
+    }    
+
   joingraphLen = strlen (joingraph);
   str = (char *) malloc (sizeof (char) * (joingraphLen + 1));
   memset (str, 0, sizeof (char) * (joingraphLen + 1));
   p = (char *) malloc (sizeof (char) * (joingraphLen + 1));
   memset (p, 0, sizeof (char) * (joingraphLen + 1));
-  newline = 0;
- 
-  if (joingraph != NULL)
+
+  if (str == NULL || p == NULL)
     {
-      for (i = 0; i < joingraphLen; i++)
+      free (str);
+      free (p);
+      return;
+    }
+
+  newline = 0;
+  
+  for (i = 0; i < joingraphLen; i++)
+    {
+      if (joingraph[i] == '\n')
         {
-          if (joingraph[i] == '\n')
+          strncpy (str, joingraph + newline, i - newline + 1);
+          strncpy (p, joingraph + newline, i - newline + 1);
+          str[i - newline + 1] = 0x00;
+          p[i - newline + 1] = 0x00;
+          newline = i + 1;
+
+          trimline (p);
+          if (strlen (p) == 0)
             {
-              strncpy (str, joingraph + newline, i - newline + 1);
-              strncpy (p, joingraph + newline, i - newline + 1);
-              str[i - newline + 1] = 0x00;
-              p[i - newline + 1] = 0x00;
-              newline = i + 1;
+              continue;
+            }
 
-              trimline (p);
-              if (strlen (p) == 0)
-                {
-                  continue;
-                }
+          if (startswith (p, "Join graph"))
+            {
+              joinflag = 1;
+              fprintf (fp, "%s", str);
+              continue;
+            }
+          else if (startswith (p, "Query plan:"))
+            {
+              joinflag = 0;
+              continue;
+            }
 
-              if (startswith (p, "Join graph"))
-                {
-                  joinflag = 1;
-                  fprintf (fp, "%s", str);
-                  continue;
-                }
-              else if (startswith (p, "Query plan:"))
-                {
-                  joinflag = 0;
-                  continue;
-                }
-
-              if (joinflag == 1)
-                {
-                  // hide selectivity by rewriting it as 'sel ?'
-                  replace_substring (str, "sel [0-9]+\\.[0-9]+", "sel ?");
-                  fprintf (fp, "%s", str);
-                }
+          if (joinflag == 1)
+            {
+              // hide selectivity by rewriting it as 'sel ?'
+              replace_substring (str, "sel [0-9]+\\.[0-9]+", "sel ?");
+              fprintf (fp, "%s", str);
             }
         }
-      strncpy (str, joingraph + newline, i - newline + 1);
-      str[i - newline + 1] = 0x00;
-      fprintf (fp, "%s", str);
     }
+  strncpy (str, joingraph + newline, i - newline + 1);
+  str[i - newline + 1] = 0x00;
+  fprintf (fp, "%s", str);
+
   free (str);
   free (p);
 }
