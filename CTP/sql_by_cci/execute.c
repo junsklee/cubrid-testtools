@@ -1269,14 +1269,22 @@ formatfullplan (FILE * fp, char *queryPlan)
   p = (char *) malloc (sizeof (char) * (queryPlanLen + 1));
   memset (p, 0, sizeof (char) * (queryPlanLen + 1));
   if (str == NULL || p == NULL)
+  {
+    if (str != NULL)
     {
-      free (str);
-      free (p);
-      return;
+      free(str);
     }
 
+    if (p != NULL)
+    {
+      free(p);
+    }
+    
+    fprintf(stdout, "formatjoingraph: malloc failure\n");
+    return;
+  }
+  
   newline = 0;
-
   for (i = 0; i < queryPlanLen; i++)
     {
       if (queryPlan[i] == '\n')
