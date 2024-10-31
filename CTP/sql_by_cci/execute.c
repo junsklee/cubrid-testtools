@@ -1188,20 +1188,30 @@ formatjoingraph (FILE * fp, char *joingraph)
   if (joingraph == NULL)
     {
       return;
-    }    
+    }
 
   joingraphLen = strlen (joingraph);
   str = (char *) malloc (sizeof (char) * (joingraphLen + 1));
-  memset (str, 0, sizeof (char) * (joingraphLen + 1));
   p = (char *) malloc (sizeof (char) * (joingraphLen + 1));
-  memset (p, 0, sizeof (char) * (joingraphLen + 1));
 
   if (str == NULL || p == NULL)
+  {
+    if (str != NULL)
     {
-      free (str);
-      free (p);
-      return;
+      free(str);
     }
+
+    if (p != NULL)
+    {
+      free(p);
+    }
+    
+    fprintf(stdout, "formatjoingraph: malloc failure\n");
+    return;
+  }
+
+  memset(str, 0, sizeof (char) * (joingraphLen + 1));
+  memset(p, 0, sizeof (char) * (joingraphLen + 1));
 
   newline = 0;
   
