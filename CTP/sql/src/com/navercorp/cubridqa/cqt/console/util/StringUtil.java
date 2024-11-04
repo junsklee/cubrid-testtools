@@ -337,9 +337,11 @@ public class StringUtil {
                         ret.append(message + separator);
                     } else {
                         if ("plan".equals(flag)) {
+                            message = message.replaceAll("[0-9]+", "?");
                             ret.append(message + separator);
                         } else if ("stmt".equals(flag)) {
                             if (stmtCount == 0 || message.startsWith("/")) {
+                                message = message.replaceAll("[0-9]+", "?");
                                 ret.append(message + separator);
                                 stmtCount++;
                             }
