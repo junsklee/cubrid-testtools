@@ -1299,7 +1299,7 @@ formatfullplan (FILE * fp, char *queryPlan)
       free(p);
     }
     
-    fprintf(stdout, "formatjoingraph: malloc failure\n");
+    fprintf(stdout, "formatfullplan: malloc failure\n");
     return;
   }
   
