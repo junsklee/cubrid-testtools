@@ -1011,16 +1011,16 @@ readFile (char *fileName)
 		{
 		  hasqp = 1;
 		}
-	      else if (startswith(line, "--@joingraph"))
+	      else if (startswith (line, "--@joingraph"))
 		{
 		  hasjg = 1;
 		  hasqp = 1;
 		}
-        else if (startswith (line, "--@fullplan"))
-    {
-      hasfullp = 1;
-      hasqp = 1;
-    }
+	      else if (startswith (line, "--@fullplan"))
+		{
+		  hasfullp = 1;
+		  hasqp = 1;
+		}
 	      else if (startswithCI (line, "--+ server-message") ||
 		       startswithCI (line, "--+server-message") ||
 		       startswithCI (line, "--+ holdcas") || startswithCI (line, "--+holdcas"))
@@ -1029,7 +1029,7 @@ readFile (char *fileName)
 		  strcpy (sqlstate[total_sql].sql, line);
 		  sqlstate[total_sql].hasqp = 0;
 		  sqlstate[total_sql].onlyjg = 0;
-      sqlstate[total_sql].hasfullp = 0;
+		  sqlstate[total_sql].hasfullp = 0;
 		  //if script like "? = call"
 		  sqlstate[total_sql].iscallwithoutvalue = 0;
 
@@ -1062,7 +1062,7 @@ readFile (char *fileName)
 		  strcpy (sqlstate[total_sql].sql, sql_buf);
 		  sqlstate[total_sql].hasqp = hasqp;
 		  sqlstate[total_sql].onlyjg = hasjg;
-      sqlstate[total_sql].hasfullp = hasfullp;
+		  sqlstate[total_sql].hasfullp = hasfullp;
 		  //if script like "? = call"
 		  sqlstate[total_sql].iscallwithoutvalue = startswith (line, "?");
 
@@ -1072,7 +1072,7 @@ readFile (char *fileName)
 		  sql_len = 0;
 		  hasqp = 0;
 		  hasjg = 0;
-      hasfullp = 0;
+		  hasfullp = 0;
 		}
 
 	      if (is_statement_end ())
@@ -1284,25 +1284,27 @@ formatfullplan (FILE * fp, char *queryPlan)
 
   queryPlanLen = strlen (queryPlan);
   str = (char *) malloc (sizeof (char) * (queryPlanLen + 1));
-  memset (str, 0, sizeof (char) * (queryPlanLen + 1));
   p = (char *) malloc (sizeof (char) * (queryPlanLen + 1));
-  memset (p, 0, sizeof (char) * (queryPlanLen + 1));
+
   if (str == NULL || p == NULL)
-  {
-    if (str != NULL)
     {
-      free(str);
+      if (str != NULL)
+        {
+          free(str);
+        }
+
+      if (p != NULL)
+        {
+          free(p);
+        }
+
+      fprintf(stdout, "formatfullplan: malloc failure\n");
+      return;
     }
 
-    if (p != NULL)
-    {
-      free(p);
-    }
-    
-    fprintf(stdout, "formatfullplan: malloc failure\n");
-    return;
-  }
-  
+  memset (str, 0, sizeof (char) * (queryPlanLen + 1));
+  memset (p, 0, sizeof (char) * (queryPlanLen + 1));
+
   newline = 0;
   for (i = 0; i < queryPlanLen; i++)
     {
@@ -2007,14 +2009,14 @@ execute (FILE * fp, char conn, const SqlStateStruce *pSqlState)
 	  if (res >= 0)
 	    {
 	      if (onlyjoingraph)
-	        { 
+	        {
 	          formatjoingraph (fp, plan);
 	        }
 	      else if (hasfullplan)
-          {
-            formatfullplan (fp, plan);
-          }
-        else
+	        {
+	          formatfullplan (fp, plan);
+	        }
+	      else
 	        {
 	          formatplan (fp, plan);
 	        }
