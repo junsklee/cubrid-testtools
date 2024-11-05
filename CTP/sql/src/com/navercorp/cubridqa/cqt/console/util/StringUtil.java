@@ -340,10 +340,13 @@ public class StringUtil {
                             message = message.replaceAll("[0-9]+", "?");
                             ret.append(message + separator);
                         } else if ("stmt".equals(flag)) {
-                            if (stmtCount == 0 || message.startsWith("/")) {
+                            if (stmtCount == 0) {
                                 message = message.replaceAll("[0-9]+", "?");
                                 ret.append(message + separator);
                                 stmtCount++;
+                            } else if (message.startsWith("/")) {
+                                message = message.replaceAll("[0-9]+", "?");
+                                ret.append(message + separator);
                             }
                         }
                     }
