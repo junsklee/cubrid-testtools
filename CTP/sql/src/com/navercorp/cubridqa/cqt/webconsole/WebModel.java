@@ -32,6 +32,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.TreeSet;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 
 public class WebModel {
     public static String SCENARIO_ROOT;
@@ -162,6 +166,11 @@ public class WebModel {
         StringBuffer html = new StringBuffer();
         html.append("<div><h3>Current Test:" + folder + "</h3></div><br>");
 
+        String buildNo = sum.getMoreData("build");
+        if (buildNo != null && !buildNo.trim().isEmpty()) {
+            html.append(getCommitListHtml(buildNo));
+        }
+
         String sqlFilename, label, link;
         String testResultRoot;
         if (list == null || list.size() == 0) {
@@ -197,6 +206,69 @@ public class WebModel {
         }
 
         return html.toString();
+    }
+
+    private String getCommitListHtml(String buildNo) {
+        StringBuffer html = new StringBuffer();
+        html.append("<div><b>Recent Commits from Jenkins Build</b></div>");
+        html.append("<table align='left' width=95% border=1 cellspacing=0>");
+        html.append("<tr><th>Author</th><th>Commit ID</th><th>Message</th></tr>");
+
+        try {
+            String url = "http://ci.cubrid.org/job/cubrid/" + buildNo + "/api/json?tree=changeSet[items[author[fullName],commitId,msg]]";
+            URL obj = new URL(url);
+            HttpURLConnection con = (HttpURLConnection) obj.openConnection();
+            con.setRequestMethod("GET");
+
+            BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()));
+            String inputLine;
+            StringBuffer response = new StringBuffer();
+            while ((inputLine = in.readLine()) != null) {
+                response.append(inputLine);
+            }
+            in.close();
+            
+            String jsonResponse = response.toString();
+            
+            if (!jsonResponse.contains("\"items\":[")) {
+                 html.append("<tr><td colspan='3'>No commits found in this build.</td></tr>");
+            } else {
+                String itemsJson = jsonResponse.substring(jsonResponse.indexOf("\"items\":[") + 8);
+                itemsJson = itemsJson.substring(0, itemsJson.indexOf("]"));
+                
+                String[] commits = itemsJson.split("\\},\\{");
+
+                for (String commit : commits) {
+                    String author = getValue(commit, "fullName");
+                    String commitId = getValue(commit, "commitId");
+                    String msg = getValue(commit, "msg");
+                    html.append("<tr>");
+                    html.append("<td>").append(author).append("</td>");
+                    html.append("<td>").append(commitId).append("</td>");
+                    html.append("<td>").append(msg).append("</td>");
+                    html.append("</tr>");
+                }
+            }
+        } catch (Exception e) {
+            html.append("<tr><td colspan='3'>Could not retrieve commit list from Jenkins: ").append(e.getMessage()).append("</td></tr>");
+        }
+
+        html.append("</table><br>");
+        return html.toString();
+    }
+
+    private String getValue(String json, String key) {
+        String searchKey = "\"" + key + "\":\"";
+        int startIndex = json.indexOf(searchKey);
+        if (startIndex == -1) {
+            return "";
+        }
+        startIndex += searchKey.length();
+        int endIndex = json.indexOf("\"", startIndex);
+        if (endIndex == -1) {
+            return "";
+        }
+        return json.substring(startIndex, endIndex);
     }
 
     public String showCompareResult(String sqlFilename) throws Exception {
