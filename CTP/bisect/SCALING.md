@@ -82,7 +82,7 @@ worker_endpoints=http://worker1.example.com:8092,http://worker2.example.com:8092
 ```properties
 # /CTP/bisect/conf/build_worker.conf
 listen_port=8092
-cubrid_src_dir=/home/cubrid/cubrid
+cubrid_src_dir=$CUBRID
 build_dir_prefix=build_x86_64
 work_dir=/tmp/build_worker
 max_concurrent_builds=4           # Adjust based on CPU cores

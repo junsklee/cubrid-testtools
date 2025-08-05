@@ -16,8 +16,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
     cat > "$CONFIG_FILE" << EOF
 # Bisect Producer Configuration
 listen_port=8089
-cubrid_src_dir=/home/cubrid/cubrid
-shell_tc_dir=/home/cubrid/cubrid-testcases-private-ex
+cubrid_src_dir=$CUBRID
+shell_tc_dir=~/cubrid-testcases-private-ex
 build_arg=-g ninja -m debug build
 build_dir=build_x86_64_debug
 work_dir=/tmp/bisect_work

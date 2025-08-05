@@ -100,10 +100,10 @@ Edit `conf/bisect.conf` with your environment settings:
 
 ```properties
 # Path to CUBRID source repository
-cubrid.src.dir=/home/cubrid/cubrid
+cubrid.src.dir=$CUBRID
 
 # Path to shell test cases
-shell.tc.dir=/home/cubrid/cubrid-testcases-private-ex
+shell.tc.dir=~/cubrid-testcases-private-ex
 
 # Build configuration  
 cubrid.build.arg=-g ninja -m debug build

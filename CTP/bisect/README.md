@@ -65,10 +65,10 @@ cp conf/bisect_consumer.conf.example conf/bisect_consumer.conf
 listen_port=8089
 
 # Path to CUBRID source repository
-cubrid_src_dir=/home/cubrid/cubrid
+cubrid_src_dir=$CUBRID
 
 # Path to shell test cases
-shell_tc_dir=/home/cubrid/cubrid-testcases-private-ex
+shell_tc_dir=~/cubrid-testcases-private-ex
 
 # CUBRID build arguments
 build_arg=-g ninja -m debug build

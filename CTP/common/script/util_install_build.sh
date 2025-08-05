@@ -100,7 +100,7 @@ function installBuildOnLinux()
 		wget $build_url
 		if [ -d $cub ]
                 then
-                        rm -rf ~/CUBRID
+                        rm -rf $CUBRID
                 fi
 
 		tar zvxf $buildFile
@@ -133,7 +133,7 @@ function installBuildOnLinux()
         	#sleep 2
         	if [ -d $cub ]
         	then
-                	rm -rf ~/CUBRID
+                	rm -rf $CUBRID
         	fi
 
         	sh $buildFile > /dev/null <<EOF

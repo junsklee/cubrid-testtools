@@ -18,8 +18,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
 # Note: consumer_port should be configured instead of listen_port
 consumer_port=8090
 work_dir=/tmp/bisect_consumer
-cubrid_src_dir=/home/cubrid/cubrid
-shell_tc_dir=/home/cubrid/cubrid-testcases-private-ex
+cubrid_src_dir=$CUBRID
+shell_tc_dir=~/cubrid-testcases-private-ex
 EOF
     echo "Please edit $CONFIG_FILE and run again"
     exit 1
