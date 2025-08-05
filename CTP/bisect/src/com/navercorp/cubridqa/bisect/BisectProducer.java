@@ -72,6 +72,10 @@ public class BisectProducer {
                 // Validate request
                 validateRequest(request);
                 
+                // Check consumer reachability
+                String workerIp = request.optString("workerIp", "localhost");
+                validateConsumerReachability(workerIp);
+                
                 // Log request
                 logger.info(String.format("Received bisect request: %s...%s (suspected commit range)",
                     request.getString("suspectedStartCommit"),
@@ -131,6 +135,53 @@ public class BisectProducer {
         
         if (!request.has("callbackUrl")) {
             throw new IllegalArgumentException("Missing callbackUrl");
+        }
+        
+        // Optional fields with defaults
+        if (!request.has("autoDeleteBuilds")) {
+            request.put("autoDeleteBuilds", true); // Default to true for backward compatibility
+        }
+    }
+    
+    private void validateConsumerReachability(String workerIp) throws Exception {
+        logger.info("Checking reachability of consumer at " + workerIp + ":" + config.getConsumerPort());
+        
+        try {
+            String healthUrl = "http://" + workerIp + ":" + config.getConsumerPort() + "/health";
+            URL url = new URL(healthUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(5000); // 5 second connection timeout
+            conn.setReadTimeout(10000);   // 10 second read timeout
+            
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                // Read response to verify it's a valid health check
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(conn.getInputStream()))) {
+                    StringBuilder response = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+                    
+                    JSONObject healthResponse = new JSONObject(response.toString());
+                    if ("healthy".equals(healthResponse.optString("status"))) {
+                        logger.info("Consumer health check passed: " + healthResponse.toString());
+                        return;
+                    } else {
+                        throw new IllegalArgumentException("Consumer is not healthy: " + response.toString());
+                    }
+                }
+            } else {
+                throw new IllegalArgumentException("Consumer health check failed with HTTP " + responseCode);
+            }
+            
+        } catch (Exception e) {
+            String errorMsg = "Consumer at " + workerIp + ":" + config.getConsumerPort() + 
+                            " is not reachable: " + e.getMessage();
+            logger.severe(errorMsg);
+            throw new IllegalArgumentException(errorMsg, e);
         }
     }
     

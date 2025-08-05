@@ -216,7 +216,14 @@ public class BisectTask {
                     logger.warning("Failed to reset bisect: " + e.getMessage());
                 }
                 
-                deleteDirectory(workDir);
+                // Check if we should auto-delete builds
+                boolean autoDeleteBuilds = request.optBoolean("autoDeleteBuilds", true);
+                if (autoDeleteBuilds) {
+                    deleteDirectory(workDir);
+                    logger.info("Build files cleaned up for test: " + testPath);
+                } else {
+                    logger.info("Build files preserved for test: " + testPath + " in: " + workDir.getAbsolutePath());
+                }
             }
             
         } catch (Exception e) {
@@ -285,6 +292,15 @@ public class BisectTask {
             writer.println("    http://" + workerIp + ":" + config.getConsumerPort() + "/test)");
             writer.println();
             writer.println("echo \"Consumer response: $RESPONSE\"");
+            writer.println();
+            writer.println("# Preserve build files if requested");
+            boolean autoDeleteBuilds = request.optBoolean("autoDeleteBuilds", true);
+            if (!autoDeleteBuilds) {
+                writer.println("echo \"Preserving build files for inspection...\"");
+                writer.println("# Copy build directory contents to working directory");
+                writer.println("cp -r " + config.getCubridSrcDir() + "/" + config.getBuildDir() + "/* " + workDir.getAbsolutePath() + "/ 2>/dev/null || true");
+                writer.println("echo \"Build files preserved in working directory: " + workDir.getAbsolutePath() + "\"");
+            }
             writer.println();
             writer.println("# Parse result");
             writer.println("if echo \"$RESPONSE\" | grep -q '\"status\":\"fail\"'; then");

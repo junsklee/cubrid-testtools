@@ -36,6 +36,7 @@ public class BisectConsumer {
         // Create HTTP server
         this.server = HttpServer.create(new InetSocketAddress(config.getConsumerPort()), 0);
         this.server.createContext("/test", new TestRequestHandler());
+        this.server.createContext("/health", new HealthCheckHandler());
         this.server.setExecutor(null); // creates a default executor
     }
     
@@ -74,6 +75,35 @@ public class BisectConsumer {
                 
             } catch (Exception e) {
                 logger.log(Level.SEVERE, "Error processing test request", e);
+                JSONObject error = new JSONObject()
+                    .put("status", "error")
+                    .put("message", e.getMessage());
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                sendResponse(exchange, 500, error.toString());
+            }
+        }
+    }
+    
+    private class HealthCheckHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "Method not allowed");
+                return;
+            }
+            
+            try {
+                JSONObject healthResponse = new JSONObject()
+                    .put("status", "healthy")
+                    .put("service", "BisectConsumer")
+                    .put("timestamp", System.currentTimeMillis())
+                    .put("workDir", config.getWorkDir());
+                
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                sendResponse(exchange, 200, healthResponse.toString());
+                
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Error in health check", e);
                 JSONObject error = new JSONObject()
                     .put("status", "error")
                     .put("message", e.getMessage());

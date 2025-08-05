@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Test script for the bisect workflow
+# Test script for the bisect workflow with build preservation
+# This script demonstrates how to keep build files for inspection
 #
 
 # Configuration
@@ -9,27 +10,24 @@ PRODUCER_PORT="${PRODUCER_PORT:-8089}"
 WORKER_IP="${WORKER_IP:-$(hostname -I | awk '{print $1}')}"
 CALLBACK_URL="${CALLBACK_URL:-http://localhost:8080/bisect/result}"
 
-# Build cleanup control
-# Set to "false" to preserve build files for inspection
-AUTO_DELETE_BUILDS="${AUTO_DELETE_BUILDS:-true}"
+# Build cleanup control - PRESERVE BUILD FILES
+AUTO_DELETE_BUILDS="false"
 
-# Test data - based on the example from the original script
-# These are the suspected bad commits we want to investigate
-# Note: bb2cc88 is older than e4c8127, so bb2cc88 should be the start
+# Test data - using a simple single test for quick verification
 SUSPECTED_START_COMMIT="bb2cc88"  # First suspected bad commit (older)
 SUSPECTED_END_COMMIT="e4c8127"   # Last suspected bad commit (newer)
 
 # Display configuration
-echo "Bisect Test Script"
-echo "=================="
+echo "Bisect Test Script with Build Preservation"
+echo "=========================================="
 echo "Producer: http://${PRODUCER_HOST}:${PRODUCER_PORT}/bisect"
 echo "Worker IP: ${WORKER_IP}"
 echo "Callback URL: ${CALLBACK_URL}"
 echo "Suspected commit range: ${SUSPECTED_START_COMMIT}...${SUSPECTED_END_COMMIT}"
-echo "Auto-delete builds: ${AUTO_DELETE_BUILDS}"
+echo "Auto-delete builds: ${AUTO_DELETE_BUILDS} (BUILD FILES WILL BE PRESERVED)"
 echo
 
-# JSON request payload
+# JSON request payload with single test for faster execution
 read -r -d '' JSON_PAYLOAD << EOF
 {
   "suspectedStartCommit": "${SUSPECTED_START_COMMIT}",
@@ -37,16 +35,7 @@ read -r -d '' JSON_PAYLOAD << EOF
   "buildType": "debug",
   "workerIp": "${WORKER_IP}",
   "tests": [
-    "shell/_06_issues/_12_2h/bug_bts_7583/cases/bug_bts_7583.sh",
-    "shell/_06_issues/_14_1h/bug_bts_13331/cases/bug_bts_13331.sh",
-    "shell/_06_issues/_17_1h/cbrd_20759/hide_utls_cub_admin_unloaddb_password/cases/hide_utls_cub_admin_unloaddb_password.sh",
-    "shell/_28_features_844/issue_10709_statistic/issue_10709_statistic_3/cases/issue_10709_statistic_3.sh",
-    "shell/_37_elderberry/cbrd_23839/cases/cbrd_23839.sh",
-    "shell/_10_plcsql/cbrd_25619/cases/cbrd_25619.sh",
-    "shell/_39_fig_cake/cbrd_24046/cases/cbrd_24046.sh",
-    "shell/_39_fig_cake/cbrd_25035/cases/cbrd_25035.sh",
-    "shell/_39_fig_cake/cbrd_25230/cases/cbrd_25230.sh",
-    "shell/_39_fig_cake/cbrd_25395/cte/cases/cte.sh"
+    "shell/_06_issues/_12_2h/bug_bts_7583/cases/bug_bts_7583.sh"
   ],
   "callbackUrl": "${CALLBACK_URL}",
   "autoDeleteBuilds": ${AUTO_DELETE_BUILDS},
@@ -54,7 +43,7 @@ read -r -d '' JSON_PAYLOAD << EOF
 }
 EOF
 
-echo "Sending bisect request..."
+echo "Sending bisect request with build preservation..."
 echo
 
 # Send the request
@@ -73,6 +62,7 @@ echo "HTTP Status: $HTTP_STATUS"
 if [ "$HTTP_STATUS" = "202" ]; then
     echo
     echo "Request accepted. Results will be posted to: ${CALLBACK_URL}"
+    echo "Build files will be preserved in the working directory under /tmp/bisect_work/"
     echo "Monitor producer logs for progress."
     
     # Extract task ID if available
@@ -80,6 +70,10 @@ if [ "$HTTP_STATUS" = "202" ]; then
     if [ -n "$TASK_ID" ]; then
         echo "Task ID: $TASK_ID"
     fi
+    
+    echo
+    echo "To check preserved build files after completion:"
+    echo "find /tmp/bisect_work/ -name 'bisect_*' -type d -exec ls -la {} \;"
 else
     echo
     echo "Request failed!"
