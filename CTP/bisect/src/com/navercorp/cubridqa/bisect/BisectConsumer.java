@@ -344,9 +344,18 @@ public class BisectConsumer {
             deleteDirectory(workDir.toFile());
         }
     }
-CTP_HOME", ctpHome);
-                logger.info("Set CTP_HOME to: " + ctpHome);
-            }
+    
+    private Path installCubridUsingScript(String buildPackage, Path workDir) throws IOException, InterruptedException {
+        // Configure environment and execute installation script
+        String ctpHome = findCTPHome();
+        ProcessBuilder pb = new ProcessBuilder("bash", ctpHome + "/common/script/run_cubrid_install", buildPackage);
+        pb.directory(workDir.toFile());
+        Map<String, String> env = pb.environment();
+        
+        // Set CTP_HOME and other environment variables
+        if (ctpHome != null) {
+            env.put("CTP_HOME", ctpHome);
+            logger.info("Set CTP_HOME to: " + ctpHome);
         }
         
         // Ensure PATH includes the script directory
@@ -573,5 +582,101 @@ CTP_HOME", ctpHome);
             logger.log(Level.SEVERE, "Failed to start BisectConsumer", e);
             System.exit(1);
         }
+    }
+    
+    /**
+     * Verify CUBRID installation by running cubrid_rel command
+     */
+    private String verifyCubridInstallation(Path cubridHome) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cubridHome.resolve("bin/cubrid_rel").toString());
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+            
+            boolean completed = process.waitFor(30, TimeUnit.SECONDS);
+            if (!completed) {
+                process.destroyForcibly();
+                logger.warning("cubrid_rel command timeout");
+                return null;
+            }
+            
+            if (process.exitValue() == 0) {
+                String version = output.toString().trim();
+                logger.info("CUBRID version verified: " + version);
+                return version;
+            } else {
+                logger.warning("cubrid_rel failed with exit code: " + process.exitValue());
+                logger.warning("Output: " + output.toString());
+                return null;
+            }
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Failed to verify CUBRID installation", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Create a wrapper script that properly sets up the test environment
+     */
+    private String createTestWrapperScript(String testDir, String testScript, String testName, String ctpHome) {
+        StringBuilder script = new StringBuilder();
+        script.append("#!/bin/bash\n");
+        script.append("# Auto-generated test wrapper script\n");
+        script.append("set -e\n\n");
+        
+        // Set up environment
+        script.append("# Set up environment\n");
+        script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
+        script.append("export PATH=\"$CTP_HOME/shell/init_path:$PATH\"\n");
+        script.append("export PATH=\"$HOME/CUBRID/bin:$PATH\"\n");
+        script.append("export LD_LIBRARY_PATH=\"$HOME/CUBRID/lib:$LD_LIBRARY_PATH\"\n\n");
+        
+        // Change to test directory
+        script.append("# Change to test directory\n");
+        script.append("cd \"").append(testDir).append("\"\n\n");
+        
+        // Source init.sh if available (for shell test framework)
+        script.append("# Source shell test framework if available\n");
+        script.append("if [ -f \"$CTP_HOME/shell/init_path/init.sh\" ]; then\n");
+        script.append("    source \"$CTP_HOME/shell/init_path/init.sh\"\n");
+        script.append("    echo \"Sourced shell test framework\"\n");
+        script.append("fi\n\n");
+        
+        // Define helper functions
+        script.append("# Helper functions for test result handling\n");
+        script.append("write_ok() {\n");
+        script.append("    echo \"Test ").append(testName).append(": OK\" > nok.result 2>/dev/null || echo \"OK\"\n");
+        script.append("}\n\n");
+        script.append("write_nok() {\n");
+        script.append("    echo \"Test ").append(testName).append(": NOK\" > nok.result 2>/dev/null || echo \"NOK\"\n");
+        script.append("}\n\n");
+        
+        // Execute the actual test
+        script.append("# Execute the test\n");
+        script.append("echo \"Starting test: ").append(testName).append("\"\n");
+        script.append("bash \"").append(testScript).append("\"\n");
+        script.append("TEST_EXIT_CODE=$?\n\n");
+        
+        // Ensure result file exists
+        script.append("# Ensure result file exists based on exit code if not already created\n");
+        script.append("if [ ! -f \"nok.result\" ]; then\n");
+        script.append("    if [ $TEST_EXIT_CODE -eq 0 ]; then\n");
+        script.append("        write_ok\n");
+        script.append("    else\n");
+        script.append("        write_nok\n");
+        script.append("    fi\n");
+        script.append("fi\n\n");
+        
+        script.append("exit $TEST_EXIT_CODE\n");
+        
+        return script.toString();
     }
 }

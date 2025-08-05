@@ -82,4 +82,4 @@ if [ "$HTTP_STATUS" = "202" ]; then
 else
     echo
     echo "Request failed!"
-fi
+fi 

@@ -383,7 +383,7 @@ public class BisectTask {
         }
         
         // No bad commit found or other error
-        logger.error("Bisect failed for " + testPath + " - no bad commit found");
+        logger.severe("Bisect failed for " + testPath + " - no bad commit found");
         return new JSONObject()
             .put("name", testPath)
             .put("status", "error")
