@@ -54,7 +54,10 @@ public class BisectConsumer {
     private class TestRequestHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            logger.info("Received HTTP " + exchange.getRequestMethod() + " request to " + exchange.getRequestURI());
+            
             if (!"POST".equals(exchange.getRequestMethod())) {
+                logger.warning("Rejected non-POST request: " + exchange.getRequestMethod());
                 sendResponse(exchange, 405, "Method not allowed");
                 return;
             }
@@ -62,9 +65,12 @@ public class BisectConsumer {
             try {
                 // Read request body
                 String requestBody = readRequestBody(exchange);
+                logger.info("Request body: " + requestBody);
+                
                 JSONObject request = new JSONObject(requestBody);
                 
                 logger.info("Received test request for: " + request.getString("testPath"));
+                logger.info("Build package: " + request.getString("buildPackage"));
                 
                 // Run test
                 JSONObject result = runTest(request);
@@ -72,6 +78,7 @@ public class BisectConsumer {
                 // Send response
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 200, result.toString());
+                logger.info("Sent response: " + result.toString());
                 
             } catch (Exception e) {
                 logger.log(Level.SEVERE, "Error processing test request", e);
@@ -124,6 +131,12 @@ public class BisectConsumer {
             String testDir = request.getString("testDir");
             String testScript = request.getString("testScript");
             String testName = request.getString("testName");
+            
+            logger.info("Test parameters:");
+            logger.info("  Build package: " + buildPackage);
+            logger.info("  Test directory: " + testDir);
+            logger.info("  Test script: " + testScript);
+            logger.info("  Test name: " + testName);
             
             // Download build package if it's a URL
             if (buildPackage.startsWith("http://") || buildPackage.startsWith("https://")) {

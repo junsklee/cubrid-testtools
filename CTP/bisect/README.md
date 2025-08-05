@@ -1,11 +1,11 @@
 # CUBRID Bisect Tool
 
-A standalone tool for finding the first failing commit for CUBRID shell tests using git bisect.
+A standalone Java-based tool for finding the first failing commit for CUBRID shell tests using git bisect.
 
 ## Overview
 
 This tool implements a distributed bisect workflow where:
-1. **QAHome** (or any client) sends a JSON request with suspected bad commit range and list of failing tests
+1. **Client** (e.g., QAHome) sends a JSON request with suspected bad commit range and failing tests
 2. **Producer** node receives the request and for each test:
    - Automatically finds the parent of the first suspected bad commit to use as the "good" commit
    - Uses git bisect to find the actual first bad commit
@@ -14,75 +14,54 @@ This tool implements a distributed bisect workflow where:
 3. **Consumer** node receives builds and test requests, runs tests, and returns results
 4. **Producer** aggregates results and sends them back via HTTP callback
 
-## Parameter Changes
+## Quick Start
 
-**Important**: The API has been updated to accept suspected bad commit ranges instead of good/bad commits:
-- **Old**: `commitFormer` (good commit) and `commitLatter` (bad commit)
-- **New**: `suspectedStartCommit` (first suspected bad) and `suspectedEndCommit` (last suspected bad)
-
-The tool automatically finds the parent of `suspectedStartCommit` to use as the good commit for git bisect.
-
-## Build File Management
-
-The tool now supports controlling whether build files are automatically deleted after each bisect step:
-
-- **`autoDeleteBuilds`** (boolean, optional, default: `true`): Controls whether build files are automatically cleaned up
-  - `true` (default): Build files are deleted after each commit test (saves disk space)
-  - `false`: Build files are preserved in the bisect working directory (e.g., `/tmp/bisect_work/bisect_TIMESTAMP/`) for inspection
-
-**Example**: To preserve build files for debugging:
-```json
-{
-  "suspectedStartCommit": "abc123",
-  "suspectedEndCommit": "def456",
-  "tests": ["shell/test.sh"],
-  "callbackUrl": "http://example.com/callback",
-  "autoDeleteBuilds": false
-}
-```
-
-## Architecture
-
-```
-QAHome/Client                Producer Node               Consumer Node(s)
-     |                            |                            |
-     |-- POST /bisect ----------->|                            |
-     |   (commit range, tests)    |                            |
-     |                            |                            |
-     |                            |-- git bisect start         |
-     |                            |-- build CUBRID             |
-     |                            |-- POST /test ------------->|
-     |                            |   (build package, test)    |
-     |                            |                            |
-     |                            |<-- test result ------------|
-     |                            |   (pass/fail)              |
-     |                            |                            |
-     |                            |-- git bisect good/bad      |
-     |                            |   (repeat until found)     |
-     |                            |                            |
-     |<-- POST callback ---------|                            |
-         (bisect results)         |                            |
-```
-
-## Installation
+### Installation
 
 1. Clone the repository:
 ```bash
-cd /path/to/cubrid-testtools/CTP
+cd /path/to/cubrid-testtools/CTP/bisect
 ```
 
-2. Configure the Producer node:
+2. Build the project:
 ```bash
-cd bisect
+./build.sh
+```
+
+3. Configure the services:
+```bash
+# Producer configuration
 cp conf/bisect_producer.conf.example conf/bisect_producer.conf
-# Edit conf/bisect_producer.conf with your settings
+# Edit conf/bisect_producer.conf
+
+# Consumer configuration
+cp conf/bisect_consumer.conf.example conf/bisect_consumer.conf
+# Edit conf/bisect_consumer.conf
 ```
 
-3. Configure the Consumer node(s):
+### Starting Services
+
+Producer node:
 ```bash
-cd bisect
-cp conf/bisect_consumer.conf.example conf/bisect_consumer.conf
-# Edit conf/bisect_consumer.conf with your settings
+./script/start_producer.sh
+```
+
+Consumer node:
+```bash
+./script/start_consumer.sh
+```
+
+### Sending a Bisect Request
+
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{
+    "suspectedStartCommit": "e4c8127",
+    "suspectedEndCommit": "bb2cc88",
+    "tests": ["shell/_06_issues/_12_2h/bug_bts_7583/cases/bug_bts_7583.sh"],
+    "callbackUrl": "http://localhost:8080/bisect/result"
+  }' \
+  http://localhost:8089/bisect
 ```
 
 ## Configuration
@@ -93,10 +72,10 @@ cp conf/bisect_consumer.conf.example conf/bisect_consumer.conf
 listen_port=8089
 
 # Path to CUBRID source repository
-cubrid_src_dir=$CUBRID
+cubrid_src_dir=/path/to/cubrid
 
 # Path to shell test cases
-shell_tc_dir=~/cubrid-testcases-private-ex
+shell_tc_dir=/path/to/cubrid-testcases
 
 # CUBRID build arguments
 build_arg=-g ninja -m debug build
@@ -109,237 +88,123 @@ work_dir=/tmp/bisect_work
 
 # Consumer port (where to send test requests)
 consumer_port=8090
+
+# Maximum concurrent bisect operations
+max_concurrent_bisects=4
 ```
 
 ### Consumer Configuration (bisect_consumer.conf)
 ```properties
 # HTTP server port
-listen_port=8090
+consumer_port=8090
 
 # Working directory for test execution
 work_dir=/tmp/bisect_consumer
 
-# CUBRID installation directory
-cubrid_install_dir=/tmp/cubrid_test
+# Required: Path to CUBRID source (for config compatibility)
+cubrid_src_dir=/path/to/cubrid
+
+# Required: Path to shell test cases
+shell_tc_dir=/path/to/cubrid-testcases
 ```
 
-## Usage
+## API Reference
 
-### Starting the Services
+### Bisect Request
 
-On the Producer node:
-```bash
-cd /path/to/cubrid-testtools/CTP/bisect
-./script/start_producer.sh
-```
+**Endpoint**: `POST /bisect`
 
-On the Consumer node(s):
-```bash
-cd /path/to/cubrid-testtools/CTP/bisect
-./script/start_consumer.sh
-```
-
-### Stopping the Services
-
-```bash
-./script/stop_producer.sh
-./script/stop_consumer.sh
-```
-
-### Sending a Bisect Request
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  -d '{
-    "suspectedStartCommit": "e4c8127",
-    "suspectedEndCommit": "bb2cc88",
-    "buildType": "debug",
-    "workerIp": "192.168.1.100",
-    "tests": [
-      "shell/_06_issues/_12_2h/bug_bts_7583/cases/bug_bts_7583.sh",
-      "shell/_06_issues/_14_1h/bug_bts_13331/cases/bug_bts_13331.sh"
-    ],
-    "callbackUrl": "http://qahome:8080/bisect/result",
-    "originIp": "192.168.1.10"
-  }' \
-  http://producer-node:8089/bisect
-```
-
-### API Reference
-
-#### Request Format
 ```json
 {
-  "suspectedStartCommit": "string", // First suspected bad commit
-  "suspectedEndCommit": "string",   // Last suspected bad commit
-  "buildType": "string",            // Build type: "debug" or "release"
-  "workerIp": "string",             // IP address of consumer node
-  "tests": ["string"],              // Array of test paths
-  "callbackUrl": "string",          // URL to POST results
-  "originIp": "string"              // IP of the requesting client
+  "suspectedStartCommit": "string",  // First suspected bad commit
+  "suspectedEndCommit": "string",    // Last suspected bad commit
+  "buildType": "string",             // Optional: "debug" or "release" (default: "debug")
+  "workerIp": "string",              // Optional: Consumer IP (default: "localhost")
+  "tests": ["string"],               // Array of test paths
+  "callbackUrl": "string",           // URL to POST results
+  "autoDeleteBuilds": boolean        // Optional: Delete build files (default: true)
 }
 ```
 
-#### Response Format
+### Callback Response
+
 ```json
 {
-  "suspectedStartCommit": "string", // Original suspected start commit
-  "suspectedEndCommit": "string",   // Original suspected end commit
-  "workerIp": "string",             // Worker IP address
-  "generatedAt": "string",          // ISO 8601 timestamp
-  "tests": [
-    {
-      "name": "string",             // Test path
-      "status": "string",           // "found", "error"
-      "firstBadCommit": "string",   // Actual first bad commit found by bisect (if found)
-      "author": "string",           // Commit author (if found)
-      "error": "string",            // Error message (if error)
-      "runtimeMs": number           // Execution time in milliseconds
-    }
-  ]
+  "suspectedStartCommit": "string",
+  "suspectedEndCommit": "string",
+  "workerIp": "string",
+  "generatedAt": "string",           // ISO 8601 timestamp
+  "tests": [{
+    "name": "string",                // Test path
+    "status": "found|error",         // Result status
+    "firstBadCommit": "string",      // Git commit hash (if found)
+    "author": "string",              // Commit author (if found)
+    "error": "string",               // Error message (if error)
+    "runtimeMs": number              // Execution time in milliseconds
+  }]
 }
 ```
 
-## Testing
+## Project Structure
 
-1. Start the callback receiver:
-```bash
-python3 test_callback_receiver.py
 ```
-
-2. Start producer and consumer services
-
-3. Run the test script:
-```bash
-./test_bisect.sh
+CTP/bisect/
+├── src/com/navercorp/cubridqa/bisect/
+│   ├── BisectProducer.java      # HTTP server, request handling
+│   ├── BisectConsumer.java      # Test execution service
+│   ├── BisectTask.java          # Bisect logic and coordination
+│   └── BisectConfig.java        # Configuration management
+├── script/
+│   ├── start_producer.sh        # Start producer service
+│   ├── stop_producer.sh         # Stop producer service
+│   ├── start_consumer.sh        # Start consumer service
+│   └── stop_consumer.sh         # Stop consumer service
+├── conf/
+│   ├── bisect_producer.conf.example
+│   └── bisect_consumer.conf.example
+├── lib/                         # Dependencies (JSON library)
+├── build/                       # Compiled classes
+├── log/                         # Log files (created at runtime)
+├── build.sh                     # Build script
+├── test_bisect.sh              # Test script
+├── ARCHITECTURE.md             # System architecture details
+├── SCALING.md                  # Scaling guide
+└── README.md                   # This file
 ```
 
 ## How It Works
 
-1. **Git Bisect Process**: For each test, the producer creates a judge script that:
-   - Builds CUBRID at the current commit
-   - Packages the build
-   - Sends it to the consumer for testing
-   - Returns 0 (good) or 1 (bad) based on test result
-
-2. **Binary Search**: Git bisect uses binary search to minimize the number of builds:
-   - For N commits, requires at most log₂(N) builds
-   - Example: 128 commits → maximum 7 builds
-
-3. **Test Execution**: The consumer:
-   - Receives the build package
-   - Extracts and sets up CUBRID
-   - Runs the shell test
-   - Checks for "NOK" in the .result file
-   - Returns pass/fail status
-
-## Performance
-
-Based on the original script, processing 10 tests took approximately 37 minutes:
-- Average time per test: ~3.7 minutes
-- This includes multiple builds per test (due to bisect)
-- Actual time depends on:
-  - Build speed
-  - Test execution time
-  - Number of commits in the range
-  - Network latency between nodes
-
-## Troubleshooting
-
-### Check Logs
-```bash
-# Producer logs
-tail -f log/bisect_producer.log
-
-# Consumer logs
-tail -f log/bisect_consumer.log
-```
-
-### Common Issues
-
-1. **Build Failures**: Ensure all build dependencies are installed
-2. **Test Not Found**: Verify shell_tc_dir path is correct
-3. **Network Issues**: Check firewall rules for ports 8089/8090
-4. **Git Issues**: Ensure git repository is clean and up to date
-
-## Requirements
-
-- Python 3.6+
-- Git
-- CUBRID build environment
-- Network connectivity between producer and consumer nodes
-      "name": "string",         // Test path
-      "status": "string",       // "found", "error"
-      "firstBadCommit": "string", // Git commit hash (if found)
-      "author": "string",       // Commit author (if found)
-      "error": "string",        // Error message (if error)
-      "runtimeMs": number       // Execution time in milliseconds
-    }
-  ]
-}
-```
-
-## Testing
-
-1. Start the callback receiver (example Python script):
-```bash
-cd /path/to/cubrid-testtools/CTP/bisect
-python3 test_callback_receiver.py
-```
-
-2. Start producer and consumer services
-
-3. Run the test script:
-```bash
-./test_bisect.sh
-```
-
-## How Git Bisect Works
-
-1. **Binary Search**: Git bisect uses binary search to find the commit that introduced a bug
-   - For N commits, requires at most log₂(N) tests
-   - Example: 128 commits → maximum 7 tests
-
-2. **Judge Script**: For each commit being tested:
-   - Checks out the commit
+### Git Bisect Process
+1. Tool finds parent of `suspectedStartCommit` as the good commit
+2. Runs git bisect between good commit and `suspectedEndCommit`
+3. For each commit in binary search:
    - Builds CUBRID
-   - Sends build to consumer for testing
-   - Returns 0 (good) or 1 (bad) based on test result
+   - Sends build to consumer
+   - Marks commit as good/bad based on test result
+4. Returns the first bad commit where test started failing
 
-3. **Test Execution**: The consumer:
-   - Receives the build package
-   - Extracts and sets up CUBRID
-   - Runs the shell test
-   - Checks for "NOK" in the .result file
-   - Returns pass/fail status
+### Test Execution
+Consumer service:
+1. Receives build package and test information
+2. Extracts CUBRID build to temporary directory
+3. Sets up environment variables
+4. Executes shell test script
+5. Checks for "NOK" in result file
+6. Returns pass/fail status to producer
 
-## Example Workflow
+## Monitoring
 
-Given a failing test in commit range:
+### Check Service Status
+```bash
+# Check if services are running
+ps aux | grep -E "Bisect(Producer|Consumer)"
+
+# Check service health
+curl http://localhost:8089/health
+curl http://localhost:8090/health
 ```
-71feef5 (parent) -- e4c8127 (suspected start) -- ... -- bb2cc88 (suspected end)
-```
 
-1. Send request with suspectedStartCommit=e4c8127, suspectedEndCommit=bb2cc88
-2. Tool automatically finds parent of e4c8127 (which is 71feef5) to use as the good commit
-3. Runs git bisect between 71feef5 (good) and bb2cc88 (bad)
-4. Tests commits in binary search pattern starting from e4c8127
-5. Returns exact commit where test started failing (firstBadCommit in response)
-
-## Performance
-
-Based on the original shell script, processing 10 tests took approximately 37 minutes:
-- Average time per test: ~3.7 minutes
-- This includes multiple builds per test (due to bisect)
-- Actual time depends on:
-  - Build speed
-  - Test execution time
-  - Number of commits in the range
-  - Network latency between nodes
-
-## Troubleshooting
-
-### Check Logs
+### View Logs
 ```bash
 # Producer logs
 tail -f log/bisect_producer.log
@@ -348,74 +213,50 @@ tail -f log/bisect_producer.log
 tail -f log/bisect_consumer.log
 ```
 
+## Troubleshooting
+
 ### Common Issues
 
-1. **Build Failures**: 
-   - Ensure all build dependencies are installed
-   - Check that CUBRID source is on correct branch
-   - Verify sufficient disk space
+1. **Consumer not receiving requests**
+   - Check firewall settings for ports 8089/8090
+   - Verify consumer is running: `curl http://localhost:8090/health`
+   - Check producer logs for connection errors
 
-2. **Test Not Found**: 
-   - Verify shell_tc_dir path is correct
-   - Check test path matches exactly
+2. **Build failures**
+   - Ensure CUBRID build dependencies are installed
+   - Check disk space in work directory
+   - Verify git repository is clean
 
-3. **Network Issues**: 
-   - Check firewall rules for ports 8089/8090
-   - Verify consumer node is accessible from producer
+3. **Test not found**
+   - Verify `shell_tc_dir` path in configuration
+   - Check test path matches exactly (case-sensitive)
 
-4. **Git Issues**: 
-   - Ensure git repository is clean: `git status`
-   - Check that commits exist: `git log --oneline suspectedStartCommit..suspectedEndCommit`
+4. **Slow performance**
+   - Consider increasing `max_concurrent_bisects`
+   - Add more consumer nodes for parallel testing
+   - Check network latency between nodes
+
+### Debug Mode
+
+Enable detailed logging by modifying the start scripts:
+```bash
+java -Djava.util.logging.ConsoleHandler.level=ALL ...
+```
+
+## Performance
+
+- **Binary search efficiency**: For N commits, requires at most log₂(N) builds
+- **Example**: 128 commits → maximum 7 builds
+- **Typical timing**: ~3-5 minutes per test (depending on build/test complexity)
+- **Parallelization**: Multiple tests run concurrently on same commit range
 
 ## Requirements
 
 - Java 8 or higher
-- Git
-- CUBRID build environment (GCC, CMake, etc.)
-- Network connectivity between producer and consumer nodes
-- Sufficient disk space for builds (20GB+ recommended)
-
-## Development
-
-### Building from Source
-
-The project uses standard Java compilation:
-
-```bash
-# Download dependencies
-wget -O lib/json.jar https://search.maven.org/remotecontent?filepath=org/json/json/20231013/json-20231013.jar
-
-# Compile
-javac -cp "lib/*" -d build src/com/navercorp/cubridqa/bisect/*.java
-
-# Package
-cd build && jar cf ../lib/bisect-tool.jar com/
-```
-
-### Project Structure
-
-```
-/CTP/bisect/
-├── src/com/navercorp/cubridqa/bisect/
-│   ├── BisectProducer.java    # Main producer service
-│   ├── BisectTask.java        # Bisect execution logic
-│   ├── BisectConsumer.java    # Test execution service
-│   └── BisectConfig.java      # Configuration handler
-├── script/
-│   ├── start_producer.sh      # Start producer service
-│   ├── stop_producer.sh       # Stop producer service
-│   ├── start_consumer.sh      # Start consumer service
-│   └── stop_consumer.sh       # Stop consumer service
-├── conf/
-│   ├── bisect_producer.conf.example
-│   └── bisect_consumer.conf.example
-├── lib/                       # JAR files
-├── build/                     # Compiled classes
-├── log/                       # Log files
-├── build.sh                   # Build script
-├── test_bisect.sh            # Test script
-└── README.md                 # This file
-```
+- Git 2.0+
+- CUBRID build environment
+- Network connectivity between producer and consumer
+- Sufficient disk space (20GB+ recommended)
 
 ## License
 

@@ -276,9 +276,9 @@ public class BisectTask {
                           workerIp + ":" + config.getConsumerPort() + "\"");
             writer.println();
             writer.println("# Create test request JSON");
-            writer.println("cat > " + workDir.getAbsolutePath() + "/test_request.json << 'EOF'");
+            writer.println("cat > " + workDir.getAbsolutePath() + "/test_request.json << EOF");
             writer.println("{");
-            writer.println("  \"buildPackage\": \"$BUILD_PACKAGE\",");
+            writer.println("  \"buildPackage\": \"${BUILD_PACKAGE}\",");
             writer.println("  \"testPath\": \"" + testPath + "\",");
             writer.println("  \"testDir\": \"" + tcDir + "\",");
             writer.println("  \"testScript\": \"" + tcScript + "\",");
@@ -293,6 +293,11 @@ public class BisectTask {
             writer.println();
             writer.println("echo \"Consumer response: $RESPONSE\"");
             writer.println();
+            writer.println("# Log the request for debugging");
+            writer.println("echo \"Test request sent:\" >> " + workDir.getAbsolutePath() + "/judge.log");
+            writer.println("cat " + workDir.getAbsolutePath() + "/test_request.json >> " + workDir.getAbsolutePath() + "/judge.log");
+            writer.println("echo \"Response: $RESPONSE\" >> " + workDir.getAbsolutePath() + "/judge.log");
+            writer.println();
             writer.println("# Preserve build files if requested");
             boolean autoDeleteBuilds = request.optBoolean("autoDeleteBuilds", true);
             if (!autoDeleteBuilds) {
@@ -304,11 +309,14 @@ public class BisectTask {
             writer.println();
             writer.println("# Parse result");
             writer.println("if echo \"$RESPONSE\" | grep -q '\"status\":\"fail\"'; then");
+            writer.println("    echo \"Test FAILED - marking commit as bad\"");
             writer.println("    exit 1  # Test failed (bad commit)");
             writer.println("elif echo \"$RESPONSE\" | grep -q '\"status\":\"pass\"'; then");
+            writer.println("    echo \"Test PASSED - marking commit as good\"");
             writer.println("    exit 0  # Test passed (good commit)");
             writer.println("else");
             writer.println("    echo \"Error: Invalid response from consumer\"");
+            writer.println("    echo \"Response was: $RESPONSE\"");
             writer.println("    exit 128  # Abort bisect");
             writer.println("fi");
         }
