@@ -147,36 +147,12 @@ public class BisectProducer {
         logger.info("Checking reachability of consumer at " + workerIp + ":" + config.getConsumerPort());
         
         try {
-            String healthUrl = "http://" + workerIp + ":" + config.getConsumerPort() + "/health";
-            URL url = new URL(healthUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(5000); // 5 second connection timeout
-            conn.setReadTimeout(10000);   // 10 second read timeout
-            
-            int responseCode = conn.getResponseCode();
-            if (responseCode == 200) {
-                // Read response to verify it's a valid health check
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(conn.getInputStream()))) {
-                    StringBuilder response = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        response.append(line);
-                    }
-                    
-                    JSONObject healthResponse = new JSONObject(response.toString());
-                    if ("healthy".equals(healthResponse.optString("status"))) {
-                        logger.info("Consumer health check passed: " + healthResponse.toString());
-                        return;
-                    } else {
-                        throw new IllegalArgumentException("Consumer is not healthy: " + response.toString());
-                    }
-                }
-            } else {
-                throw new IllegalArgumentException("Consumer health check failed with HTTP " + responseCode);
+            // Use Socket-based connectivity test instead of HTTP
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress(workerIp, config.getConsumerPort()), 5000);
+                logger.info("Consumer connectivity test passed for " + workerIp + ":" + config.getConsumerPort());
+                return;
             }
-            
         } catch (Exception e) {
             String errorMsg = "Consumer at " + workerIp + ":" + config.getConsumerPort() + 
                             " is not reachable: " + e.getMessage();
