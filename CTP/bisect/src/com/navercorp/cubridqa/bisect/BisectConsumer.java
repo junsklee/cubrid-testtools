@@ -138,30 +138,25 @@ public class BisectConsumer {
             logger.info("  Test script: " + testScript);
             logger.info("  Test name: " + testName);
             
-            // Download build package if it's a URL
-            if (buildPackage.startsWith("http://") || buildPackage.startsWith("https://")) {
-                Path localPackage = workDir.resolve("cubrid.tar.gz");
-                logger.info("Downloading build from: " + buildPackage);
-                downloadFile(buildPackage, localPackage);
-                buildPackage = localPackage.toString();
-            }
+            // Install CUBRID using the existing installation script
+            logger.info("Installing CUBRID build using run_cubrid_install script");
+            Path actualInstallDir = installCubridUsingScript(buildPackage, workDir);
             
-            // Extract and install CUBRID
-            Path installDir = workDir.resolve("cubrid");
-            Files.createDirectory(installDir);
-            logger.info("Extracting CUBRID build to: " + installDir);
-            extractTarGz(buildPackage, installDir);
-            
-            // Set environment for CUBRID
+            // Set environment for CUBRID (using the actual installation directory)
             Map<String, String> env = new HashMap<>(System.getenv());
-            env.put("CUBRID", installDir.toString());
-            env.put("CUBRID_DATABASES", installDir.resolve("databases").toString());
-            env.put("PATH", installDir.resolve("bin") + ":" + System.getenv("PATH"));
-            env.put("LD_LIBRARY_PATH", installDir.resolve("lib") + ":" + 
+            env.put("CUBRID", actualInstallDir.toString());
+            env.put("CUBRID_DATABASES", actualInstallDir.resolve("databases").toString());
+            env.put("PATH", actualInstallDir.resolve("bin") + ":" + System.getenv("PATH"));
+            env.put("LD_LIBRARY_PATH", actualInstallDir.resolve("lib") + ":" + 
                     System.getenv().getOrDefault("LD_LIBRARY_PATH", ""));
             
-            // Create databases directory
-            Files.createDirectories(installDir.resolve("databases"));
+            // Load CUBRID environment
+            env.put("CUBRID_LANG", "en_US");
+            
+            // Ensure databases directory exists
+            if (!Files.exists(actualInstallDir.resolve("databases"))) {
+                Files.createDirectories(actualInstallDir.resolve("databases"));
+            }
             
             // Run the test
             String resultFile = testName + ".result";
@@ -228,27 +223,105 @@ public class BisectConsumer {
         }
     }
     
-    private void downloadFile(String urlString, Path destination) throws IOException {
-        URL url = new URL(urlString);
-        try (InputStream in = url.openStream();
-             OutputStream out = Files.newOutputStream(destination)) {
-            byte[] buffer = new byte[8192];
-            int bytesRead;
-            while ((bytesRead = in.read(buffer)) != -1) {
-                out.write(buffer, 0, bytesRead);
+    /**
+     * Install CUBRID using the existing run_cubrid_install script
+     * @return Path to the actual CUBRID installation directory
+     */
+    private Path installCubridUsingScript(String buildPackage, Path workDir) throws IOException, InterruptedException {
+        logger.info("=====Installing CUBRID using run_cubrid_install script=====");
+        
+        // Prepare environment for installation
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(workDir.toFile());
+        
+        // Build command: run_cubrid_install [url]
+        pb.command("run_cubrid_install", buildPackage);
+        
+        // Set up environment variables
+        Map<String, String> env = pb.environment();
+        
+        // Make sure CTP_HOME is set (the script depends on it)
+        if (env.get("CTP_HOME") == null) {
+            // Try to find CTP_HOME relative to the script location
+            String ctpHome = findCTPHome();
+            if (ctpHome != null) {
+                env.put("CTP_HOME", ctpHome);
+                logger.info("Set CTP_HOME to: " + ctpHome);
             }
         }
+        
+        // Ensure PATH includes the script directory
+        String currentPath = env.get("PATH");
+        String scriptPath = env.get("CTP_HOME") + "/common/script";
+        if (currentPath != null && !currentPath.contains(scriptPath)) {
+            env.put("PATH", scriptPath + ":" + currentPath);
+        }
+        
+        logger.info("Executing: " + String.join(" ", pb.command()));
+        logger.info("Working directory: " + workDir);
+        
+        // Start the installation process
+        Process process = pb.start();
+        
+        // Capture and log output
+        StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "INSTALL");
+        StreamGobbler errorGobbler = new StreamGobbler(process.getErrorStream(), "INSTALL-ERROR");
+        outputGobbler.start();
+        errorGobbler.start();
+        
+        // Wait for completion with timeout
+        boolean completed = process.waitFor(15, TimeUnit.MINUTES);
+        if (!completed) {
+            process.destroyForcibly();
+            throw new IOException("CUBRID installation timeout after 15 minutes");
+        }
+        
+        int exitCode = process.exitValue();
+        logger.info("Installation script exited with code: " + exitCode);
+        
+        if (exitCode != 0) {
+            throw new IOException("CUBRID installation failed with exit code: " + exitCode);
+        }
+        
+        logger.info("CUBRID installation completed successfully");
+        
+        // Return the actual installation directory (script installs to $HOME/CUBRID by default)
+        Path cubridHome = Paths.get(System.getProperty("user.home"), "CUBRID");
+        if (!Files.exists(cubridHome)) {
+            // Fallback: check if it was installed in the work directory
+            cubridHome = workDir.resolve("CUBRID");
+            if (!Files.exists(cubridHome)) {
+                throw new IOException("Could not find CUBRID installation directory after script execution");
+            }
+        }
+        
+        logger.info("CUBRID installed at: " + cubridHome);
+        return cubridHome;
     }
     
-    private void extractTarGz(String tarGzFile, Path destination) throws IOException, InterruptedException {
-        ProcessBuilder pb = new ProcessBuilder(
-            "tar", "xzf", tarGzFile, "-C", destination.toString()
-        );
-        Process process = pb.start();
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new IOException("Failed to extract tar.gz file, exit code: " + exitCode);
+    /**
+     * Find CTP_HOME directory by searching upward from current location
+     */
+    private String findCTPHome() {
+        // Try environment variable first
+        String ctpHome = System.getenv("CTP_HOME");
+        if (ctpHome != null && new File(ctpHome).exists()) {
+            return ctpHome;
         }
+        
+        // Try to find it relative to current working directory
+        File currentDir = new File(".").getAbsoluteFile();
+        while (currentDir != null) {
+            File commonScript = new File(currentDir, "common/script/run_cubrid_install");
+            if (commonScript.exists()) {
+                return currentDir.getAbsolutePath();
+            }
+            currentDir = currentDir.getParentFile();
+        }
+        
+        // Default fallback
+        logger.warning("Could not find CTP_HOME, using default assumption");
+        return "/home/qahome/cubrid-testtools/CTP";
     }
     
     private String readRequestBody(HttpExchange exchange) throws IOException {
