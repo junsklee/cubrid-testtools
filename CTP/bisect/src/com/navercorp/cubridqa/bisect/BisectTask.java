@@ -35,20 +35,20 @@ public class BisectTask {
         
         try {
             // Extract request parameters
-            String firstBadCommit = request.getString("firstBadCommit");
-            String lastBadCommit = request.getString("lastBadCommit");
+            String suspectedStartCommit = request.getString("suspectedStartCommit");
+            String suspectedEndCommit = request.getString("suspectedEndCommit");
             String buildType = request.optString("buildType", "debug");
             String workerIp = request.optString("workerIp", "localhost");
             JSONArray tests = request.getJSONArray("tests");
             
-            // Find the parent of firstBadCommit to use as the good commit
-            String goodCommit = getParentCommit(firstBadCommit);
+            // Find the parent of suspectedStartCommit to use as the good commit
+            String goodCommit = getParentCommit(suspectedStartCommit);
             if (goodCommit == null) {
-                throw new RuntimeException("Could not find parent of first bad commit: " + firstBadCommit);
+                throw new RuntimeException("Could not find parent of suspected start commit: " + suspectedStartCommit);
             }
             
             logger.info(String.format("Bisect range: %s (good/parent) -> %s...%s (bad range)", 
-                goodCommit, firstBadCommit, lastBadCommit));
+                goodCommit, suspectedStartCommit, suspectedEndCommit));
             
             // Run bisect for each test
             for (int i = 0; i < tests.length(); i++) {
@@ -56,7 +56,7 @@ public class BisectTask {
                 logger.info("Bisecting test: " + test);
                 
                 JSONObject result = bisectSingleTest(
-                    goodCommit, lastBadCommit, buildType, test, workerIp
+                    goodCommit, suspectedEndCommit, buildType, test, workerIp
                 );
                 results.add(result);
             }
@@ -310,8 +310,8 @@ public class BisectTask {
         try {
             // Build response with corrected field names
             JSONObject response = new JSONObject()
-                .put("firstBadCommit", request.getString("firstBadCommit"))
-                .put("lastBadCommit", request.getString("lastBadCommit"))
+                .put("suspectedStartCommit", request.getString("suspectedStartCommit"))
+                .put("suspectedEndCommit", request.getString("suspectedEndCommit"))
                 .put("workerIp", request.optString("workerIp", "localhost"))
                 .put("generatedAt", new Date().toInstant().toString())
                 .put("tests", new JSONArray(results));

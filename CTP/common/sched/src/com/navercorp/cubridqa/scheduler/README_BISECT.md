@@ -53,8 +53,8 @@ QAHome ← HTTP POST ← BisectResultAggregator ←───────┘
 ### Request (QAHome → CTP)
 ```json
 {
-  "commitFormer": "19a9f15",      // known good commit
-  "commitLatter": "e4c8127",      // known bad commit
+  "suspectedStartCommit": "e4c8127",      // first suspected bad commit
+  "suspectedEndCommit": "bb2cc88",       // last suspected bad commit
   "buildType": "debug",           // debug or release
   "workerIp": "10.0.0.42",       // specific worker node IP to use
   "tests": [                      // list of failing shell tests
@@ -69,8 +69,8 @@ QAHome ← HTTP POST ← BisectResultAggregator ←───────┘
 ### Response (CTP → QAHome)
 ```json
 {
-  "commitFormer": "19a9f15",
-  "commitLatter": "e4c8127",
+  "suspectedStartCommit": "bb2cc88",
+  "suspectedEndCommit": "bb2cc88",
   "workerIp": "10.0.0.42",
   "generatedAt": "2025-08-04T09:13:14Z",
   "tests": [
@@ -150,8 +150,8 @@ Or send a JSON request directly:
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   -d '{
-    "commitFormer": "19a9f15",
-    "commitLatter": "e4c8127",
+    "suspectedStartCommit": "bb2cc88",
+    "suspectedEndCommit": "bb2cc88",
     "buildType": "debug",
     "workerIp": "10.0.0.42",
     "tests": ["shell/path/to/test.sh"],
@@ -206,8 +206,8 @@ The system returns results in this format:
 
 ```json
 {
-  "commitFormer": "19a9f15",
-  "commitLatter": "e4c8127",
+  "suspectedStartCommit": "bb2cc88",
+  "suspectedEndCommit": "bb2cc88",
   "workerIp": "10.0.0.42",
   "generatedAt": "2025-08-04T09:13:14Z",
   "tests": [

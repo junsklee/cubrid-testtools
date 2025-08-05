@@ -10,9 +10,9 @@ WORKER_IP="${WORKER_IP:-localhost}"
 CALLBACK_URL="${CALLBACK_URL:-http://localhost:8080/bisect/result}"
 
 # Test data - based on the example from the original script
-# These are the bad commits we want to investigate
-FIRST_BAD_COMMIT="e4c8127"  # First known bad commit
-LAST_BAD_COMMIT="bb2cc88"   # Last known bad commit
+# These are the suspected bad commits we want to investigate
+SUSPECTED_START_COMMIT="e4c8127"  # First suspected bad commit
+SUSPECTED_END_COMMIT="bb2cc88"   # Last suspected bad commit
 
 # Display configuration
 echo "Bisect Test Script"
@@ -20,14 +20,14 @@ echo "=================="
 echo "Producer: http://${PRODUCER_HOST}:${PRODUCER_PORT}/bisect"
 echo "Worker IP: ${WORKER_IP}"
 echo "Callback URL: ${CALLBACK_URL}"
-echo "Bad commit range: ${FIRST_BAD_COMMIT}...${LAST_BAD_COMMIT}"
+echo "Suspected commit range: ${SUSPECTED_START_COMMIT}...${SUSPECTED_END_COMMIT}"
 echo
 
 # JSON request payload
 read -r -d '' JSON_PAYLOAD << EOF
 {
-  "firstBadCommit": "${FIRST_BAD_COMMIT}",
-  "lastBadCommit": "${LAST_BAD_COMMIT}",
+  "suspectedStartCommit": "${SUSPECTED_START_COMMIT}",
+  "suspectedEndCommit": "${SUSPECTED_END_COMMIT}",
   "buildType": "debug",
   "workerIp": "${WORKER_IP}",
   "tests": [

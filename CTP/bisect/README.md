@@ -5,13 +5,22 @@ A standalone tool for finding the first failing commit for CUBRID shell tests us
 ## Overview
 
 This tool implements a distributed bisect workflow where:
-1. **QAHome** (or any client) sends a JSON request with a commit range and list of failing tests
+1. **QAHome** (or any client) sends a JSON request with suspected bad commit range and list of failing tests
 2. **Producer** node receives the request and for each test:
-   - Uses git bisect to find the first bad commit
+   - Automatically finds the parent of the first suspected bad commit to use as the "good" commit
+   - Uses git bisect to find the actual first bad commit
    - Builds CUBRID at each bisect step
    - Sends the build to a consumer node for testing
 3. **Consumer** node receives builds and test requests, runs tests, and returns results
 4. **Producer** aggregates results and sends them back via HTTP callback
+
+## Parameter Changes
+
+**Important**: The API has been updated to accept suspected bad commit ranges instead of good/bad commits:
+- **Old**: `commitFormer` (good commit) and `commitLatter` (bad commit)
+- **New**: `suspectedStartCommit` (first suspected bad) and `suspectedEndCommit` (last suspected bad)
+
+The tool automatically finds the parent of `suspectedStartCommit` to use as the good commit for git bisect.
 
 ## Architecture
 
@@ -123,8 +132,8 @@ cd /path/to/cubrid-testtools/CTP/bisect
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   -d '{
-    "commitFormer": "19a9f15",
-    "commitLatter": "e4c8127",
+    "suspectedStartCommit": "e4c8127",
+    "suspectedEndCommit": "bb2cc88",
     "buildType": "debug",
     "workerIp": "192.168.1.100",
     "tests": [
@@ -142,31 +151,31 @@ curl -X POST -H "Content-Type: application/json" \
 #### Request Format
 ```json
 {
-  "commitFormer": "string",     // Known good commit (older)
-  "commitLatter": "string",     // Known bad commit (newer)
-  "buildType": "string",        // Build type: "debug" or "release"
-  "workerIp": "string",         // IP address of consumer node
-  "tests": ["string"],          // Array of test paths
-  "callbackUrl": "string",      // URL to POST results
-  "originIp": "string"          // IP of the requesting client
+  "suspectedStartCommit": "string", // First suspected bad commit
+  "suspectedEndCommit": "string",   // Last suspected bad commit
+  "buildType": "string",            // Build type: "debug" or "release"
+  "workerIp": "string",             // IP address of consumer node
+  "tests": ["string"],              // Array of test paths
+  "callbackUrl": "string",          // URL to POST results
+  "originIp": "string"              // IP of the requesting client
 }
 ```
 
 #### Response Format
 ```json
 {
-  "commitFormer": "string",
-  "commitLatter": "string",
-  "workerIp": "string",
-  "generatedAt": "string",      // ISO 8601 timestamp
+  "suspectedStartCommit": "string", // Original suspected start commit
+  "suspectedEndCommit": "string",   // Original suspected end commit
+  "workerIp": "string",             // Worker IP address
+  "generatedAt": "string",          // ISO 8601 timestamp
   "tests": [
     {
-      "name": "string",         // Test path
-      "status": "string",       // "found", "error"
-      "firstBadCommit": "string", // Git commit hash (if found)
-      "author": "string",       // Commit author (if found)
-      "error": "string",        // Error message (if error)
-      "runtimeMs": number       // Execution time in milliseconds
+      "name": "string",             // Test path
+      "status": "string",           // "found", "error"
+      "firstBadCommit": "string",   // Actual first bad commit found by bisect (if found)
+      "author": "string",           // Commit author (if found)
+      "error": "string",            // Error message (if error)
+      "runtimeMs": number           // Execution time in milliseconds
     }
   ]
 }
@@ -289,14 +298,14 @@ python3 test_callback_receiver.py
 
 Given a failing test in commit range:
 ```
-71feef5 (last known good) -- e4c8127 (first bad) -- ... -- bb2cc88 (last bad)
+71feef5 (parent) -- e4c8127 (suspected start) -- ... -- bb2cc88 (suspected end)
 ```
 
-1. Send request with firstBadCommit=e4c8127, lastBadCommit=bb2cc88
-2. Tool finds parent of e4c8127 (which is 71feef5)
+1. Send request with suspectedStartCommit=e4c8127, suspectedEndCommit=bb2cc88
+2. Tool automatically finds parent of e4c8127 (which is 71feef5) to use as the good commit
 3. Runs git bisect between 71feef5 (good) and bb2cc88 (bad)
-4. Tests commits in binary search pattern
-5. Returns exact commit where test started failing
+4. Tests commits in binary search pattern starting from e4c8127
+5. Returns exact commit where test started failing (firstBadCommit in response)
 
 ## Performance
 
@@ -337,7 +346,7 @@ tail -f log/bisect_consumer.log
 
 4. **Git Issues**: 
    - Ensure git repository is clean: `git status`
-   - Check that commits exist: `git log --oneline firstBadCommit..lastBadCommit`
+   - Check that commits exist: `git log --oneline suspectedStartCommit..suspectedEndCommit`
 
 ## Requirements
 

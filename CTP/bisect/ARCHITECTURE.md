@@ -23,8 +23,8 @@
 1. **Client → Producer**: POST /bisect
    ```json
    {
-     "commitFormer": "abc123",
-     "commitLatter": "def456",
+     "suspectedStartCommit": "abc123",
+     "suspectedEndCommit": "def456",
      "tests": ["test1.sh", "test2.sh"],
      "workerIp": "10.0.0.2",
      "callbackUrl": "http://client/result"

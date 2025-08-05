@@ -121,8 +121,8 @@ public class BisectProducer {
     
     private void validateRequest(JSONObject request) throws IllegalArgumentException {
         // Required fields
-        if (!request.has("firstBadCommit") || !request.has("lastBadCommit")) {
-            throw new IllegalArgumentException("Missing required fields: firstBadCommit, lastBadCommit");
+        if (!request.has("suspectedStartCommit") || !request.has("suspectedEndCommit")) {
+            throw new IllegalArgumentException("Missing required fields: suspectedStartCommit, suspectedEndCommit");
         }
         
         if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
@@ -135,8 +135,8 @@ public class BisectProducer {
     }
     
     private String generateTaskId(JSONObject request) {
-        String data = request.getString("firstBadCommit") + "_" +
-                     request.getString("lastBadCommit") + "_" +
+        String data = request.getString("suspectedStartCommit") + "_" +
+                     request.getString("suspectedEndCommit") + "_" +
                      request.getJSONArray("tests").toString();
         return Integer.toHexString(data.hashCode());
     }
