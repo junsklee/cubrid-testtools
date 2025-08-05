@@ -22,6 +22,25 @@ This tool implements a distributed bisect workflow where:
 
 The tool automatically finds the parent of `suspectedStartCommit` to use as the good commit for git bisect.
 
+## Build File Management
+
+The tool now supports controlling whether build files are automatically deleted after each bisect step:
+
+- **`autoDeleteBuilds`** (boolean, optional, default: `true`): Controls whether build files are automatically cleaned up
+  - `true` (default): Build files are deleted after each commit test (saves disk space)
+  - `false`: Build files are preserved in the bisect working directory (e.g., `/tmp/bisect_work/bisect_TIMESTAMP/`) for inspection
+
+**Example**: To preserve build files for debugging:
+```json
+{
+  "suspectedStartCommit": "abc123",
+  "suspectedEndCommit": "def456",
+  "tests": ["shell/test.sh"],
+  "callbackUrl": "http://example.com/callback",
+  "autoDeleteBuilds": false
+}
+```
+
 ## Architecture
 
 ```
