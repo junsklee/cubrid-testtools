@@ -10,8 +10,9 @@ WORKER_IP="${WORKER_IP:-localhost}"
 CALLBACK_URL="${CALLBACK_URL:-http://localhost:8080/bisect/result}"
 
 # Test data - based on the example from the original script
-COMMIT_FORMER="19a9f15"  # Known good commit
-COMMIT_LATTER="e4c8127"  # Known bad commit
+# These are the bad commits we want to investigate
+FIRST_BAD_COMMIT="e4c8127"  # First known bad commit
+LAST_BAD_COMMIT="bb2cc88"   # Last known bad commit
 
 # Display configuration
 echo "Bisect Test Script"
@@ -19,14 +20,14 @@ echo "=================="
 echo "Producer: http://${PRODUCER_HOST}:${PRODUCER_PORT}/bisect"
 echo "Worker IP: ${WORKER_IP}"
 echo "Callback URL: ${CALLBACK_URL}"
-echo "Commit range: ${COMMIT_FORMER} -> ${COMMIT_LATTER}"
+echo "Bad commit range: ${FIRST_BAD_COMMIT}...${LAST_BAD_COMMIT}"
 echo
 
 # JSON request payload
 read -r -d '' JSON_PAYLOAD << EOF
 {
-  "commitFormer": "${COMMIT_FORMER}",
-  "commitLatter": "${COMMIT_LATTER}",
+  "firstBadCommit": "${FIRST_BAD_COMMIT}",
+  "lastBadCommit": "${LAST_BAD_COMMIT}",
   "buildType": "debug",
   "workerIp": "${WORKER_IP}",
   "tests": [
@@ -66,6 +67,12 @@ if [ "$HTTP_STATUS" = "202" ]; then
     echo
     echo "Request accepted. Results will be posted to: ${CALLBACK_URL}"
     echo "Monitor producer logs for progress."
+    
+    # Extract task ID if available
+    TASK_ID=$(echo "$BODY" | grep -o '"taskId":"[^"]*"' | cut -d'"' -f4)
+    if [ -n "$TASK_ID" ]; then
+        echo "Task ID: $TASK_ID"
+    fi
 else
     echo
     echo "Request failed!"

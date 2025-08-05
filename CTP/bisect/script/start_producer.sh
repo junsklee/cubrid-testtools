@@ -22,26 +22,22 @@ build_arg=-g ninja -m debug build
 build_dir=build_x86_64_debug
 work_dir=/tmp/bisect_work
 consumer_port=8090
+max_concurrent_bisects=4
 EOF
     echo "Please edit $CONFIG_FILE and run again"
     exit 1
 fi
 
-# Source configuration
-source "$CONFIG_FILE"
-
-# Export configuration as environment variables
-export BISECT_LISTEN_PORT="${listen_port:-8089}"
-export BISECT_CUBRID_SRC_DIR="${cubrid_src_dir:-/home/cubrid/cubrid}"
-export BISECT_SHELL_TC_DIR="${shell_tc_dir:-/home/cubrid/cubrid-testcases-private-ex}"
-export BISECT_BUILD_ARG="${build_arg:--g ninja -m debug build}"
-export BISECT_BUILD_DIR="${build_dir:-build_x86_64_debug}"
-export BISECT_WORK_DIR="${work_dir:-/tmp/bisect_work}"
-export BISECT_CONSUMER_PORT="${consumer_port:-8090}"
+# Check if JAR exists
+if [ ! -f "$CTP_BISECT_HOME/lib/bisect-tool.jar" ]; then
+    echo "Error: bisect-tool.jar not found. Please run build.sh first."
+    exit 1
+fi
 
 # Create necessary directories
-mkdir -p "$BISECT_WORK_DIR"
 mkdir -p "$CTP_BISECT_HOME/log"
+WORK_DIR=$(grep "^work_dir=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ')
+mkdir -p "$WORK_DIR"
 
 # Check if producer is already running
 PID_FILE="$CTP_BISECT_HOME/bisect_producer.pid"
@@ -59,40 +55,13 @@ fi
 # Start the producer
 LOG_FILE="$CTP_BISECT_HOME/log/bisect_producer.log"
 echo "Starting Bisect Producer..."
-echo "Configuration:"
-echo "  Listen Port: $BISECT_LISTEN_PORT"
-echo "  CUBRID Source: $BISECT_CUBRID_SRC_DIR"
-echo "  Shell TC Dir: $BISECT_SHELL_TC_DIR"
-echo "  Build Args: $BISECT_BUILD_ARG"
-echo "  Log File: $LOG_FILE"
-
-# Update the Python script to use environment variables
-cat > "$CTP_BISECT_HOME/src/bisect_producer_wrapper.py" << 'EOF'
-#!/usr/bin/env python3
-import os
-import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# Override configuration with environment variables
-import bisect_producer
-bisect_producer.CONFIG.update({
-    'listen_port': int(os.environ.get('BISECT_LISTEN_PORT', 8089)),
-    'cubrid_src_dir': os.environ.get('BISECT_CUBRID_SRC_DIR', '/home/cubrid/cubrid'),
-    'shell_tc_dir': os.environ.get('BISECT_SHELL_TC_DIR', '/home/cubrid/cubrid-testcases-private-ex'),
-    'build_arg': os.environ.get('BISECT_BUILD_ARG', '-g ninja -m debug build'),
-    'build_dir': os.environ.get('BISECT_BUILD_DIR', 'build_x86_64_debug'),
-    'work_dir': os.environ.get('BISECT_WORK_DIR', '/tmp/bisect_work'),
-    'consumer_port': int(os.environ.get('BISECT_CONSUMER_PORT', 8090))
-})
-
-if __name__ == '__main__':
-    bisect_producer.main()
-EOF
-
-chmod +x "$CTP_BISECT_HOME/src/bisect_producer_wrapper.py"
+echo "Configuration: $CONFIG_FILE"
+echo "Log file: $LOG_FILE"
 
 # Start in background
-nohup python3 "$CTP_BISECT_HOME/src/bisect_producer_wrapper.py" >> "$LOG_FILE" 2>&1 &
+nohup java -cp "$CTP_BISECT_HOME/lib/*" \
+    com.navercorp.cubridqa.bisect.BisectProducer \
+    "$CONFIG_FILE" >> "$LOG_FILE" 2>&1 &
 PID=$!
 
 # Save PID

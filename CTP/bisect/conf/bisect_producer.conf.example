@@ -28,3 +28,7 @@ work_dir=/tmp/bisect_work
 # Consumer port
 # The port where consumer nodes are listening for test requests
 consumer_port=8090
+
+# Maximum concurrent bisect operations
+# Adjust based on available system resources
+max_concurrent_bisects=4

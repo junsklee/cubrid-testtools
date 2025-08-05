@@ -15,25 +15,26 @@ if [ ! -f "$CONFIG_FILE" ]; then
     mkdir -p "$CTP_BISECT_HOME/conf"
     cat > "$CONFIG_FILE" << EOF
 # Bisect Consumer Configuration
-listen_port=8090
+# Note: consumer_port should be configured instead of listen_port
+consumer_port=8090
 work_dir=/tmp/bisect_consumer
-cubrid_install_dir=/tmp/cubrid_test
+cubrid_src_dir=/home/cubrid/cubrid
+shell_tc_dir=/home/cubrid/cubrid-testcases-private-ex
 EOF
     echo "Please edit $CONFIG_FILE and run again"
     exit 1
 fi
 
-# Source configuration
-source "$CONFIG_FILE"
-
-# Export configuration as environment variables
-export BISECT_LISTEN_PORT="${listen_port:-8090}"
-export BISECT_WORK_DIR="${work_dir:-/tmp/bisect_consumer}"
-export BISECT_CUBRID_INSTALL_DIR="${cubrid_install_dir:-/tmp/cubrid_test}"
+# Check if JAR exists
+if [ ! -f "$CTP_BISECT_HOME/lib/bisect-tool.jar" ]; then
+    echo "Error: bisect-tool.jar not found. Please run build.sh first."
+    exit 1
+fi
 
 # Create necessary directories
-mkdir -p "$BISECT_WORK_DIR"
 mkdir -p "$CTP_BISECT_HOME/log"
+WORK_DIR=$(grep "^work_dir=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ')
+mkdir -p "$WORK_DIR"
 
 # Check if consumer is already running
 PID_FILE="$CTP_BISECT_HOME/bisect_consumer.pid"
@@ -51,34 +52,13 @@ fi
 # Start the consumer
 LOG_FILE="$CTP_BISECT_HOME/log/bisect_consumer.log"
 echo "Starting Bisect Consumer..."
-echo "Configuration:"
-echo "  Listen Port: $BISECT_LISTEN_PORT"
-echo "  Work Directory: $BISECT_WORK_DIR"
-echo "  Log File: $LOG_FILE"
-
-# Update the Python script to use environment variables
-cat > "$CTP_BISECT_HOME/src/bisect_consumer_wrapper.py" << 'EOF'
-#!/usr/bin/env python3
-import os
-import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# Override configuration with environment variables
-import bisect_consumer
-bisect_consumer.CONFIG.update({
-    'listen_port': int(os.environ.get('BISECT_LISTEN_PORT', 8090)),
-    'work_dir': os.environ.get('BISECT_WORK_DIR', '/tmp/bisect_consumer'),
-    'cubrid_install_dir': os.environ.get('BISECT_CUBRID_INSTALL_DIR', '/tmp/cubrid_test')
-})
-
-if __name__ == '__main__':
-    bisect_consumer.main()
-EOF
-
-chmod +x "$CTP_BISECT_HOME/src/bisect_consumer_wrapper.py"
+echo "Configuration: $CONFIG_FILE"
+echo "Log file: $LOG_FILE"
 
 # Start in background
-nohup python3 "$CTP_BISECT_HOME/src/bisect_consumer_wrapper.py" >> "$LOG_FILE" 2>&1 &
+nohup java -cp "$CTP_BISECT_HOME/lib/*" \
+    com.navercorp.cubridqa.bisect.BisectConsumer \
+    "$CONFIG_FILE" >> "$LOG_FILE" 2>&1 &
 PID=$!
 
 # Save PID

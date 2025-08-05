@@ -240,3 +240,155 @@ tail -f log/bisect_consumer.log
 - Git
 - CUBRID build environment
 - Network connectivity between producer and consumer nodes
+      "name": "string",         // Test path
+      "status": "string",       // "found", "error"
+      "firstBadCommit": "string", // Git commit hash (if found)
+      "author": "string",       // Commit author (if found)
+      "error": "string",        // Error message (if error)
+      "runtimeMs": number       // Execution time in milliseconds
+    }
+  ]
+}
+```
+
+## Testing
+
+1. Start the callback receiver (example Python script):
+```bash
+cd /path/to/cubrid-testtools/CTP/bisect
+python3 test_callback_receiver.py
+```
+
+2. Start producer and consumer services
+
+3. Run the test script:
+```bash
+./test_bisect.sh
+```
+
+## How Git Bisect Works
+
+1. **Binary Search**: Git bisect uses binary search to find the commit that introduced a bug
+   - For N commits, requires at most log₂(N) tests
+   - Example: 128 commits → maximum 7 tests
+
+2. **Judge Script**: For each commit being tested:
+   - Checks out the commit
+   - Builds CUBRID
+   - Sends build to consumer for testing
+   - Returns 0 (good) or 1 (bad) based on test result
+
+3. **Test Execution**: The consumer:
+   - Receives the build package
+   - Extracts and sets up CUBRID
+   - Runs the shell test
+   - Checks for "NOK" in the .result file
+   - Returns pass/fail status
+
+## Example Workflow
+
+Given a failing test in commit range:
+```
+71feef5 (last known good) -- e4c8127 (first bad) -- ... -- bb2cc88 (last bad)
+```
+
+1. Send request with firstBadCommit=e4c8127, lastBadCommit=bb2cc88
+2. Tool finds parent of e4c8127 (which is 71feef5)
+3. Runs git bisect between 71feef5 (good) and bb2cc88 (bad)
+4. Tests commits in binary search pattern
+5. Returns exact commit where test started failing
+
+## Performance
+
+Based on the original shell script, processing 10 tests took approximately 37 minutes:
+- Average time per test: ~3.7 minutes
+- This includes multiple builds per test (due to bisect)
+- Actual time depends on:
+  - Build speed
+  - Test execution time
+  - Number of commits in the range
+  - Network latency between nodes
+
+## Troubleshooting
+
+### Check Logs
+```bash
+# Producer logs
+tail -f log/bisect_producer.log
+
+# Consumer logs
+tail -f log/bisect_consumer.log
+```
+
+### Common Issues
+
+1. **Build Failures**: 
+   - Ensure all build dependencies are installed
+   - Check that CUBRID source is on correct branch
+   - Verify sufficient disk space
+
+2. **Test Not Found**: 
+   - Verify shell_tc_dir path is correct
+   - Check test path matches exactly
+
+3. **Network Issues**: 
+   - Check firewall rules for ports 8089/8090
+   - Verify consumer node is accessible from producer
+
+4. **Git Issues**: 
+   - Ensure git repository is clean: `git status`
+   - Check that commits exist: `git log --oneline firstBadCommit..lastBadCommit`
+
+## Requirements
+
+- Java 8 or higher
+- Git
+- CUBRID build environment (GCC, CMake, etc.)
+- Network connectivity between producer and consumer nodes
+- Sufficient disk space for builds (20GB+ recommended)
+
+## Development
+
+### Building from Source
+
+The project uses standard Java compilation:
+
+```bash
+# Download dependencies
+wget -O lib/json.jar https://search.maven.org/remotecontent?filepath=org/json/json/20231013/json-20231013.jar
+
+# Compile
+javac -cp "lib/*" -d build src/com/navercorp/cubridqa/bisect/*.java
+
+# Package
+cd build && jar cf ../lib/bisect-tool.jar com/
+```
+
+### Project Structure
+
+```
+/CTP/bisect/
+├── src/com/navercorp/cubridqa/bisect/
+│   ├── BisectProducer.java    # Main producer service
+│   ├── BisectTask.java        # Bisect execution logic
+│   ├── BisectConsumer.java    # Test execution service
+│   └── BisectConfig.java      # Configuration handler
+├── script/
+│   ├── start_producer.sh      # Start producer service
+│   ├── stop_producer.sh       # Stop producer service
+│   ├── start_consumer.sh      # Start consumer service
+│   └── stop_consumer.sh       # Stop consumer service
+├── conf/
+│   ├── bisect_producer.conf.example
+│   └── bisect_consumer.conf.example
+├── lib/                       # JAR files
+├── build/                     # Compiled classes
+├── log/                       # Log files
+├── build.sh                   # Build script
+├── test_bisect.sh            # Test script
+└── README.md                 # This file
+```
+
+## License
+
+Copyright (c) 2016, Search Solution Corporation. All rights reserved.
