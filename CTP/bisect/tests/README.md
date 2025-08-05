@@ -6,11 +6,20 @@ This directory contains all testing, diagnostic, and utility scripts for the CTP
 
 ```
 tests/
-├── examples/           # Example bisect test scripts
-├── diagnostic/         # System diagnostic and troubleshooting tools
-├── utils/             # Utility scripts for results management
+├── data/              # Test data files and sample requests
+├── examples/          # Example bisect test scripts
+├── diagnostic/        # System diagnostic and troubleshooting tools
+├── utils/             # Utility scripts and tools
 └── README.md          # This file
 ```
+
+## Data Files (`data/`)
+
+### `test_request.json`
+Sample test request JSON for consumer testing.
+
+**Usage:**
+Used by diagnostic scripts to test consumer functionality with a minimal request payload.
 
 ## Examples (`examples/`)
 
@@ -108,6 +117,39 @@ cd tests/utils
 - Shows summary of latest results
 - Provides commands for manual inspection
 - Supports JSON parsing with `jq` if available
+
+### `start_callback_receiver.sh`
+HTTP callback receiver for testing bisect results delivery.
+
+**Usage:**
+```bash
+cd tests/utils
+./start_callback_receiver.sh [port]
+```
+
+**Features:**
+- Receives HTTP POST callbacks with bisect results
+- Displays results in formatted output
+- Shows both local and network IP addresses
+- Auto-compiles Java source if needed
+- Default port: 8080
+
+**Note:** This is a blocking server that waits for HTTP requests. It will run until stopped with Ctrl+C.
+
+### `test_callback_receiver.sh`
+Test script to verify the callback receiver is working.
+
+**Usage:**
+```bash
+# In terminal 1: Start the receiver
+./start_callback_receiver.sh 8080
+
+# In terminal 2: Test it
+./test_callback_receiver.sh 8080
+```
+
+### `TestCallbackReceiver.java`
+Java implementation of the callback receiver with expected result validation.
 
 ## Running Tests
 

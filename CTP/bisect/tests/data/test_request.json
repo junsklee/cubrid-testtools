@@ -1,0 +1,7 @@
+{
+  "buildPackage": "/tmp/dummy-cubrid.tar.gz",
+  "testPath": "shell/test/dummy.sh",
+  "testDir": "/tmp/test",
+  "testScript": "dummy.sh",
+  "testName": "dummy_test"
+}

@@ -7,7 +7,7 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CTP_BISECT_HOME="$(dirname "$SCRIPT_DIR")"
 
-PID_FILE="$CTP_BISECT_HOME/bisect_producer.pid"
+PID_FILE="$CTP_BISECT_HOME/runtime/bisect_producer.pid"
 
 if [ ! -f "$PID_FILE" ]; then
     echo "Bisect Producer is not running (no PID file found)"

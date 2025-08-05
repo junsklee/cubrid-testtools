@@ -5,7 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="$BASE_DIR/log"
-PID_FILE="$BASE_DIR/bisect_consumer.pid"
+PID_FILE="$BASE_DIR/runtime/bisect_consumer.pid"
 LOG_FILE="$LOG_DIR/bisect_consumer.log"
 
 # Check if already running
@@ -20,8 +20,9 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
-# Create log directory
+# Create log and runtime directories
 mkdir -p "$LOG_DIR"
+mkdir -p "$BASE_DIR/runtime"
 
 # Check configuration
 CONFIG_FILE="$BASE_DIR/conf/bisect_consumer.conf"

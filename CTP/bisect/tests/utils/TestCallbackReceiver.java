@@ -21,9 +21,26 @@ public class TestCallbackReceiver {
         server.setExecutor(null);
         server.start();
         
+        // Get actual IP address
+        String localIp = "localhost";
+        try {
+            Process process = Runtime.getRuntime().exec("hostname -I");
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(process.getInputStream()));
+            String line = reader.readLine();
+            if (line != null && !line.trim().isEmpty()) {
+                localIp = line.trim().split("\\s+")[0];
+            }
+        } catch (Exception e) {
+            // Fall back to localhost if we can't get the IP
+        }
+        
         System.out.println("Bisect callback receiver listening on port " + port);
-        System.out.println("Endpoint: http://localhost:" + port + "/bisect/result");
+        System.out.println("Endpoints:");
+        System.out.println("  Local:    http://localhost:" + port + "/bisect/result");
+        System.out.println("  Network:  http://" + localIp + ":" + port + "/bisect/result");
         System.out.println("\nWaiting for bisect results...");
+        System.out.println("(This will wait indefinitely until a request is received or Ctrl+C is pressed)");
     }
     
     static class CallbackHandler implements HttpHandler {
@@ -73,15 +90,16 @@ public class TestCallbackReceiver {
                 // Parse JSON
                 JSONObject result = new JSONObject(body.toString());
                 
-                System.out.println("\n" + "=".repeat(80));
+                String separator = new String(new char[80]).replace('\0', '=');
+                System.out.println("\n" + separator);
                 System.out.println("Received bisect results at " + new Date());
-                System.out.println("=".repeat(80));
+                System.out.println(separator);
                 System.out.println("Bad commit range: " + result.getString("firstBadCommit") + 
                                  "..." + result.getString("lastBadCommit"));
                 System.out.println("Worker IP: " + result.getString("workerIp"));
                 System.out.println("Generated at: " + result.getString("generatedAt"));
                 System.out.println("\nTest Results:");
-                System.out.println("=".repeat(80));
+                System.out.println(separator);
                 
                 JSONArray tests = result.getJSONArray("tests");
                 for (int i = 0; i < tests.length(); i++) {
@@ -112,7 +130,7 @@ public class TestCallbackReceiver {
                     System.out.printf("Runtime: %.1f seconds%n", runtimeSeconds);
                 }
                 
-                System.out.println("\n" + "=".repeat(80) + "\n");
+                System.out.println("\n" + separator + "\n");
                 
                 // Send success response
                 exchange.sendResponseHeaders(200, 2);

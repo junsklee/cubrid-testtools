@@ -4,7 +4,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PID_FILE="$BASE_DIR/bisect_consumer.pid"
+PID_FILE="$BASE_DIR/runtime/bisect_consumer.pid"
 
 if [ ! -f "$PID_FILE" ]; then
     echo "BisectConsumer is not running (no PID file found)"

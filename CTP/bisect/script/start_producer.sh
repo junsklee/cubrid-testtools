@@ -36,11 +36,12 @@ fi
 
 # Create necessary directories
 mkdir -p "$CTP_BISECT_HOME/log"
+mkdir -p "$CTP_BISECT_HOME/runtime"
 WORK_DIR=$(grep "^work_dir=" "$CONFIG_FILE" | cut -d'=' -f2 | tr -d ' ')
 mkdir -p "$WORK_DIR"
 
 # Check if producer is already running
-PID_FILE="$CTP_BISECT_HOME/bisect_producer.pid"
+PID_FILE="$CTP_BISECT_HOME/runtime/bisect_producer.pid"
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
     if ps -p "$PID" > /dev/null 2>&1; then

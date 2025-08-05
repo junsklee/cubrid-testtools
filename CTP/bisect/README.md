@@ -249,13 +249,15 @@ CTP/bisect/
 │   ├── start_consumer.sh        # Start consumer service
 │   └── stop_consumer.sh         # Stop consumer service
 ├── tests/                       # Testing and diagnostic tools
+│   ├── data/                    # Test data files
 │   ├── examples/                # Example bisect test scripts
 │   ├── diagnostic/              # System diagnostic tools
-│   ├── utils/                   # Utility scripts (results viewer)
+│   ├── utils/                   # Utility scripts and tools
 │   └── README.md                # Testing documentation
 ├── conf/
 │   ├── bisect_producer.conf.example
 │   └── bisect_consumer.conf.example
+├── runtime/                     # Runtime files (PID files, etc.)
 ├── lib/                         # Dependencies (JSON library)
 ├── build/                       # Compiled classes
 ├── log/                         # Log files (created at runtime)
