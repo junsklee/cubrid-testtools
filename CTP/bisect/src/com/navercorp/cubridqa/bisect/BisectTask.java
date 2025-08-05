@@ -5,6 +5,7 @@ package com.navercorp.cubridqa.bisect;
 
 import java.io.*;
 import java.net.*;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.logging.*;
 import java.util.regex.*;
@@ -392,6 +393,9 @@ public class BisectTask {
                 .put("generatedAt", new Date().toInstant().toString())
                 .put("tests", new JSONArray(results));
             
+            // Save results locally first
+            saveResultsLocally(response);
+            
             String callbackUrl = request.getString("callbackUrl");
             logger.info("Sending results to " + callbackUrl);
             
@@ -411,6 +415,37 @@ public class BisectTask {
             
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Failed to send callback", e);
+        }
+    }
+    
+    private void saveResultsLocally(JSONObject response) {
+        try {
+            // Create results directory
+            File resultsDir = new File(config.getWorkDir(), "results");
+            if (!resultsDir.exists()) {
+                resultsDir.mkdirs();
+            }
+            
+            // Generate result filename with timestamp and task ID
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+            String filename = String.format("bisect_result_%s_%s.json", timestamp, taskId);
+            File resultFile = new File(resultsDir, filename);
+            
+            // Write JSON result to file
+            try (FileWriter writer = new FileWriter(resultFile)) {
+                writer.write(response.toString(2)); // Pretty print with 2-space indent
+            }
+            
+            logger.info("Results saved locally to: " + resultFile.getAbsolutePath());
+            
+            // Also create a latest result symlink/copy for easy access
+            File latestFile = new File(resultsDir, "latest_result.json");
+            try (FileWriter writer = new FileWriter(latestFile)) {
+                writer.write(response.toString(2));
+            }
+            
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Failed to save results locally", e);
         }
     }
     

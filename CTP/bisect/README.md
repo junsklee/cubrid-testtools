@@ -64,6 +64,24 @@ curl -X POST -H "Content-Type: application/json" \
   http://localhost:8089/bisect
 ```
 
+### Running Tests
+
+Use the provided test scripts:
+
+```bash
+# Basic test
+./tests/examples/test_bisect.sh
+
+# Test with build preservation
+./tests/examples/test_bisect_preserve_builds.sh
+
+# System diagnostics
+./tests/diagnostic/diagnose_bisect.sh
+
+# View results
+./tests/utils/results_viewer.sh
+```
+
 ## Configuration
 
 ### Producer Configuration (bisect_producer.conf)
@@ -145,6 +163,77 @@ shell_tc_dir=/path/to/cubrid-testcases
 }
 ```
 
+## Results Storage
+
+The CTP Bisect system supports **local results storage** in addition to HTTP callback delivery. Results are automatically saved to local files whenever a bisect task completes, regardless of whether the HTTP callback succeeds or fails.
+
+### Storage Location
+
+**Primary Location**: `/tmp/bisect_work/results/`
+
+This directory contains:
+- Individual result files: `bisect_result_YYYYMMDD_HHMMSS_TASKID.json`
+- Latest result file: `latest_result.json` (copy of most recent result)
+
+### File Format
+
+Results are stored as JSON files with the following structure:
+
+```json
+{
+  "suspectedStartCommit": "bb2cc88",
+  "suspectedEndCommit": "e4c8127", 
+  "workerIp": "192.168.1.5",
+  "generatedAt": "2025-08-05T14:44:51.857Z",
+  "tests": [
+    {
+      "name": "shell/_06_issues/_12_2h/bug_bts_7583/cases/bug_bts_7583.sh",
+      "status": "found",
+      "firstBadCommit": "bb2cc88e1df96910a3bb30384cd6d307cd6d839a",
+      "author": "jongmin-won <55681111+jongmin-won@users.noreply.github.com>",
+      "runtimeMs": 397149
+    }
+  ]
+}
+```
+
+### Viewing Results
+
+Use the results viewer utility:
+
+```bash
+./tests/utils/results_viewer.sh
+```
+
+Or manually:
+
+```bash
+# List all result files
+ls -la /tmp/bisect_work/results/
+
+# View latest result
+cat /tmp/bisect_work/results/latest_result.json
+
+# Pretty print with jq (if available)
+jq . /tmp/bisect_work/results/latest_result.json
+```
+
+### Integration with Build Preservation
+
+When using `autoDeleteBuilds: false`, both results and builds are preserved:
+
+- **Results**: `/tmp/bisect_work/results/bisect_result_TIMESTAMP_TASKID.json`
+- **Builds**: `/tmp/bisect_work/bisect_TIMESTAMP/` (contains full CUBRID build)
+
+### Benefits
+
+1. **Reliability**: Results are never lost, even if HTTP callback fails
+2. **Persistence**: Results remain available after system restarts
+3. **Debugging**: Easy access to historical bisect results
+4. **Automation**: Scripts can parse local JSON files for further processing
+
+No additional configuration required. Local storage is automatically enabled for all bisect tasks.
+
 ## Project Structure
 
 ```
@@ -159,6 +248,11 @@ CTP/bisect/
 │   ├── stop_producer.sh         # Stop producer service
 │   ├── start_consumer.sh        # Start consumer service
 │   └── stop_consumer.sh         # Stop consumer service
+├── tests/                       # Testing and diagnostic tools
+│   ├── examples/                # Example bisect test scripts
+│   ├── diagnostic/              # System diagnostic tools
+│   ├── utils/                   # Utility scripts (results viewer)
+│   └── README.md                # Testing documentation
 ├── conf/
 │   ├── bisect_producer.conf.example
 │   └── bisect_consumer.conf.example
@@ -166,7 +260,6 @@ CTP/bisect/
 ├── build/                       # Compiled classes
 ├── log/                         # Log files (created at runtime)
 ├── build.sh                     # Build script
-├── test_bisect.sh              # Test script
 ├── ARCHITECTURE.md             # System architecture details
 ├── SCALING.md                  # Scaling guide
 └── README.md                   # This file
@@ -235,6 +328,12 @@ tail -f log/bisect_consumer.log
    - Consider increasing `max_concurrent_bisects`
    - Add more consumer nodes for parallel testing
    - Check network latency between nodes
+
+5. **Results not being saved locally**
+   - Check write permissions on `/tmp/bisect_work/`
+   - Verify disk space availability
+   - Check producer logs for "Results saved locally" messages
+   - Ensure the updated bisect-tool.jar is being used
 
 ### Debug Mode
 
