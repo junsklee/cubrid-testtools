@@ -1,3 +1,70 @@
+#!/bin/bash
+
+# CTP Bisect System Diagnostic Script
+# Checks both producer and consumer status
+
+# Function to check if a process is listening on a port
+check_port() {
+    local port=$1
+    local service=$2
+    if lsof -i :$port >/dev/null 2>&1; then
+        echo "✓ Port $port ($service) is in use"
+        return 0
+    else
+        echo "✗ Port $port ($service) is not in use"
+        return 1
+    fi
+}
+
+# Function to test HTTP endpoints
+test_endpoint() {
+    local url=$1
+    local name=$2
+    if curl -s -f "$url" >/dev/null 2>&1; then
+        echo "✓ $name endpoint is responding"
+        return 0
+    else
+        echo "✗ $name endpoint is not responding"
+        return 1
+    fi
+}
+
+# Check if services are running
+PRODUCER_RUNNING=1
+CONSUMER_RUNNING=1
+
+if ps aux | grep -v grep | grep -q "BisectProducer"; then
+    PRODUCER_RUNNING=0
+fi
+
+if ps aux | grep -v grep | grep -q "BisectConsumer"; then
+    CONSUMER_RUNNING=0
+fi
+
+echo "CTP Bisect System Diagnostic"
+echo "============================"
+echo
+
+# 1. Check service status
+echo "1. Checking Service Status"
+echo "-------------------------"
+if [ $PRODUCER_RUNNING -eq 0 ]; then
+    echo "✓ BisectProducer is running"
+    PRODUCER_PID=$(ps aux | grep -v grep | grep "BisectProducer" | awk '{print $2}')
+    echo "  PID: $PRODUCER_PID"
+else
+    echo "✗ BisectProducer is not running"
+fi
+
+if [ $CONSUMER_RUNNING -eq 0 ]; then
+    echo "✓ BisectConsumer is running"
+    CONSUMER_PID=$(ps aux | grep -v grep | grep "BisectConsumer" | awk '{print $2}')
+    echo "  PID: $CONSUMER_PID"
+else
+    echo "✗ BisectConsumer is not running"
+fi
+echo
+
 echo "2. Checking Ports"
 echo "----------------"
 check_port 8089 "Producer"
@@ -65,7 +132,7 @@ echo
 # 5. Check configuration files
 echo "5. Checking Configuration Files"
 echo "------------------------------"
-for conf in conf/bisect_producer.conf conf/bisect_consumer.conf; do
+for conf in ../conf/bisect_producer.conf ../conf/bisect_consumer.conf; do
     if [ -f "$conf" ]; then
         echo "✓ $conf exists"
         # Check key settings
@@ -87,7 +154,7 @@ echo
 # 6. Check recent logs
 echo "6. Recent Log Activity"
 echo "--------------------"
-for log in log/bisect_producer.log log/bisect_consumer.log; do
+for log in ../log/bisect_producer.log ../log/bisect_consumer.log; do
     if [ -f "$log" ]; then
         echo "$log:"
         echo "  Last modified: $(stat -f "%Sm" "$log" 2>/dev/null || stat -c "%y" "$log" 2>/dev/null)"

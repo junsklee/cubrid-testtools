@@ -16,8 +16,8 @@ AUTO_DELETE_BUILDS="${AUTO_DELETE_BUILDS:-true}"
 # Test data - based on the example from the original script
 # These are the suspected bad commits we want to investigate
 # Note: bb2cc88 is older than e4c8127, so bb2cc88 should be the start
-SUSPECTED_START_COMMIT="bb2cc88"  # First suspected bad commit (older)
-SUSPECTED_END_COMMIT="e4c8127"   # Last suspected bad commit (newer)
+SUSPECTED_START_COMMIT="b7160e2"  # First suspected bad commit (older)
+SUSPECTED_END_COMMIT="f89705b"   # Last suspected bad commit (newer)
 
 # Display configuration
 echo "Bisect Test Script"
