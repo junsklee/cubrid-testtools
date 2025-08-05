@@ -17,12 +17,31 @@ import org.json.JSONObject;
  * 
  * This service runs on test nodes and executes shell tests with provided CUBRID builds.
  * It extracts the build, sets up the environment, runs the test, and returns pass/fail status.
+ * 
+ * Version 2.0 - Enhanced with:
+ * - Build version verification before test execution
+ * - Proper differentiation between test failures and execution failures
+ * - Better environment setup for shell tests
+ * - Improved error handling and logging
  */
 public class BisectConsumer {
     private static final Logger logger = Logger.getLogger(BisectConsumer.class.getName());
     
     private final BisectConfig config;
     private final HttpServer server;
+    
+    // Test execution status types
+    public enum TestStatus {
+        PASS("pass"),           // Test executed and passed
+        FAIL("fail"),           // Test executed and failed
+        EXECUTION_ERROR("execution_error"),  // Test couldn't be executed properly
+        ENVIRONMENT_ERROR("environment_error"), // Environment setup failed
+        BUILD_ERROR("build_error");  // Build installation/verification failed
+        
+        private final String value;
+        TestStatus(String value) { this.value = value; }
+        public String getValue() { return value; }
+    }
     
     public BisectConsumer(BisectConfig config) throws IOException {
         this.config = config;
@@ -83,8 +102,9 @@ public class BisectConsumer {
             } catch (Exception e) {
                 logger.log(Level.SEVERE, "Error processing test request", e);
                 JSONObject error = new JSONObject()
-                    .put("status", "error")
-                    .put("message", e.getMessage());
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", e.getMessage())
+                    .put("error_type", "request_processing");
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 500, error.toString());
             }
@@ -132,15 +152,54 @@ public class BisectConsumer {
             String testScript = request.getString("testScript");
             String testName = request.getString("testName");
             
+            // Optional: expected build version for verification
+            String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+            
             logger.info("Test parameters:");
             logger.info("  Build package: " + buildPackage);
             logger.info("  Test directory: " + testDir);
             logger.info("  Test script: " + testScript);
             logger.info("  Test name: " + testName);
+            if (expectedBuildVersion != null) {
+                logger.info("  Expected build version: " + expectedBuildVersion);
+            }
             
             // Install CUBRID using the existing installation script
             logger.info("Installing CUBRID build using run_cubrid_install script");
-            Path actualInstallDir = installCubridUsingScript(buildPackage, workDir);
+            Path actualInstallDir = null;
+            try {
+                actualInstallDir = installCubridUsingScript(buildPackage, workDir);
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, "Failed to install CUBRID build", e);
+                return new JSONObject()
+                    .put("status", TestStatus.BUILD_ERROR.getValue())
+                    .put("message", "Failed to install CUBRID: " + e.getMessage())
+                    .put("test", testName);
+            }
+            
+            // Verify CUBRID installation by running cubrid_rel
+            logger.info("Verifying CUBRID installation...");
+            String installedVersion = verifyCubridInstallation(actualInstallDir);
+            if (installedVersion == null) {
+                logger.severe("CUBRID installation verification failed - cubrid_rel command failed");
+                return new JSONObject()
+                    .put("status", TestStatus.BUILD_ERROR.getValue())
+                    .put("message", "CUBRID installation verification failed")
+                    .put("test", testName);
+            }
+            
+            logger.info("CUBRID installation verified. Version: " + installedVersion);
+            
+            // Check if expected version matches (if provided)
+            if (expectedBuildVersion != null && !installedVersion.contains(expectedBuildVersion)) {
+                logger.warning("Build version mismatch. Expected: " + expectedBuildVersion + ", Got: " + installedVersion);
+                return new JSONObject()
+                    .put("status", TestStatus.BUILD_ERROR.getValue())
+                    .put("message", "Build version mismatch")
+                    .put("expected_version", expectedBuildVersion)
+                    .put("installed_version", installedVersion)
+                    .put("test", testName);
+            }
             
             // Set environment for CUBRID (using the actual installation directory)
             Map<String, String> env = new HashMap<>(System.getenv());
@@ -152,30 +211,46 @@ public class BisectConsumer {
             
             // Load CUBRID environment
             env.put("CUBRID_LANG", "en_US");
+            env.put("CUBRID_CHARSET", "en_US");
+            
+            // Set CTP_HOME if available for shell test framework
+            String ctpHome = findCTPHome();
+            if (ctpHome != null) {
+                env.put("CTP_HOME", ctpHome);
+                env.put("init_path", ctpHome + "/shell/init_path");
+                // Add shell test utilities to PATH
+                env.put("PATH", ctpHome + "/shell/init_path:" + env.get("PATH"));
+            }
             
             // Ensure databases directory exists
             if (!Files.exists(actualInstallDir.resolve("databases"))) {
                 Files.createDirectories(actualInstallDir.resolve("databases"));
             }
             
-            // Run the test
+            // Run the test with proper shell test framework setup
             String resultFile = testName + ".result";
             logger.info("Running test: " + testScript + " in directory: " + testDir);
-            
-            // Change to test directory
-            ProcessBuilder pb = new ProcessBuilder();
-            pb.directory(new File(testDir));
-            pb.environment().clear();
-            pb.environment().putAll(env);
             
             // Remove old result file if exists
             File resultFileObj = new File(testDir, resultFile);
             if (resultFileObj.exists()) {
                 resultFileObj.delete();
+                logger.info("Removed existing result file: " + resultFile);
             }
             
-            // Run test script
-            pb.command("bash", testScript);
+            // Create wrapper script that properly sets up the test environment
+            String wrapperScript = createTestWrapperScript(testDir, testScript, testName, ctpHome);
+            File wrapperFile = new File(workDir.toFile(), "test_wrapper.sh");
+            Files.write(wrapperFile.toPath(), wrapperScript.getBytes());
+            wrapperFile.setExecutable(true);
+            
+            // Run test through wrapper script
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(new File(testDir));
+            pb.environment().clear();
+            pb.environment().putAll(env);
+            pb.command("bash", wrapperFile.getAbsolutePath());
+            
             Process process = pb.start();
             
             // Capture output for debugging
@@ -188,33 +263,80 @@ public class BisectConsumer {
             boolean completed = process.waitFor(30, TimeUnit.MINUTES);
             if (!completed) {
                 process.destroyForcibly();
-                throw new RuntimeException("Test timeout after 30 minutes");
+                logger.severe("Test timeout after 30 minutes");
+                return new JSONObject()
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", "Test timeout after 30 minutes")
+                    .put("test", testName);
             }
             
             int exitCode = process.exitValue();
             logger.info("Test script exited with code: " + exitCode);
+            
+            // Wait a bit for output gobblers to finish
+            outputGobbler.join(2000);
+            errorGobbler.join(2000);
+            
+            // Check for test execution errors in the output
+            String testOutput = outputGobbler.getOutput();
+            String testError = errorGobbler.getOutput();
+            
+            // Check if test script had execution errors (like command not found, syntax errors, etc.)
+            if (exitCode != 0 && (testError.contains("command not found") || 
+                                   testError.contains("syntax error") ||
+                                   testError.contains("No such file or directory"))) {
+                logger.severe("Test execution error detected: " + testError);
+                return new JSONObject()
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", "Test script execution error: " + testError.substring(0, Math.min(200, testError.length())))
+                    .put("test", testName)
+                    .put("exit_code", exitCode);
+            }
             
             // Check result file
             if (resultFileObj.exists()) {
                 String resultContent = new String(Files.readAllBytes(resultFileObj.toPath()));
                 logger.info("Result file content: " + resultContent.trim());
                 
-                if (resultContent.contains("NOK")) {
+                if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
                     logger.info("Test " + testName + " FAILED");
                     return new JSONObject()
-                        .put("status", "fail")
-                        .put("test", testName);
-                } else {
+                        .put("status", TestStatus.FAIL.getValue())
+                        .put("test", testName)
+                        .put("build_version", installedVersion);
+                } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
                     logger.info("Test " + testName + " PASSED");
                     return new JSONObject()
-                        .put("status", "pass")
+                        .put("status", TestStatus.PASS.getValue())
+                        .put("test", testName)
+                        .put("build_version", installedVersion);
+                } else {
+                    // Result file exists but doesn't contain clear pass/fail indicator
+                    logger.warning("Result file exists but status unclear: " + resultContent);
+                    return new JSONObject()
+                        .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                        .put("message", "Result file exists but status unclear")
+                        .put("result_content", resultContent.substring(0, Math.min(100, resultContent.length())))
                         .put("test", testName);
                 }
             } else {
+                // No result file generated
                 logger.warning("No result file generated for test " + testName);
+                
+                // Check if this is likely an environment or setup issue
+                if (testOutput.contains("CUBRID") && testOutput.contains("not found")) {
+                    return new JSONObject()
+                        .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                        .put("message", "CUBRID environment not properly set up")
+                        .put("test", testName);
+                }
+                
+                // General execution error - test ran but didn't produce result
                 return new JSONObject()
-                    .put("status", "error")
-                    .put("message", "No result file generated");
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", "No result file generated - test may not have run properly")
+                    .put("test", testName)
+                    .put("exit_code", exitCode);
             }
             
         } finally {
@@ -222,30 +344,7 @@ public class BisectConsumer {
             deleteDirectory(workDir.toFile());
         }
     }
-    
-    /**
-     * Install CUBRID using the existing run_cubrid_install script
-     * @return Path to the actual CUBRID installation directory
-     */
-    private Path installCubridUsingScript(String buildPackage, Path workDir) throws IOException, InterruptedException {
-        logger.info("=====Installing CUBRID using run_cubrid_install script=====");
-        
-        // Prepare environment for installation
-        ProcessBuilder pb = new ProcessBuilder();
-        pb.directory(workDir.toFile());
-        
-        // Build command: run_cubrid_install [url]
-        pb.command("run_cubrid_install", buildPackage);
-        
-        // Set up environment variables
-        Map<String, String> env = pb.environment();
-        
-        // Make sure CTP_HOME is set (the script depends on it)
-        if (env.get("CTP_HOME") == null) {
-            // Try to find CTP_HOME relative to the script location
-            String ctpHome = findCTPHome();
-            if (ctpHome != null) {
-                env.put("CTP_HOME", ctpHome);
+CTP_HOME", ctpHome);
                 logger.info("Set CTP_HOME to: " + ctpHome);
             }
         }
@@ -280,7 +379,12 @@ public class BisectConsumer {
         logger.info("Installation script exited with code: " + exitCode);
         
         if (exitCode != 0) {
-            throw new IOException("CUBRID installation failed with exit code: " + exitCode);
+            // Get error output for better diagnostics
+            outputGobbler.join(1000);
+            errorGobbler.join(1000);
+            String errorOutput = errorGobbler.getOutput();
+            throw new IOException("CUBRID installation failed with exit code: " + exitCode + 
+                                  ". Error: " + errorOutput.substring(0, Math.min(500, errorOutput.length())));
         }
         
         logger.info("CUBRID installation completed successfully");
@@ -317,6 +421,21 @@ public class BisectConsumer {
                 return currentDir.getAbsolutePath();
             }
             currentDir = currentDir.getParentFile();
+        }
+        
+        // Try common locations
+        String[] commonPaths = {
+            "/home/qahome/cubrid-testtools/CTP",
+            "/Users/jun/cubrid-testtools/CTP",
+            System.getProperty("user.home") + "/cubrid-testtools/CTP"
+        };
+        
+        for (String path : commonPaths) {
+            File ctpDir = new File(path);
+            if (ctpDir.exists() && new File(ctpDir, "common/script/run_cubrid_install").exists()) {
+                logger.info("Found CTP_HOME at: " + path);
+                return path;
+            }
         }
         
         // Default fallback
@@ -362,15 +481,20 @@ public class BisectConsumer {
     }
     
     /**
-     * Stream gobbler to consume process output
+     * Enhanced Stream gobbler to consume and store process output
      */
     private static class StreamGobbler extends Thread {
         private final InputStream is;
         private final String type;
+        private final StringBuilder output = new StringBuilder();
         
         StreamGobbler(InputStream is, String type) {
             this.is = is;
             this.type = type;
+        }
+        
+        public String getOutput() {
+            return output.toString();
         }
         
         @Override
@@ -378,7 +502,14 @@ public class BisectConsumer {
             try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
                 String line;
                 while ((line = br.readLine()) != null) {
-                    logger.fine(type + ": " + line);
+                    output.append(line).append("\n");
+                    if (type.startsWith("INSTALL") || type.equals("ERROR") || type.equals("OUTPUT")) {
+                        // Log important output at INFO level
+                        logger.info(type + ": " + line);
+                    } else {
+                        // Log other output at FINE level
+                        logger.fine(type + ": " + line);
+                    }
                 }
             } catch (IOException e) {
                 logger.warning("Error reading " + type + " stream: " + e.getMessage());
@@ -391,10 +522,21 @@ public class BisectConsumer {
             // Setup logging
             LogManager.getLogManager().reset();
             Logger rootLogger = Logger.getLogger("");
+            
+            // Console handler for normal output
             ConsoleHandler consoleHandler = new ConsoleHandler();
             consoleHandler.setLevel(Level.INFO);
             consoleHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(consoleHandler);
+            
+            // File handler for detailed logging
+            String logDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/bisect/log";
+            new File(logDir).mkdirs();
+            FileHandler fileHandler = new FileHandler(logDir + "/bisect_consumer.log", true);
+            fileHandler.setLevel(Level.ALL);
+            fileHandler.setFormatter(new SimpleFormatter());
+            rootLogger.addHandler(fileHandler);
+            
             rootLogger.setLevel(Level.INFO);
             
             // Load configuration
@@ -409,6 +551,14 @@ public class BisectConsumer {
             // Create and start consumer
             BisectConsumer consumer = new BisectConsumer(config);
             consumer.start();
+            
+            logger.info("=========================================");
+            logger.info("BisectConsumer v2.0 - Enhanced Edition");
+            logger.info("Features:");
+            logger.info("  - Build version verification");
+            logger.info("  - Execution error differentiation");
+            logger.info("  - Shell test framework integration");
+            logger.info("=========================================");
             
             // Add shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {

@@ -308,15 +308,29 @@ public class BisectTask {
                 writer.println("echo \"Build files preserved in working directory: " + workDir.getAbsolutePath() + "\"");
             }
             writer.println();
-            writer.println("# Parse result");
+            writer.println("# Parse result - Handle all status types");
             writer.println("if echo \"$RESPONSE\" | grep -q '\"status\":\"fail\"'; then");
             writer.println("    echo \"Test FAILED - marking commit as bad\"");
             writer.println("    exit 1  # Test failed (bad commit)");
             writer.println("elif echo \"$RESPONSE\" | grep -q '\"status\":\"pass\"'; then");
             writer.println("    echo \"Test PASSED - marking commit as good\"");
             writer.println("    exit 0  # Test passed (good commit)");
+            writer.println("elif echo \"$RESPONSE\" | grep -q '\"status\":\"execution_error\"'; then");
+            writer.println("    echo \"Test EXECUTION ERROR - cannot determine commit status\"");
+            writer.println("    echo \"This is likely an environment or test setup issue, not a code issue\"");
+            writer.println("    echo \"Skipping this commit (git bisect skip)\"");
+            writer.println("    exit 125  # Skip this commit - can't test");
+            writer.println("elif echo \"$RESPONSE\" | grep -q '\"status\":\"environment_error\"'; then");
+            writer.println("    echo \"ENVIRONMENT ERROR - cannot run test properly\"");
+            writer.println("    echo \"Skipping this commit (git bisect skip)\"");
+            writer.println("    exit 125  # Skip this commit - can't test");
+            writer.println("elif echo \"$RESPONSE\" | grep -q '\"status\":\"build_error\"'; then");
+            writer.println("    echo \"BUILD ERROR - build verification failed\"");
+            writer.println("    echo \"This might indicate a broken build at this commit\"");
+            writer.println("    echo \"Marking as bad (build doesn't work)\"");
+            writer.println("    exit 1  # Mark as bad - build is broken");
             writer.println("else");
-            writer.println("    echo \"Error: Invalid response from consumer\"");
+            writer.println("    echo \"Error: Unknown or invalid response from consumer\"");
             writer.println("    echo \"Response was: $RESPONSE\"");
             writer.println("    exit 128  # Abort bisect");
             writer.println("fi");
@@ -341,6 +355,8 @@ public class BisectTask {
                 // Get commit author
                 String author = getCommitAuthor(firstBadCommit);
                 
+                logger.info("Found first bad commit for " + testPath + ": " + firstBadCommit);
+                
                 return new JSONObject()
                     .put("name", testPath)
                     .put("status", "found")
@@ -348,9 +364,26 @@ public class BisectTask {
                     .put("author", author)
                     .put("runtimeMs", System.currentTimeMillis() - startTime);
             }
+        } else if (output.contains("bisect run cannot continue")) {
+            // Bisect couldn't complete due to too many skipped commits
+            logger.warning("Bisect could not complete for " + testPath + " - too many untestable commits");
+            return new JSONObject()
+                .put("name", testPath)
+                .put("status", "incomplete")
+                .put("error", "Too many untestable commits in range")
+                .put("runtimeMs", System.currentTimeMillis() - startTime);
+        } else if (output.contains("There are only 'skip'ped commits left to test")) {
+            // All commits were skipped
+            logger.warning("All commits were skipped for " + testPath + " - environment issues");
+            return new JSONObject()
+                .put("name", testPath)
+                .put("status", "environment_issue")
+                .put("error", "All commits skipped due to environment/execution errors")
+                .put("runtimeMs", System.currentTimeMillis() - startTime);
         }
         
-        // No bad commit found
+        // No bad commit found or other error
+        logger.error("Bisect failed for " + testPath + " - no bad commit found");
         return new JSONObject()
             .put("name", testPath)
             .put("status", "error")

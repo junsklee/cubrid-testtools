@@ -14,6 +14,18 @@ This tool implements a distributed bisect workflow where:
 3. **Consumer** node receives builds and test requests, runs tests, and returns results
 4. **Producer** aggregates results and sends them back via HTTP callback
 
+## Key Features (v2.0)
+
+- **Build Verification**: Automatically verifies CUBRID installation using `cubrid_rel` before running tests
+- **Enhanced Error Handling**: Distinguishes between:
+  - Test failures (actual test fails)
+  - Execution errors (test couldn't run properly)
+  - Environment errors (setup issues)
+  - Build errors (installation/verification failures)
+- **Shell Test Framework Integration**: Proper support for CTP shell test framework
+- **Smart Bisect Skipping**: Automatically skips commits that can't be tested due to environment issues
+- **Improved Logging**: Detailed logging for debugging test execution issues
+
 ## Quick Start
 
 ### Installation
@@ -154,7 +166,7 @@ shell_tc_dir=/path/to/cubrid-testcases
   "generatedAt": "string",           // ISO 8601 timestamp
   "tests": [{
     "name": "string",                // Test path
-    "status": "found|error",         // Result status
+    "status": "string",              // Result status (see below)
     "firstBadCommit": "string",      // Git commit hash (if found)
     "author": "string",              // Commit author (if found)
     "error": "string",               // Error message (if error)
@@ -162,6 +174,29 @@ shell_tc_dir=/path/to/cubrid-testcases
   }]
 }
 ```
+
+#### Test Status Types
+
+- **`found`**: Successfully identified the first bad commit
+- **`error`**: Bisect failed - no bad commit found in range
+- **`incomplete`**: Bisect couldn't complete due to too many untestable commits
+- **`environment_issue`**: All commits were skipped due to environment/execution errors
+
+#### Consumer Response Status Types
+
+When the consumer runs a test, it returns one of these statuses:
+
+- **`pass`**: Test executed successfully and passed
+- **`fail`**: Test executed successfully and failed
+- **`execution_error`**: Test couldn't be executed properly (e.g., script errors, missing result file)
+- **`environment_error`**: Environment setup failed (e.g., CUBRID not properly installed)
+- **`build_error`**: Build installation or verification failed
+
+The bisect tool handles these statuses intelligently:
+- `pass` → marks commit as good
+- `fail` → marks commit as bad
+- `execution_error`, `environment_error` → skips commit (can't determine good/bad)
+- `build_error` → marks commit as bad (broken build)
 
 ## Results Storage
 

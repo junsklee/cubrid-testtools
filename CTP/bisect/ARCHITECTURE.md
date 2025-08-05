@@ -44,8 +44,11 @@ The CUBRID Bisect Tool is a distributed system for automatically finding the fir
   - `GET /health` - Health check endpoint
 - **Responsibilities**:
   - Extracts and installs CUBRID builds
-  - Executes shell tests
-  - Returns pass/fail results
+  - **v2.0**: Verifies build installation with `cubrid_rel`
+  - **v2.0**: Sets up shell test framework environment
+  - Executes shell tests with proper environment
+  - **v2.0**: Differentiates between test failures and execution errors
+  - Returns detailed status (pass/fail/execution_error/environment_error/build_error)
 
 ## Request Flow
 
@@ -135,6 +138,66 @@ The CUBRID Bisect Tool is a distributed system for automatically finding the fir
 - **Test Timeouts**: 30-minute timeout per test execution
 - **Network Failures**: Retries and fallbacks to error status
 - **Git Issues**: Automatic cleanup and reset on failures
+
+## v2.0 Enhancements
+
+### Enhanced Test Execution Pipeline
+
+The v2.0 release introduces a sophisticated test execution pipeline that properly handles various failure modes:
+
+```
+Test Request → Build Verification → Environment Setup → Test Execution → Result Analysis
+     │              │                     │                 │                │
+     └─────────────┴─────────────────────┴─────────────────┴────────────────┘
+                                    Error Handling
+```
+
+### Status Type Hierarchy
+
+```
+Test Status
+├── PASS (test executed and passed)
+├── FAIL (test executed and failed)
+├── EXECUTION_ERROR (test couldn't run)
+│   ├── Script syntax errors
+│   ├── Missing files
+│   └── Command not found
+├── ENVIRONMENT_ERROR (setup failed)
+│   ├── CTP_HOME not found
+│   └── Shell framework issues
+└── BUILD_ERROR (build problems)
+    ├── Installation failed
+    └── Version mismatch
+```
+
+### Build Verification Flow
+
+1. **Installation**: Extract and install CUBRID build
+2. **Verification**: Run `cubrid_rel` to verify installation
+3. **Version Check**: Optionally verify expected version
+4. **Environment Setup**: Configure CUBRID environment variables
+5. **Framework Integration**: Set up CTP shell test framework
+
+### Test Wrapper Script Generation
+
+The consumer generates a wrapper script for each test that:
+- Sets required environment variables (`result_file`, `case_name`, `cur_path`)
+- Sources CTP shell test framework's `init.sh` if available
+- Provides fallback `write_ok`/`write_nok` functions
+- Ensures result file creation based on exit code
+
+### Bisect Decision Logic
+
+```
+Consumer Response → Producer Decision
+├── "pass" → mark commit as GOOD (exit 0)
+├── "fail" → mark commit as BAD (exit 1)
+├── "execution_error" → SKIP commit (exit 125)
+├── "environment_error" → SKIP commit (exit 125)
+└── "build_error" → mark commit as BAD (exit 1)
+```
+
+This ensures bisect accuracy by only marking commits as bad when tests actually fail, not when infrastructure issues occur.
 
 ## Performance Considerations
 
