@@ -5,7 +5,7 @@
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-CTP_BISECT_HOME="$(dirname "$SCRIPT_DIR")"
+CTP_BISECT_HOME="$SCRIPT_DIR"
 
 # Create directories
 mkdir -p "$CTP_BISECT_HOME/build"

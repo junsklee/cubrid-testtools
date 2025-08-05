@@ -37,6 +37,38 @@ public class BisectConfig {
         try (FileInputStream fis = new FileInputStream(file)) {
             properties.load(fis);
         }
+        
+        // Expand environment variables in property values
+        expandEnvironmentVariables();
+    }
+    
+    private void expandEnvironmentVariables() {
+        for (String key : properties.stringPropertyNames()) {
+            String value = properties.getProperty(key);
+            String expandedValue = expandEnvironmentVariables(value);
+            properties.setProperty(key, expandedValue);
+        }
+    }
+    
+    private String expandEnvironmentVariables(String value) {
+        if (value == null) {
+            return null;
+        }
+        
+        String result = value;
+        
+        // Expand tilde (~) to home directory
+        if (result.startsWith("~/")) {
+            String homeDir = System.getProperty("user.home");
+            result = result.replace("~/", homeDir + "/");
+        }
+        
+        // Expand environment variables for $VAR format
+        for (Map.Entry<String, String> env : System.getenv().entrySet()) {
+            result = result.replace("$" + env.getKey(), env.getValue());
+        }
+        
+        return result;
     }
     
     private void validateConfiguration() throws IllegalArgumentException {
