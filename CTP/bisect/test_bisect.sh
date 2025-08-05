@@ -11,8 +11,9 @@ CALLBACK_URL="${CALLBACK_URL:-http://localhost:8080/bisect/result}"
 
 # Test data - based on the example from the original script
 # These are the suspected bad commits we want to investigate
-SUSPECTED_START_COMMIT="e4c8127"  # First suspected bad commit
-SUSPECTED_END_COMMIT="bb2cc88"   # Last suspected bad commit
+# Note: bb2cc88 is older than e4c8127, so bb2cc88 should be the start
+SUSPECTED_START_COMMIT="bb2cc88"  # First suspected bad commit (older)
+SUSPECTED_END_COMMIT="e4c8127"   # Last suspected bad commit (newer)
 
 # Display configuration
 echo "Bisect Test Script"

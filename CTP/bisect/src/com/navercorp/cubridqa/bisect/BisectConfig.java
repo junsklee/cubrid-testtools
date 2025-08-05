@@ -83,8 +83,7 @@ public class BisectConfig {
             }
         }
         
-        // Validate directories exist
-        validateDirectory(CUBRID_SRC_DIR);
+        // Validate directories exist (CUBRID_SRC_DIR will be created/cloned automatically)
         validateDirectory(SHELL_TC_DIR);
     }
     

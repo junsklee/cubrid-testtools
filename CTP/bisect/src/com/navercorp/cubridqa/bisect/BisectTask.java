@@ -41,6 +41,9 @@ public class BisectTask {
             String workerIp = request.optString("workerIp", "localhost");
             JSONArray tests = request.getJSONArray("tests");
             
+            // Ensure CUBRID source repository is set up and updated
+            setupCubridRepository();
+            
             // Find the parent of suspectedStartCommit to use as the good commit
             String goodCommit = getParentCommit(suspectedStartCommit);
             if (goodCommit == null) {
@@ -101,6 +104,55 @@ public class BisectTask {
             logger.warning("Failed to get parent commit: " + e.getMessage());
         }
         return null;
+    }
+    
+    private void setupCubridRepository() throws Exception {
+        File srcDir = new File(config.getCubridSrcDir());
+        
+        if (!srcDir.exists()) {
+            logger.info("CUBRID source directory does not exist, cloning repository...");
+            // Create parent directory
+            srcDir.getParentFile().mkdirs();
+            
+            // Clone the repository
+            ProcessBuilder pb = new ProcessBuilder();
+            executeCommand(pb, "git", "clone", "https://github.com/CUBRID/cubrid.git", srcDir.getAbsolutePath());
+            logger.info("Successfully cloned CUBRID repository");
+        }
+        
+        // Change to source directory for git operations
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(srcDir);
+        
+        // Check if it's a git repository
+        try {
+            executeCommand(pb, "git", "status");
+        } catch (Exception e) {
+            throw new RuntimeException("Directory exists but is not a git repository: " + srcDir.getAbsolutePath());
+        }
+        
+        // Fetch latest changes
+        logger.info("Fetching latest changes from origin...");
+        executeCommand(pb, "git", "fetch", "origin");
+        
+        // Checkout develop branch
+        logger.info("Checking out develop branch...");
+        try {
+            executeCommand(pb, "git", "checkout", "develop");
+        } catch (Exception e) {
+            // If develop doesn't exist locally, create it from origin/develop
+            executeCommand(pb, "git", "checkout", "-b", "develop", "origin/develop");
+        }
+        
+        // Pull latest changes
+        logger.info("Pulling latest changes...");
+        executeCommand(pb, "git", "pull", "origin", "develop");
+        
+        // Update submodules
+        logger.info("Updating submodules...");
+        executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
+        
+        logger.info("CUBRID repository setup completed");
     }
     
     private JSONObject bisectSingleTest(String commitFormer, String commitLatter,
@@ -340,17 +392,30 @@ public class BisectTask {
     
     private void executeCommand(ProcessBuilder pb, String... command) throws IOException, InterruptedException {
         pb.command(command);
+        pb.redirectErrorStream(true); // Combine stdout and stderr
         Process process = pb.start();
         
-        // Consume output to prevent blocking
+        // Capture output for logging
+        StringBuilder output = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(process.getInputStream()))) {
-            while (reader.readLine() != null) {
-                // Discard output
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
             }
         }
         
-        process.waitFor();
+        int exitCode = process.waitFor();
+        
+        // Log command and output for debugging
+        logger.info("Command: " + String.join(" ", command));
+        if (output.length() > 0) {
+            logger.info("Output: " + output.toString().trim());
+        }
+        
+        if (exitCode != 0) {
+            throw new RuntimeException("Command failed with exit code " + exitCode + ": " + String.join(" ", command));
+        }
     }
     
     private File createTempDirectory() throws IOException {
@@ -377,3 +442,4 @@ public class BisectTask {
         }
     }
 }
+

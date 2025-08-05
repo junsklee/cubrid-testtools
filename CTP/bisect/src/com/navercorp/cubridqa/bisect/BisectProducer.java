@@ -73,9 +73,9 @@ public class BisectProducer {
                 validateRequest(request);
                 
                 // Log request
-                logger.info(String.format("Received bisect request: %s...%s (bad commit range)",
-                    request.getString("firstBadCommit"),
-                    request.getString("lastBadCommit")));
+                logger.info(String.format("Received bisect request: %s...%s (suspected commit range)",
+                    request.getString("suspectedStartCommit"),
+                    request.getString("suspectedEndCommit")));
                 
                 // Create task ID
                 String taskId = generateTaskId(request);
