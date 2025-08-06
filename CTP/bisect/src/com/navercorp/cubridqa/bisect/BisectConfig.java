@@ -21,6 +21,9 @@ public class BisectConfig {
     private static final String WORK_DIR = "work_dir";
     private static final String CONSUMER_PORT = "consumer_port";
     private static final String MAX_CONCURRENT_BISECTS = "max_concurrent_bisects";
+    private static final String USE_DOCKER = "use_docker";
+    private static final String DOCKER_BUILD_IMAGE = "docker_build_image";
+    private static final String DOCKER_TEST_IMAGE = "docker_test_image";
     
     public BisectConfig(String configFile) throws IOException {
         this.properties = new Properties();
@@ -128,6 +131,18 @@ public class BisectConfig {
     
     public int getMaxConcurrentBisects() {
         return Integer.parseInt(properties.getProperty(MAX_CONCURRENT_BISECTS, "4"));
+    }
+    
+    public boolean useDocker() {
+        return Boolean.parseBoolean(properties.getProperty(USE_DOCKER, "true"));
+    }
+    
+    public String getDockerBuildImage() {
+        return properties.getProperty(DOCKER_BUILD_IMAGE, "cubrid-bisect-builder:latest");
+    }
+    
+    public String getDockerTestImage() {
+        return properties.getProperty(DOCKER_TEST_IMAGE, "cubrid-bisect-tester:latest");
     }
     
     @Override

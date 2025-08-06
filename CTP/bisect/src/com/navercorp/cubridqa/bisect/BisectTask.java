@@ -22,12 +22,14 @@ public class BisectTask {
     private final JSONObject request;
     private final BisectConfig config;
     private final List<JSONObject> results;
+    private final DockerBuildManager dockerBuildManager;
     
     public BisectTask(String taskId, JSONObject request, BisectConfig config) {
         this.taskId = taskId;
         this.request = request;
         this.config = config;
         this.results = new ArrayList<>();
+        this.dockerBuildManager = new DockerBuildManager(config);
     }
     
     public void run() {
@@ -35,6 +37,21 @@ public class BisectTask {
         long startTime = System.currentTimeMillis();
         
         try {
+            // Initialize Docker environment if enabled
+            if (config.useDocker()) {
+                try {
+                    dockerBuildManager.initialize();
+                    if (dockerBuildManager.isDockerAvailable()) {
+                        logger.info("Docker build environment initialized successfully");
+                    } else {
+                        logger.warning("Docker not available, will use direct build");
+                    }
+                } catch (Exception e) {
+                    logger.warning("Failed to initialize Docker environment: " + e.getMessage());
+                    logger.warning("Falling back to direct build");
+                }
+            }
+            
             // Extract request parameters
             String suspectedStartCommit = request.getString("suspectedStartCommit");
             String suspectedEndCommit = request.getString("suspectedEndCommit");
@@ -252,25 +269,35 @@ public class BisectTask {
             writer.println("#!/bin/bash");
             writer.println("set -e  # exit immediately on error");
             writer.println();
-            writer.println("echo \"Building CUBRID at commit $(git rev-parse HEAD)\"");
-            writer.println("cd " + config.getCubridSrcDir());
-            writer.println();
-            writer.println("# Reset and update submodules");
-            writer.println("git submodule foreach git reset --hard HEAD");
-            writer.println("git submodule update");
-            writer.println();
-            writer.println("# Clean build");
-            writer.println("rm -rf cubridmanager/*  # temporary: cubridmanager fails on Rocky 8");
-            writer.println("rm -rf " + config.getBuildDir());
-            writer.println();
-            writer.println("# Build");
-            writer.println("./build.sh " + config.getBuildArg());
-            writer.println();
-            writer.println("# Create build package");
-            writer.println("BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + 
-                          "/cubrid_$(git rev-parse --short HEAD).tar.gz\"");
-            writer.println("cd " + config.getCubridSrcDir() + "/" + config.getBuildDir());
-            writer.println("tar czf \"$BUILD_PACKAGE\" .");
+            
+            // Check if Docker should be used for builds
+            if (config.useDocker() && dockerBuildManager.isDockerAvailable()) {
+                writer.println("# Docker build enabled");
+                writer.println("echo \"Building CUBRID using Docker...\"");
+                writer.println("cd " + config.getCubridSrcDir());
+                writer.println("COMMIT_HASH=$(git rev-parse HEAD)");
+                writer.println();
+                writer.println("# Use Docker build script");
+                String scriptPath = new File(config.getCubridSrcDir()).getParent() + 
+                                  "/cubrid-testtools/CTP/bisect/script/docker_build.sh";
+                writer.println("if [ -f \"" + scriptPath + "\" ]; then");
+                writer.println("    " + scriptPath + " \"$COMMIT_HASH\" \"" + 
+                              workDir.getAbsolutePath() + "\" \"" + config.getBuildArg() + "\"");
+                writer.println("    BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + 
+                              "/cubrid_${COMMIT_HASH:0:7}.tar.gz\"");
+                writer.println("else");
+                writer.println("    echo \"Docker build script not found, falling back to direct build\"");
+                writer.println("    # Fall back to direct build");
+                writeDirectBuildCommands(writer, workDir);
+                writer.println("fi");
+            } else {
+                writer.println("# Direct build (Docker not enabled or not available)");
+                writer.println("echo \"Building CUBRID at commit $(git rev-parse HEAD)\"");
+                writer.println("cd " + config.getCubridSrcDir());
+                writer.println();
+                writeDirectBuildCommands(writer, workDir);
+            }
+            
             writer.println();
             writer.println("# Send test request to consumer");
             writer.println("echo \"Sending test request to consumer at " + 
@@ -340,6 +367,25 @@ public class BisectTask {
         script.setExecutable(true);
         
         return script;
+    }
+    
+    private void writeDirectBuildCommands(PrintWriter writer, File workDir) {
+        writer.println("# Reset and update submodules");
+        writer.println("git submodule foreach git reset --hard HEAD");
+        writer.println("git submodule update");
+        writer.println();
+        writer.println("# Clean build");
+        writer.println("rm -rf cubridmanager/*  # temporary: cubridmanager fails on Rocky 8");
+        writer.println("rm -rf " + config.getBuildDir());
+        writer.println();
+        writer.println("# Build");
+        writer.println("./build.sh " + config.getBuildArg());
+        writer.println();
+        writer.println("# Create build package");
+        writer.println("BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + 
+                      "/cubrid_$(git rev-parse --short HEAD).tar.gz\"");
+        writer.println("cd " + config.getCubridSrcDir() + "/" + config.getBuildDir());
+        writer.println("tar czf \"$BUILD_PACKAGE\" .");
     }
     
     private JSONObject parseBisectOutput(String testPath, String output, long startTime) {

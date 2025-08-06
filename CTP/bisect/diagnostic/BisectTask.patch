@@ -1,0 +1,29 @@
+--- BisectTask.java.original	2025-08-05 22:49:00.000000000 -0700
++++ BisectTask.java.fixed	2025-08-05 22:49:00.000000000 -0700
+@@ -195,7 +195,7 @@
+             writer.println("# Create build package");
+             writer.println("BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + 
+                           "/cubrid_$(git rev-parse --short HEAD).tar.gz\"");
+             writer.println("cd " + config.getCubridSrcDir() + "/" + config.getBuildDir());
+             writer.println("tar czf \"$BUILD_PACKAGE\" .");
+             writer.println();
+@@ -204,15 +204,17 @@
+                           workerIp + ":" + config.getConsumerPort() + "\"");
+             writer.println();
+             writer.println("# Create test request JSON");
+-            writer.println("cat > " + workDir.getAbsolutePath() + "/test_request.json << 'EOF'");
++            writer.println("# Using a different approach to properly expand variables");
++            writer.println("cat > " + workDir.getAbsolutePath() + "/test_request.json << EOF");
+             writer.println("{");
+-            writer.println("  \"buildPackage\": \"$BUILD_PACKAGE\",");
++            writer.println("  \"buildPackage\": \"${BUILD_PACKAGE}\",");
+             writer.println("  \"testPath\": \"" + testPath + "\",");
+             writer.println("  \"testDir\": \"" + tcDir + "\",");
+             writer.println("  \"testScript\": \"" + tcScript + "\",");
+             writer.println("  \"testName\": \"" + tcName + "\"");
+             writer.println("}");
+             writer.println("EOF");
++            writer.println();
+             writer.println();
+             writer.println("# Send request to consumer and get result");
+             writer.println("RESPONSE=$(curl -s -X POST -H \"Content-Type: application/json\" \\");
