@@ -378,14 +378,36 @@ public class BisectTask {
         writer.println("rm -rf cubridmanager/*  # temporary: cubridmanager fails on Rocky 8");
         writer.println("rm -rf " + config.getBuildDir());
         writer.println();
-        writer.println("# Build");
-        writer.println("./build.sh " + config.getBuildArg());
+        writer.println("# Build with error handling");
+        writer.println("echo \"Building CUBRID...\"");
+        writer.println("if ! ./build.sh " + config.getBuildArg() + "; then");
+        writer.println("    echo \"[ERROR] CUBRID build failed at commit $(git rev-parse HEAD)\"");
+        writer.println("    echo \"This is likely a build issue, not a test issue - skipping commit\"");
+        writer.println("    exit 125  # Skip this commit - can't test due to build failure");
+        writer.println("fi");
+        writer.println();
+        writer.println("# Verify build directory exists");
+        writer.println("if [ ! -d \"" + config.getCubridSrcDir() + "/" + config.getBuildDir() + "\" ]; then");
+        writer.println("    echo \"[ERROR] Build directory not created: " + config.getBuildDir() + "\"");
+        writer.println("    echo \"Build may have failed silently - skipping commit\"");
+        writer.println("    exit 125  # Skip this commit - can't test due to build failure");
+        writer.println("fi");
         writer.println();
         writer.println("# Create build package");
         writer.println("BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + 
                       "/cubrid_$(git rev-parse --short HEAD).tar.gz\"");
         writer.println("cd " + config.getCubridSrcDir() + "/" + config.getBuildDir());
-        writer.println("tar czf \"$BUILD_PACKAGE\" .");
+        writer.println("if ! tar czf \"$BUILD_PACKAGE\" .; then");
+        writer.println("    echo \"[ERROR] Failed to create build package\"");
+        writer.println("    exit 125  # Skip this commit - can't test due to packaging failure");
+        writer.println("fi");
+        writer.println();
+        writer.println("# Verify build package was created");
+        writer.println("if [ ! -f \"$BUILD_PACKAGE\" ]; then");
+        writer.println("    echo \"[ERROR] Build package not created: $BUILD_PACKAGE\"");
+        writer.println("    exit 125  # Skip this commit - can't test due to packaging failure");
+        writer.println("fi");
+        writer.println("echo \"Build package created successfully: $BUILD_PACKAGE\"");
     }
     
     private JSONObject parseBisectOutput(String testPath, String output, long startTime) {

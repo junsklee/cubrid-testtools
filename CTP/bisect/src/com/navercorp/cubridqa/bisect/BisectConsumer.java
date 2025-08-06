@@ -164,11 +164,11 @@ public class BisectConsumer {
                 logger.info("  Expected build version: " + expectedBuildVersion);
             }
             
-            // Install CUBRID using the existing installation script
-            logger.info("Installing CUBRID build using run_cubrid_install script");
+            // Install CUBRID by extracting the build package directly
+            logger.info("Installing CUBRID build by extracting: " + buildPackage);
             Path actualInstallDir = null;
             try {
-                actualInstallDir = installCubridUsingScript(buildPackage, workDir);
+                actualInstallDir = installCubridDirectly(buildPackage, workDir);
             } catch (Exception e) {
                 logger.log(Level.SEVERE, "Failed to install CUBRID build", e);
                 return new JSONObject()
@@ -228,7 +228,7 @@ public class BisectConsumer {
             }
             
             // Run the test with proper shell test framework setup
-            String resultFile = testName + ".result";
+            String resultFile = "nok.result";  // Standard result file name used by shell test framework
             logger.info("Running test: " + testScript + " in directory: " + testDir);
             
             // Remove old result file if exists
@@ -345,71 +345,103 @@ public class BisectConsumer {
         }
     }
     
-    private Path installCubridUsingScript(String buildPackage, Path workDir) throws IOException, InterruptedException {
-        // Configure environment and execute installation script
-        String ctpHome = findCTPHome();
-        ProcessBuilder pb = new ProcessBuilder("bash", ctpHome + "/common/script/run_cubrid_install", buildPackage);
-        pb.directory(workDir.toFile());
-        Map<String, String> env = pb.environment();
+    private Path installCubridDirectly(String buildPackage, Path workDir) throws IOException, InterruptedException {
+        logger.info("Installing CUBRID by extracting build package: " + buildPackage);
         
-        // Set CTP_HOME and other environment variables
-        if (ctpHome != null) {
-            env.put("CTP_HOME", ctpHome);
-            logger.info("Set CTP_HOME to: " + ctpHome);
+        // Create installation directory
+        Path cubridInstallDir = Paths.get(System.getProperty("user.home"), "CUBRID");
+        
+        // Remove existing installation if it exists
+        if (Files.exists(cubridInstallDir)) {
+            logger.info("Removing existing CUBRID installation");
+            deleteDirectory(cubridInstallDir.toFile());
         }
         
-        // Ensure PATH includes the script directory
-        String currentPath = env.get("PATH");
-        String scriptPath = env.get("CTP_HOME") + "/common/script";
-        if (currentPath != null && !currentPath.contains(scriptPath)) {
-            env.put("PATH", scriptPath + ":" + currentPath);
-        }
+        // Create new installation directory
+        Files.createDirectories(cubridInstallDir);
         
-        logger.info("Executing: " + String.join(" ", pb.command()));
-        logger.info("Working directory: " + workDir);
+        // Extract the build package directly to the installation directory
+        logger.info("Extracting build package to: " + cubridInstallDir);
+        ProcessBuilder pb = new ProcessBuilder("tar", "-xzf", buildPackage, "-C", cubridInstallDir.toString());
+        pb.redirectErrorStream(true);
         
-        // Start the installation process
         Process process = pb.start();
         
-        // Capture and log output
-        StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "INSTALL");
-        StreamGobbler errorGobbler = new StreamGobbler(process.getErrorStream(), "INSTALL-ERROR");
+        // Capture output
+        StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "EXTRACT");
         outputGobbler.start();
-        errorGobbler.start();
         
-        // Wait for completion with timeout
-        boolean completed = process.waitFor(15, TimeUnit.MINUTES);
+        // Wait for completion
+        boolean completed = process.waitFor(5, TimeUnit.MINUTES);
         if (!completed) {
             process.destroyForcibly();
-            throw new IOException("CUBRID installation timeout after 15 minutes");
+            throw new IOException("CUBRID extraction timeout after 5 minutes");
         }
         
         int exitCode = process.exitValue();
-        logger.info("Installation script exited with code: " + exitCode);
+        outputGobbler.join(1000);
         
         if (exitCode != 0) {
-            // Get error output for better diagnostics
-            outputGobbler.join(1000);
-            errorGobbler.join(1000);
-            String errorOutput = errorGobbler.getOutput();
-            throw new IOException("CUBRID installation failed with exit code: " + exitCode + 
-                                  ". Error: " + errorOutput.substring(0, Math.min(500, errorOutput.length())));
+            String output = outputGobbler.getOutput();
+            throw new IOException("CUBRID extraction failed with exit code: " + exitCode + 
+                                  ". Output: " + output.substring(0, Math.min(500, output.length())));
         }
         
-        logger.info("CUBRID installation completed successfully");
+        logger.info("CUBRID extraction completed successfully");
         
-        // Return the actual installation directory (script installs to $HOME/CUBRID by default)
-        Path cubridHome = Paths.get(System.getProperty("user.home"), "CUBRID");
-        if (!Files.exists(cubridHome)) {
-            // Fallback: check if it was installed in the work directory
-            cubridHome = workDir.resolve("CUBRID");
-            if (!Files.exists(cubridHome)) {
-                throw new IOException("Could not find CUBRID installation directory after script execution");
+        // The build package contains the entire build directory structure
+        // We need to find where the actual CUBRID binaries are located
+        Path actualCubridDir = findCubridBinariesInExtraction(cubridInstallDir);
+        
+        if (actualCubridDir == null) {
+            throw new IOException("Could not find CUBRID binaries in extracted package");
+        }
+        
+        logger.info("CUBRID binaries found at: " + actualCubridDir);
+        return actualCubridDir;
+    }
+    
+    private Path findCubridBinariesInExtraction(Path extractionDir) throws IOException {
+        // The build package might extract to various structures
+        // Look for the bin/cubrid_rel executable to identify the CUBRID installation
+        
+        // Check common locations where CUBRID might be extracted
+        Path[] candidatePaths = {
+            extractionDir,
+            extractionDir.resolve("CUBRID"),
+            extractionDir.resolve("cubrid"),
+            extractionDir.resolve("install"),
+            extractionDir.resolve("bin").getParent()  // if bin exists, parent might be CUBRID root
+        };
+        
+        for (Path candidate : candidatePaths) {
+            if (Files.exists(candidate)) {
+                // Look for bin/cubrid_rel in this directory and subdirectories
+                Path cubridRel = candidate.resolve("bin/cubrid_rel");
+                if (Files.exists(cubridRel) && Files.isExecutable(cubridRel)) {
+                    logger.info("Found cubrid_rel at: " + cubridRel);
+                    return candidate;
+                }
             }
         }
         
-        logger.info("CUBRID installed at: " + cubridHome);
-        return cubridHome;
+        // If direct search fails, walk the directory tree to find cubrid_rel
+        logger.info("Searching for cubrid_rel in extracted directory tree...");
+        try (java.util.stream.Stream<Path> paths = Files.walk(extractionDir, 3)) {
+            java.util.Optional<Path> cubridRel = paths
+                .filter(path -> path.getFileName().toString().equals("cubrid_rel"))
+                .filter(Files::isExecutable)
+                .findFirst();
+                
+            if (cubridRel.isPresent()) {
+                Path binDir = cubridRel.get().getParent();
+                Path cubridRoot = binDir.getParent();
+                logger.info("Found CUBRID installation at: " + cubridRoot);
+                return cubridRoot;
+            }
+        }
+        
+        return null;
     }
     
     /**
