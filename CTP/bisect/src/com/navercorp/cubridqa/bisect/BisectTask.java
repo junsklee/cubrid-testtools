@@ -23,6 +23,7 @@ public class BisectTask {
     private final BisectConfig config;
     private final List<JSONObject> results;
     private final DockerBuildManager dockerBuildManager;
+    private final StandaloneDockerManager standaloneManager;
     
     public BisectTask(String taskId, JSONObject request, BisectConfig config) {
         this.taskId = taskId;
@@ -30,6 +31,7 @@ public class BisectTask {
         this.config = config;
         this.results = new ArrayList<>();
         this.dockerBuildManager = new DockerBuildManager(config);
+        this.standaloneManager = config.isStandaloneMode() ? new StandaloneDockerManager(config) : null;
     }
     
     public void run() {
@@ -37,6 +39,12 @@ public class BisectTask {
         long startTime = System.currentTimeMillis();
         
         try {
+            // Check if running in standalone mode
+            if (config.isStandaloneMode()) {
+                runStandalone();
+                return;
+            }
+            
             // Initialize Docker environment if enabled
             if (config.useDocker()) {
                 try {
@@ -92,6 +100,144 @@ public class BisectTask {
         long duration = System.currentTimeMillis() - startTime;
         logger.info(String.format("Bisect task %s completed in %d seconds", 
             taskId, duration / 1000));
+    }
+    
+    /**
+     * Run bisect in standalone mode (build and test in single container)
+     */
+    private void runStandalone() throws Exception {
+        logger.info("Running bisect task in STANDALONE mode");
+        
+        // Initialize standalone Docker environment
+        if (standaloneManager != null) {
+            standaloneManager.initialize();
+        } else {
+            throw new IllegalStateException("Standalone manager not initialized");
+        }
+        
+        // Extract request parameters
+        String suspectedStartCommit = request.getString("suspectedStartCommit");
+        String suspectedEndCommit = request.getString("suspectedEndCommit");
+        String buildType = request.optString("buildType", "debug");
+        JSONArray tests = request.getJSONArray("tests");
+        
+        // Setup repository
+        setupCubridRepository();
+        
+        // Find parent commit as good commit
+        String goodCommit = getParentCommit(suspectedStartCommit);
+        if (goodCommit == null) {
+            throw new RuntimeException("Could not find parent of suspected start commit: " + suspectedStartCommit);
+        }
+        
+        logger.info(String.format("Standalone bisect range: %s (good) -> %s (bad)", 
+            goodCommit, suspectedEndCommit));
+        
+        // Bisect each test using standalone Docker
+        for (int i = 0; i < tests.length(); i++) {
+            String test = tests.getString(i);
+            logger.info("Bisecting test in standalone mode: " + test);
+            
+            JSONObject result = bisectSingleTestStandalone(
+                goodCommit, suspectedEndCommit, buildType, test
+            );
+            results.add(result);
+        }
+        
+        // Send callback with results
+        sendCallback();
+    }
+    
+    /**
+     * Bisect a single test using standalone Docker
+     */
+    private JSONObject bisectSingleTestStandalone(String goodCommit, String badCommit,
+                                                 String buildType, String testPath) throws Exception {
+        
+        logger.info(String.format("Standalone bisect for test %s", testPath));
+        
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(new File(config.getCubridSrcDir()));
+        
+        // Reset any previous bisect
+        executeCommand(pb, "git", "bisect", "reset");
+        
+        // Start bisect
+        executeCommand(pb, "git", "bisect", "start", badCommit, goodCommit);
+        
+        String firstBadCommit = null;
+        int testedCommits = 0;
+        
+        while (true) {
+            // Get current commit
+            String currentCommit = getCurrentCommit(pb);
+            testedCommits++;
+            
+            logger.info(String.format("Testing commit %d in standalone: %s", 
+                testedCommits, currentCommit));
+            
+            // Test using standalone Docker
+            StandaloneDockerManager.BisectResult result = 
+                standaloneManager.executeBuildAndTest(currentCommit, testPath, buildType);
+            
+            // Mark as good or bad
+            String bisectResult;
+            if (result.testPassed) {
+                logger.info("Commit " + currentCommit.substring(0, 7) + " is GOOD");
+                bisectResult = executeCommandWithOutput(pb, "git", "bisect", "good");
+            } else {
+                logger.info("Commit " + currentCommit.substring(0, 7) + " is BAD");
+                bisectResult = executeCommandWithOutput(pb, "git", "bisect", "bad");
+            }
+            
+            // Check if complete
+            if (bisectResult.contains("is the first bad commit")) {
+                firstBadCommit = extractFirstBadCommit(bisectResult);
+                break;
+            }
+            
+            if (testedCommits > 50) {
+                throw new RuntimeException("Bisect taking too long");
+            }
+        }
+        
+        // Reset bisect
+        executeCommand(pb, "git", "bisect", "reset");
+        
+        // Create result
+        JSONObject result = new JSONObject();
+        result.put("test", testPath);
+        result.put("firstBadCommit", firstBadCommit);
+        result.put("goodCommit", goodCommit);
+        result.put("badCommit", badCommit);
+        result.put("mode", "standalone");
+        result.put("testedCommits", testedCommits);
+        
+        return result;
+    }
+    
+    /**
+     * Get current commit hash
+     */
+    private String getCurrentCommit(ProcessBuilder pb) throws Exception {
+        String output = executeCommandWithOutput(pb, "git", "rev-parse", "HEAD");
+        return output.trim();
+    }
+    
+    /**
+     * Extract first bad commit from bisect output
+     */
+    private String extractFirstBadCommit(String bisectOutput) {
+        String[] lines = bisectOutput.split("\n");
+        for (String line : lines) {
+            if (line.contains("is the first bad commit")) {
+                String[] parts = line.split(" ");
+                if (parts.length > 0) {
+                    return parts[0];
+                }
+            }
+        }
+        throw new RuntimeException("Could not extract first bad commit");
     }
     
     private String getParentCommit(String commit) {
@@ -576,6 +722,33 @@ public class BisectTask {
         if (exitCode != 0) {
             throw new RuntimeException("Command failed with exit code " + exitCode + ": " + String.join(" ", command));
         }
+    }
+    
+    /**
+     * Execute command and return output as String
+     */
+    private String executeCommandWithOutput(ProcessBuilder pb, String... command) 
+            throws IOException, InterruptedException {
+        pb.command(command);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
+        }
+        
+        int exitCode = process.waitFor();
+        
+        if (exitCode != 0) {
+            throw new RuntimeException("Command failed with exit code " + exitCode + ": " + String.join(" ", command));
+        }
+        
+        return output.toString();
     }
     
     private File createTempDirectory() throws IOException {

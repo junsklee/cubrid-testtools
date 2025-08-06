@@ -1,0 +1,58 @@
+# Standalone Bisect Configuration Example
+# Copy this file to bisect_standalone.conf and modify as needed
+
+# HTTP server port for receiving bisect requests
+# Default: 8091 (different from producer/consumer ports to avoid conflicts)
+listen_port=8091
+
+# Path to CUBRID source code repository
+# This will be automatically cloned from GitHub if it doesn't exist
+# The repository should have full git history for bisect to work
+cubrid_src_dir=~/cubrid-src
+
+# Path to shell test cases repository  
+# This directory should contain the shell test scripts
+# Example structure: shell/_06_issues/_12_2h/bug_bts_7583/cases/bug_bts_7583.sh
+shell_tc_dir=~/cubrid-testcases-private-ex
+
+# Build arguments for CUBRID
+# These are passed to the CUBRID build.sh script
+# For debug build: -g ninja -m debug build
+# For release build: -g ninja -m release build
+build_arg=-g ninja -m debug build
+
+# Build directory name
+# This is created under cubrid_src_dir during build
+# Must match the output directory of your build configuration
+build_dir=build_x86_64_debug
+
+# Working directory for temporary files
+# This is where Docker scripts, build artifacts, and test results are stored
+# Make sure you have sufficient disk space (at least 10GB recommended)
+work_dir=/tmp/bisect_standalone_work
+
+# Maximum concurrent bisect operations
+# Reduce this if you have limited system resources
+# Each bisect operation runs in its own Docker container
+max_concurrent_bisects=2
+
+# Enable standalone mode
+# This must be set to true for standalone operation
+standalone_mode=true
+
+# Docker configuration
+# Docker is required for standalone mode
+use_docker=true
+
+# Docker image name for standalone environment
+# This image will be built automatically on first run
+# It combines CentOS 6 build environment with test capabilities
+docker_standalone_image=cubrid-bisect-standalone:latest
+
+# ============================================
+# The following settings are NOT used in standalone mode:
+# ============================================
+# consumer_port - No separate consumer in standalone mode
+# docker_build_image - Replaced by standalone image
+# docker_test_image - Replaced by standalone image
+# use_docker_consumer - Not applicable in standalone mode

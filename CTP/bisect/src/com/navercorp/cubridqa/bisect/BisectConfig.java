@@ -24,6 +24,8 @@ public class BisectConfig {
     private static final String USE_DOCKER = "use_docker";
     private static final String DOCKER_BUILD_IMAGE = "docker_build_image";
     private static final String DOCKER_TEST_IMAGE = "docker_test_image";
+    private static final String STANDALONE_MODE = "standalone_mode";
+    private static final String DOCKER_STANDALONE_IMAGE = "docker_standalone_image";
     
     public BisectConfig(String configFile) throws IOException {
         this.properties = new Properties();
@@ -147,6 +149,14 @@ public class BisectConfig {
     
     public String getDockerTestImage() {
         return properties.getProperty(DOCKER_TEST_IMAGE, "cubrid-bisect-tester:latest");
+    }
+    
+    public boolean isStandaloneMode() {
+        return Boolean.parseBoolean(properties.getProperty(STANDALONE_MODE, "false"));
+    }
+    
+    public String getDockerStandaloneImage() {
+        return properties.getProperty(DOCKER_STANDALONE_IMAGE, "cubrid-bisect-standalone:latest");
     }
     
     @Override
