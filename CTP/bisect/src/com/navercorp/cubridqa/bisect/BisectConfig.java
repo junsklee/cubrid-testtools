@@ -137,6 +137,10 @@ public class BisectConfig {
         return Boolean.parseBoolean(properties.getProperty(USE_DOCKER, "true"));
     }
     
+    public boolean useDockerForConsumer() {
+        return Boolean.parseBoolean(properties.getProperty("use_docker_consumer", "true"));
+    }
+    
     public String getDockerBuildImage() {
         return properties.getProperty(DOCKER_BUILD_IMAGE, "cubrid-bisect-builder:latest");
     }

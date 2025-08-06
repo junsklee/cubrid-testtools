@@ -6,6 +6,7 @@ package com.navercorp.cubridqa.bisect;
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.logging.*;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +30,8 @@ public class BisectConsumer {
     
     private final BisectConfig config;
     private final HttpServer server;
+    private final DockerConsumerManager dockerManager;
+    private final boolean useDocker;
     
     // Test execution status types
     public enum TestStatus {
@@ -45,11 +48,25 @@ public class BisectConsumer {
     
     public BisectConsumer(BisectConfig config) throws IOException {
         this.config = config;
+        this.useDocker = config.useDockerForConsumer();
+        this.dockerManager = useDocker ? new DockerConsumerManager(config) : null;
         
         // Create work directory if it doesn't exist
         File workDir = new File(config.getWorkDir());
         if (!workDir.exists()) {
             workDir.mkdirs();
+        }
+        
+        // Initialize Docker if enabled
+        if (useDocker && dockerManager != null) {
+            try {
+                logger.info("Initializing Docker consumer environment...");
+                dockerManager.initialize();
+                logger.info("Docker consumer environment ready");
+            } catch (Exception e) {
+                logger.warning("Docker initialization failed, falling back to direct execution: " + e.getMessage());
+                // Continue without Docker
+            }
         }
         
         // Create HTTP server
@@ -63,6 +80,10 @@ public class BisectConsumer {
         server.start();
         logger.info("BisectConsumer started on port " + config.getConsumerPort());
         logger.info("Work directory: " + config.getWorkDir());
+        logger.info("Docker mode: " + (useDocker ? "ENABLED" : "DISABLED"));
+        if (useDocker) {
+            logger.info("Docker test image: " + config.getDockerTestImage());
+        }
     }
     
     public void stop() {
@@ -146,23 +167,155 @@ public class BisectConsumer {
         logger.info("Working directory: " + workDir);
         
         try {
-            // Extract request parameters
-            String buildPackage = request.getString("buildPackage");
-            String testDir = request.getString("testDir");
-            String testScript = request.getString("testScript");
-            String testName = request.getString("testName");
-            
-            // Optional: expected build version for verification
-            String expectedBuildVersion = request.optString("expectedBuildVersion", null);
-            
-            logger.info("Test parameters:");
-            logger.info("  Build package: " + buildPackage);
-            logger.info("  Test directory: " + testDir);
-            logger.info("  Test script: " + testScript);
-            logger.info("  Test name: " + testName);
-            if (expectedBuildVersion != null) {
-                logger.info("  Expected build version: " + expectedBuildVersion);
+            // Check if we should use Docker for test execution
+            if (useDocker && dockerManager != null && DockerUtils.isDockerAvailable()) {
+                return runTestInDocker(request, workDir);
+            } else {
+                logger.info("Using direct test execution (Docker not available or disabled)");
+                return runTestDirectly(request, workDir);
             }
+        } finally {
+            // Cleanup
+            deleteDirectory(workDir.toFile());
+        }
+    }
+    
+    /**
+     * Run test in Docker container for better isolation
+     */
+    private JSONObject runTestInDocker(JSONObject request, Path workDir) throws Exception {
+        logger.info("Running test in Docker container...");
+        
+        // Extract request parameters
+        String buildPackage = request.getString("buildPackage");
+        String testDir = request.getString("testDir");
+        String testScript = request.getString("testScript");
+        String testName = request.getString("testName");
+        String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+        
+        logger.info("Docker test parameters:");
+        logger.info("  Build package: " + buildPackage);
+        logger.info("  Test directory: " + testDir);
+        logger.info("  Test script: " + testScript);
+        logger.info("  Test name: " + testName);
+        
+        // Create a temporary directory for Docker volumes
+        Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
+        
+        // Copy test files to Docker work directory
+        Path testSourceDir = Paths.get(testDir);
+        Path dockerTestDir = dockerWorkDir.resolve("test");
+        copyDirectory(testSourceDir, dockerTestDir);
+        
+        // Copy build package to Docker work directory
+        Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
+        Files.copy(Paths.get(buildPackage), dockerBuildPackage);
+        
+        // Create test execution script for Docker
+        String dockerScript = createDockerTestScript(testScript, testName, expectedBuildVersion);
+        Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
+        Files.write(dockerScriptPath, dockerScript.getBytes());
+        dockerScriptPath.toFile().setExecutable(true);
+        
+        // Run Docker container
+        List<String> dockerCommand = Arrays.asList(
+            "docker", "run", "--rm",
+            "-v", dockerWorkDir.toString() + ":/workspace",
+            "-w", "/workspace",
+            config.getDockerTestImage(),
+            "test", // Use 'test' role for tester image
+            "bash", "/workspace/run_test.sh"
+        );
+        
+        logger.info("Executing Docker command: " + String.join(" ", dockerCommand));
+        
+        ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        
+        // Capture output
+        StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "DOCKER");
+        outputGobbler.start();
+        
+        // Wait for completion with timeout
+        boolean completed = process.waitFor(30, TimeUnit.MINUTES);
+        if (!completed) {
+            process.destroyForcibly();
+            logger.severe("Docker test timeout after 30 minutes");
+            return new JSONObject()
+                .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                .put("message", "Docker test timeout after 30 minutes")
+                .put("test", testName);
+        }
+        
+        int exitCode = process.exitValue();
+        outputGobbler.join(2000);
+        String dockerOutput = outputGobbler.getOutput();
+        
+        logger.info("Docker test completed with exit code: " + exitCode);
+        
+        // Check for result file in Docker work directory
+        Path resultFile = dockerTestDir.resolve("nok.result");
+        if (Files.exists(resultFile)) {
+            String resultContent = new String(Files.readAllBytes(resultFile));
+            logger.info("Docker test result: " + resultContent.trim());
+            
+            if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
+                return new JSONObject()
+                    .put("status", TestStatus.FAIL.getValue())
+                    .put("test", testName)
+                    .put("execution_mode", "docker");
+            } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
+                return new JSONObject()
+                    .put("status", TestStatus.PASS.getValue())
+                    .put("test", testName)
+                    .put("execution_mode", "docker");
+            }
+        }
+        
+        // Check for Docker-specific errors
+        if (exitCode != 0) {
+            if (dockerOutput.contains("docker: command not found") || 
+                dockerOutput.contains("Cannot connect to the Docker daemon")) {
+                logger.warning("Docker execution failed, falling back to direct execution");
+                return runTestDirectly(request, workDir);
+            }
+            
+            return new JSONObject()
+                .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                .put("message", "Docker test execution failed: " + dockerOutput.substring(0, Math.min(200, dockerOutput.length())))
+                .put("test", testName)
+                .put("exit_code", exitCode);
+        }
+        
+        // No clear result
+        return new JSONObject()
+            .put("status", TestStatus.EXECUTION_ERROR.getValue())
+            .put("message", "Docker test completed but no clear result")
+            .put("test", testName);
+    }
+    
+    /**
+     * Run test directly on host (fallback or when Docker disabled)
+     */
+    private JSONObject runTestDirectly(JSONObject request, Path workDir) throws Exception {
+        // Extract request parameters
+        String buildPackage = request.getString("buildPackage");
+        String testDir = request.getString("testDir");
+        String testScript = request.getString("testScript");
+        String testName = request.getString("testName");
+        
+        // Optional: expected build version for verification
+        String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+        
+        logger.info("Direct test parameters:");
+        logger.info("  Build package: " + buildPackage);
+        logger.info("  Test directory: " + testDir);
+        logger.info("  Test script: " + testScript);
+        logger.info("  Test name: " + testName);
+        if (expectedBuildVersion != null) {
+            logger.info("  Expected build version: " + expectedBuildVersion);
+        }
             
             // Install CUBRID by extracting the build package directly
             logger.info("Installing CUBRID build by extracting: " + buildPackage);
@@ -338,11 +491,6 @@ public class BisectConsumer {
                     .put("test", testName)
                     .put("exit_code", exitCode);
             }
-            
-        } finally {
-            // Cleanup
-            deleteDirectory(workDir.toFile());
-        }
     }
     
     private Path installCubridDirectly(String buildPackage, Path workDir) throws IOException, InterruptedException {
@@ -594,11 +742,13 @@ public class BisectConsumer {
             consumer.start();
             
             logger.info("=========================================");
-            logger.info("BisectConsumer v2.0 - Enhanced Edition");
+            logger.info("BisectConsumer v3.0 - Docker Edition");
             logger.info("Features:");
+            logger.info("  - Docker-based test isolation (enabled by default)");
             logger.info("  - Build version verification");
             logger.info("  - Execution error differentiation");
             logger.info("  - Shell test framework integration");
+            logger.info("  - Automatic fallback to direct execution");
             logger.info("=========================================");
             
             // Add shutdown hook
@@ -710,5 +860,95 @@ public class BisectConsumer {
         script.append("exit $TEST_EXIT_CODE\n");
         
         return script.toString();
+    }
+    
+    /**
+     * Create Docker test execution script with improved isolation and error handling
+     */
+    private String createDockerTestScript(String testScript, String testName, String expectedBuildVersion) {
+        StringBuilder script = new StringBuilder();
+        script.append("#!/bin/bash\n");
+        script.append("# Auto-generated Docker test execution script\n");
+        script.append("set -e\n\n");
+        
+        // Extract and install CUBRID build
+        script.append("# Extract CUBRID build\n");
+        script.append("echo \"Extracting CUBRID build...\"\n");
+        script.append("mkdir -p /tmp/cubrid_install\n");
+        script.append("cd /tmp/cubrid_install\n");
+        script.append("tar -xzf /workspace/build.tar.gz\n");
+        script.append("CUBRID_ROOT=$(find /tmp/cubrid_install -name \"bin\" -type d | head -1 | xargs dirname)\n");
+        script.append("if [ -z \"$CUBRID_ROOT\" ]; then\n");
+        script.append("    echo \"ERROR: Could not find CUBRID installation\"\n");
+        script.append("    exit 1\n");
+        script.append("fi\n\n");
+        
+        // Set up CUBRID environment
+        script.append("# Set up CUBRID environment\n");
+        script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
+        script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
+        script.append("export PATH=\"$CUBRID_ROOT/bin:$PATH\"\n");
+        script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$LD_LIBRARY_PATH\"\n");
+        script.append("export CUBRID_LANG=\"en_US\"\n");
+        script.append("export CUBRID_CHARSET=\"en_US\"\n\n");
+        
+        // Verify CUBRID installation
+        script.append("# Verify CUBRID installation\n");
+        script.append("echo \"Verifying CUBRID installation...\"\n");
+        script.append("if ! cubrid_rel; then\n");
+        script.append("    echo \"ERROR: CUBRID verification failed\"\n");
+        script.append("    exit 1\n");
+        script.append("fi\n\n");
+        
+        // Create databases directory
+        script.append("mkdir -p \"$CUBRID_DATABASES\"\n\n");
+        
+        // Change to test directory and run test
+        script.append("# Execute test\n");
+        script.append("cd /workspace/test\n");
+        script.append("echo \"Starting test: ").append(testName).append("\"\n");
+        script.append("bash \"").append(testScript).append("\"\n");
+        script.append("TEST_EXIT_CODE=$?\n\n");
+        
+        // Ensure result file exists
+        script.append("# Ensure result file exists based on exit code if not already created\n");
+        script.append("if [ ! -f \"nok.result\" ]; then\n");
+        script.append("    if [ $TEST_EXIT_CODE -eq 0 ]; then\n");
+        script.append("        echo \"Test ").append(testName).append(": OK\" > nok.result\n");
+        script.append("    else\n");
+        script.append("        echo \"Test ").append(testName).append(": NOK\" > nok.result\n");
+        script.append("    fi\n");
+        script.append("fi\n\n");
+        
+        script.append("exit $TEST_EXIT_CODE\n");
+        
+        return script.toString();
+    }
+    
+    /**
+     * Copy directory contents recursively
+     */
+    private void copyDirectory(Path source, Path target) throws IOException {
+        if (!Files.exists(source)) {
+            throw new IOException("Source directory does not exist: " + source);
+        }
+        
+        Files.createDirectories(target);
+        
+        Files.walk(source)
+            .forEach(sourcePath -> {
+                try {
+                    Path targetPath = target.resolve(source.relativize(sourcePath));
+                    if (Files.isDirectory(sourcePath)) {
+                        Files.createDirectories(targetPath);
+                    } else {
+                        Files.copy(sourcePath, targetPath, 
+                                 StandardCopyOption.REPLACE_EXISTING,
+                                 StandardCopyOption.COPY_ATTRIBUTES);
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to copy: " + sourcePath, e);
+                }
+            });
     }
 }
