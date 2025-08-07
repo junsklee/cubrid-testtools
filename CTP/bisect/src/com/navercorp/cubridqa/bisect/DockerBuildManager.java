@@ -123,6 +123,12 @@ public class DockerBuildManager {
         
         logger.info("Building CUBRID commit " + commitHash + " in Docker container");
         
+        // Check for GitHub token
+        String githubToken = System.getenv("GITHUB_TOKEN");
+        if (githubToken == null || githubToken.trim().isEmpty()) {
+            throw new IOException("GITHUB_TOKEN environment variable is not set or is empty. Cannot run Docker container that requires private repository access.");
+        }
+        
         // Prepare build script
         File buildScript = createDockerBuildScript(commitHash, buildType, workDir);
         
@@ -136,6 +142,7 @@ public class DockerBuildManager {
         Map<String, String> envVars = new HashMap<>();
         envVars.put("COMMIT_HASH", commitHash);
         envVars.put("BUILD_TYPE", buildType);
+        envVars.put("GITHUB_TOKEN", githubToken);
         
         // Execute build in container
         DockerUtils.CommandResult result = DockerUtils.executeInContainer(

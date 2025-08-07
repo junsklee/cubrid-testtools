@@ -217,17 +217,35 @@ public class BisectConsumer {
         Files.write(dockerScriptPath, dockerScript.getBytes());
         dockerScriptPath.toFile().setExecutable(true);
         
+        // Check for GitHub token
+        String githubToken = System.getenv("GITHUB_TOKEN");
+        if (githubToken == null || githubToken.trim().isEmpty()) {
+            logger.severe("GITHUB_TOKEN environment variable is not set or is empty. Cannot run Docker container that requires private repository access.");
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "GITHUB_TOKEN environment variable is not configured")
+                .put("test", testName);
+        }
+
         // Run Docker container
-        List<String> dockerCommand = Arrays.asList(
-            "docker", "run", "--rm",
-            "-v", dockerWorkDir.toString() + ":/workspace",
-            "-v", System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools", // Mount test tools from host
-            "-v", System.getProperty("user.home") + "/cubrid-testcases-private-ex:/home/cubrid-testcases-private-ex:ro", // Mount test cases from host
-            "-w", "/workspace",
-            config.getDockerTestImage(),
-            "test", // Use 'test' role for tester image
-            "bash", "/workspace/run_test.sh"
-        );
+        List<String> dockerCommand = new ArrayList<>();
+        dockerCommand.add("docker");
+        dockerCommand.add("run");
+        dockerCommand.add("--rm");
+        dockerCommand.add("-v");
+        dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
+        dockerCommand.add("-v");
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools"); // Mount test tools from host
+        dockerCommand.add("-v");
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testcases-private-ex:/home/cubrid-testcases-private-ex:ro"); // Mount test cases from host
+        dockerCommand.add("-e");
+        dockerCommand.add("GITHUB_TOKEN=" + githubToken);
+        dockerCommand.add("-w");
+        dockerCommand.add("/workspace");
+        dockerCommand.add(config.getDockerTestImage());
+        dockerCommand.add("test"); // Use 'test' role for tester image
+        dockerCommand.add("bash");
+        dockerCommand.add("/workspace/run_test.sh");
         
         logger.info("Executing Docker command: " + String.join(" ", dockerCommand));
         

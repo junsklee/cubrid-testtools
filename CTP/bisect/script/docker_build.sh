@@ -16,6 +16,14 @@ OUTPUT_DIR="$2"
 BUILD_ARGS="${3:-"-g ninja -m debug build"}"
 CUBRID_SRC="${CUBRID_SRC:-$HOME/cubrid-src}"
 
+# Check for GitHub token
+if [ -z "$GITHUB_TOKEN" ]; then
+    echo "ERROR: GITHUB_TOKEN environment variable is not set or is empty."
+    echo "Cannot run Docker container that requires private repository access."
+    echo "Please set GITHUB_TOKEN environment variable with your GitHub personal access token."
+    exit 1
+fi
+
 echo "Building CUBRID commit $COMMIT_HASH using Docker..."
 
 # Create build script for Docker
@@ -56,6 +64,9 @@ docker run --rm \
     -v "$OUTPUT_DIR:/output:rw" \
     -e COMMIT_HASH="$COMMIT_HASH" \
     -e BUILD_ARGS="$BUILD_ARGS" \
+    -e GITHUB_TOKEN="$GITHUB_TOKEN" \
+#    -e GIT_USERNAME="$GIT_USERNAME" \
+#    -e GIT_PASSWORD="$GIT_PASSWORD" \
     cubrid-bisect-builder:latest \
     bash /output/docker_build_internal.sh
 
