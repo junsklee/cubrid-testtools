@@ -221,6 +221,8 @@ public class BisectConsumer {
         List<String> dockerCommand = Arrays.asList(
             "docker", "run", "--rm",
             "-v", dockerWorkDir.toString() + ":/workspace",
+            "-v", System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools", // Mount test tools from host
+            "-v", System.getProperty("user.home") + "/cubrid-testcases-private-ex:/home/cubrid-testcases-private-ex:ro", // Mount test cases from host
             "-w", "/workspace",
             config.getDockerTestImage(),
             "test", // Use 'test' role for tester image
@@ -614,8 +616,6 @@ public class BisectConsumer {
         
         // Try common locations
         String[] commonPaths = {
-            "/home/qahome/cubrid-testtools/CTP",
-            "/Users/jun/cubrid-testtools/CTP",
             System.getProperty("user.home") + "/cubrid-testtools/CTP"
         };
         
@@ -629,7 +629,7 @@ public class BisectConsumer {
         
         // Default fallback
         logger.warning("Could not find CTP_HOME, using default assumption");
-        return "/home/qahome/cubrid-testtools/CTP";
+        return System.getProperty("user.home") + "/cubrid-testtools/CTP";
     }
     
     private String readRequestBody(HttpExchange exchange) throws IOException {

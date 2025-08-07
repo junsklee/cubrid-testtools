@@ -101,7 +101,7 @@ public class DockerBuildManager {
         process.waitFor();
         
         String dockerfilePath = cubridciDir.getAbsolutePath() + "/docker/ci/Dockerfile";
-        String contextPath = cubridciDir.getAbsolutePath() + "/docker/ci";
+        String contextPath = cubridciDir.getAbsolutePath();
         
         logger.info("Building Docker image for CUBRID build environment: " + BUILD_IMAGE);
         DockerUtils.buildImage(dockerfilePath, BUILD_IMAGE, contextPath);

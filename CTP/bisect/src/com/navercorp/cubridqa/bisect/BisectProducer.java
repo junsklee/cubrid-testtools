@@ -34,6 +34,7 @@ public class BisectProducer {
         // Create HTTP server
         this.server = HttpServer.create(new InetSocketAddress(config.getListenPort()), 0);
         this.server.createContext("/bisect", new BisectRequestHandler());
+        this.server.createContext("/health", new HealthCheckHandler());
         this.server.setExecutor(null); // creates a default executor
     }
     
@@ -119,6 +120,37 @@ public class BisectProducer {
                     .put("status", "error")
                     .put("message", e.getMessage());
                 sendJsonResponse(exchange, 400, error);
+            }
+        }
+    }
+    
+    private class HealthCheckHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "Method not allowed");
+                return;
+            }
+            
+            try {
+                JSONObject healthResponse = new JSONObject()
+                    .put("status", "healthy")
+                    .put("service", "BisectProducer")
+                    .put("timestamp", System.currentTimeMillis())
+                    .put("activeTasks", activeTasks.size())
+                    .put("workDir", config.getWorkDir())
+                    .put("dockerEnabled", config.useDocker());
+                
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                sendResponse(exchange, 200, healthResponse.toString());
+                
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Error in health check", e);
+                JSONObject error = new JSONObject()
+                    .put("status", "error")
+                    .put("message", e.getMessage());
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                sendResponse(exchange, 500, error.toString());
             }
         }
     }
