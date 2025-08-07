@@ -16,15 +16,10 @@ OUTPUT_DIR="$2"
 BUILD_ARGS="${3:-"-g ninja -m debug build"}"
 CUBRID_SRC="${CUBRID_SRC:-$HOME/cubrid-src}"
 
-# Check for GitHub token
-if [ -z "$GITHUB_TOKEN" ]; then
-    echo "ERROR: GITHUB_TOKEN environment variable is not set or is empty."
-    echo "Cannot run Docker container that requires private repository access."
-    echo "Please set GITHUB_TOKEN environment variable with your GitHub personal access token."
-    exit 1
-fi
-
 echo "Building CUBRID commit $COMMIT_HASH using Docker..."
+
+# Create output directory if it doesn't exist
+mkdir -p "$OUTPUT_DIR"
 
 # Create build script for Docker
 cat > "$OUTPUT_DIR/docker_build_internal.sh" << 'EOF'

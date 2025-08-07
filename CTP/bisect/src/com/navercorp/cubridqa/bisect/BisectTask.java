@@ -418,24 +418,62 @@ public class BisectTask {
             
             // Check if Docker should be used for builds
             if (config.useDocker() && dockerBuildManager.isDockerAvailable()) {
-                writer.println("# Docker build enabled");
+                writer.println("# Docker build enabled with pre-built images");
                 writer.println("echo \"Building CUBRID using Docker...\"");
                 writer.println("cd " + config.getCubridSrcDir());
                 writer.println("COMMIT_HASH=$(git rev-parse HEAD)");
                 writer.println();
-                writer.println("# Use Docker build script");
-                String scriptPath = new File(config.getCubridSrcDir()).getParent() + 
-                                  "/cubrid-testtools/CTP/bisect/script/docker_build.sh";
-                writer.println("if [ -f \"" + scriptPath + "\" ]; then");
-                writer.println("    " + scriptPath + " \"$COMMIT_HASH\" \"" + 
-                              workDir.getAbsolutePath() + "\" \"" + config.getBuildArg() + "\"");
-                writer.println("    BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + 
-                              "/cubrid_${COMMIT_HASH:0:7}.tar.gz\"");
-                writer.println("else");
-                writer.println("    echo \"Docker build script not found, falling back to direct build\"");
-                writer.println("    # Fall back to direct build");
-                writeDirectBuildCommands(writer, workDir);
-                writer.println("fi");
+                
+                // Determine which Docker image to use based on configuration
+                String dockerImage = config.usePrebuiltDockerImages() ? 
+                    "cubrid-bisect-builder:latest" : config.getDockerBuildImage();
+                
+                writer.println("# Use " + (config.usePrebuiltDockerImages() ? "pre-built" : "built") + " Docker images");
+                writer.println("echo \"Building CUBRID commit $COMMIT_HASH using Docker...\"");
+                writer.println();
+                writer.println("# Create build script for Docker");
+                writer.println("cat > \"" + workDir.getAbsolutePath() + "/docker_build_internal.sh\" << 'EOF'");
+                writer.println("#!/bin/bash");
+                writer.println("set -e");
+                writer.println();
+                writer.println("# Copy source to working directory");
+                writer.println("cp -r /cubrid-src /tmp/cubrid-build");
+                writer.println("cd /tmp/cubrid-build");
+                writer.println();
+                writer.println("# Checkout specific commit");
+                writer.println("git checkout ${COMMIT_HASH}");
+                writer.println("git submodule update --init --recursive");
+                writer.println();
+                writer.println("# Clean previous builds");
+                writer.println("rm -rf build_x86_64_*");
+                writer.println("rm -rf cubridmanager/*");
+                writer.println();
+                writer.println("# Build CUBRID");
+                writer.println("./build.sh " + config.getBuildArg());
+                writer.println();
+                writer.println("# Determine build directory");
+                writer.println("BUILD_DIR=$(ls -d build_x86_64_* | head -1)");
+                writer.println();
+                writer.println("# Create package");
+                writer.println("cd $BUILD_DIR");
+                writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
+                writer.println();
+                writer.println("echo \"Build completed successfully\"");
+                writer.println("EOF");
+                writer.println();
+                writer.println("chmod +x \"" + workDir.getAbsolutePath() + "/docker_build_internal.sh\"");
+                writer.println();
+                writer.println("# Run Docker build with " + (config.usePrebuiltDockerImages() ? "pre-built" : "built") + " image");
+                writer.println("docker run --rm \\");
+                writer.println("    -v \"" + config.getCubridSrcDir() + ":/cubrid-src:ro\" \\");
+                writer.println("    -v \"" + workDir.getAbsolutePath() + ":/output:rw\" \\");
+                writer.println("    -e COMMIT_HASH=\"$COMMIT_HASH\" \\");
+                writer.println("    -e BUILD_ARGS=\"" + config.getBuildArg() + "\" \\");
+                writer.println("    " + dockerImage + " \\");
+                writer.println("    bash /output/docker_build_internal.sh");
+                writer.println();
+                writer.println("BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + "/cubrid_${COMMIT_HASH:0:7}.tar.gz\"");
+                writer.println("echo \"Docker build completed. Package: $BUILD_PACKAGE\"");
             } else {
                 writer.println("# Direct build (Docker not enabled or not available)");
                 writer.println("echo \"Building CUBRID at commit $(git rev-parse HEAD)\"");
