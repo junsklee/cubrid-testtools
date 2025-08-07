@@ -16,15 +16,21 @@ cubrid_install_dir=/tmp/cubrid_test
 
 # Required: Path to CUBRID source repository
 # Needed for configuration compatibility
-cubrid_src_dir=$CUBRID
+cubrid_src_dir=~/cubrid-src
 
 # Required: Path to shell test cases
 # Consumer needs access to test scripts
 shell_tc_dir=~/cubrid-testcases-private-ex
 
 # Docker configuration for consumer
-# Enable Docker-based test execution by default
+# Enable Docker-based test execution by default for better isolation
 use_docker_consumer=true
 
+# Use pre-built Docker images from Docker Hub (faster than building from source)
+# Set to false to build images from cubridci repository
+use_prebuilt_docker_images=true
+
 # Docker test image for isolated test execution
+# If use_prebuilt_docker_images=true: pulls cubridci/cubridci:test_shell
+# If use_prebuilt_docker_images=false: builds from cubridci repository test_shell branch
 docker_test_image=cubrid-bisect-tester:latest

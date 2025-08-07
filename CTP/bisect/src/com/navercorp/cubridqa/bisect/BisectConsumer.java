@@ -235,9 +235,9 @@ public class BisectConsumer {
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
-        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools"); // Mount test tools from host
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:" + System.getProperty("user.home") + "/cubrid-testtools"); // Mount test tools from host
         dockerCommand.add("-v");
-        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testcases-private-ex:/home/cubrid-testcases-private-ex:ro"); // Mount test cases from host
+        dockerCommand.add(config.getShellTcDir() + ":" + config.getShellTcDir() + ":ro"); // Mount test cases from host
         dockerCommand.add("-e");
         dockerCommand.add("GITHUB_TOKEN=" + githubToken);
         dockerCommand.add("-w");
@@ -566,6 +566,64 @@ public class BisectConsumer {
         }
         
         logger.info("CUBRID binaries found at: " + actualCubridDir);
+        
+        // Run setup.sh script to properly configure CUBRID installation
+        Path setupScript = actualCubridDir.resolve("share/scripts/setup.sh");
+        if (!Files.exists(setupScript)) {
+            // Try alternative location
+            setupScript = actualCubridDir.resolve("setup.sh");
+        }
+        
+        if (Files.exists(setupScript)) {
+            logger.info("Running setup.sh script to configure CUBRID installation");
+            
+            // Run setup.sh with the CUBRID directory as argument
+            pb = new ProcessBuilder("sh", setupScript.toString(), actualCubridDir.toString());
+            pb.directory(actualCubridDir.toFile());
+            pb.redirectErrorStream(true);
+            
+            // Set environment for setup.sh
+            Map<String, String> env = pb.environment();
+            env.put("CUBRID", actualCubridDir.toString());
+            env.put("CUBRID_DATABASES", actualCubridDir.resolve("databases").toString());
+            env.put("PATH", actualCubridDir.resolve("bin") + ":" + System.getenv("PATH"));
+            env.put("LD_LIBRARY_PATH", actualCubridDir.resolve("lib") + ":" + 
+                    System.getenv().getOrDefault("LD_LIBRARY_PATH", ""));
+            
+            process = pb.start();
+            
+            // Capture output
+            outputGobbler = new StreamGobbler(process.getInputStream(), "SETUP");
+            outputGobbler.start();
+            
+            // Wait for completion
+            completed = process.waitFor(2, TimeUnit.MINUTES);
+            if (!completed) {
+                process.destroyForcibly();
+                logger.warning("setup.sh timeout after 2 minutes, continuing anyway");
+            } else {
+                exitCode = process.exitValue();
+                outputGobbler.join(1000);
+                
+                if (exitCode != 0) {
+                    logger.warning("setup.sh exited with code: " + exitCode + 
+                                 ". Output: " + outputGobbler.getOutput());
+                    // Continue anyway, setup.sh might not be critical
+                } else {
+                    logger.info("setup.sh completed successfully");
+                }
+            }
+        } else {
+            logger.warning("setup.sh script not found, skipping setup");
+        }
+        
+        // Ensure databases directory exists
+        Path databasesDir = actualCubridDir.resolve("databases");
+        if (!Files.exists(databasesDir)) {
+            Files.createDirectories(databasesDir);
+            logger.info("Created databases directory: " + databasesDir);
+        }
+        
         return actualCubridDir;
     }
     
@@ -625,7 +683,7 @@ public class BisectConsumer {
         // Try to find it relative to current working directory
         File currentDir = new File(".").getAbsoluteFile();
         while (currentDir != null) {
-            File commonScript = new File(currentDir, "common/script/run_cubrid_install");
+            File commonScript = new File(currentDir, "shell");
             if (commonScript.exists()) {
                 return currentDir.getAbsolutePath();
             }
@@ -639,7 +697,7 @@ public class BisectConsumer {
         
         for (String path : commonPaths) {
             File ctpDir = new File(path);
-            if (ctpDir.exists() && new File(ctpDir, "common/script/run_cubrid_install").exists()) {
+            if (ctpDir.exists() && new File(ctpDir, "shell").exists()) {
                 logger.info("Found CTP_HOME at: " + path);
                 return path;
             }
@@ -901,6 +959,19 @@ public class BisectConsumer {
         script.append("    exit 1\n");
         script.append("fi\n\n");
         
+        // Run setup.sh if available
+        script.append("# Run setup.sh to configure CUBRID\n");
+        script.append("if [ -f \"$CUBRID_ROOT/share/scripts/setup.sh\" ]; then\n");
+        script.append("    echo \"Running setup.sh...\"\n");
+        script.append("    cd \"$CUBRID_ROOT\"\n");
+        script.append("    sh share/scripts/setup.sh \"$CUBRID_ROOT\"\n");
+        script.append("    cd -\n");
+        script.append("elif [ -f \"$CUBRID_ROOT/setup.sh\" ]; then\n");
+        script.append("    echo \"Running setup.sh...\"\n");
+        script.append("    cd \"$CUBRID_ROOT\"\n");
+        script.append("    sh setup.sh \"$CUBRID_ROOT\"\n");
+        script.append("    cd -\n");
+        script.append("fi\n\n");
         // Set up CUBRID environment
         script.append("# Set up CUBRID environment\n");
         script.append("export CUBRID=\"$CUBRID_ROOT\"\n");

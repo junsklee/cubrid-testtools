@@ -14,8 +14,10 @@ This tool implements a distributed bisect workflow where:
 3. **Consumer** node receives builds and test requests, runs tests, and returns results
 4. **Producer** aggregates results and sends them back via HTTP callback
 
-## Key Features (v2.0)
+## Key Features (v3.0)
 
+- **Docker Integration**: Uses pre-built Docker images from Docker Hub for faster setup
+- **Automatic CUBRID Setup**: Runs setup.sh script after extraction for proper configuration
 - **Build Verification**: Automatically verifies CUBRID installation using `cubrid_rel` before running tests
 - **Enhanced Error Handling**: Distinguishes between:
   - Test failures (actual test fails)
@@ -25,8 +27,16 @@ This tool implements a distributed bisect workflow where:
 - **Shell Test Framework Integration**: Proper support for CTP shell test framework
 - **Smart Bisect Skipping**: Automatically skips commits that can't be tested due to environment issues
 - **Improved Logging**: Detailed logging for debugging test execution issues
-
+- **Pre-built Docker Images**: Option to use pre-built images from Docker Hub instead of building from source
 ## Quick Start
+
+### Prerequisites
+
+- Java 8 or higher
+- Docker (optional but recommended)
+- Git 2.0+
+- CUBRID build environment
+- Network connectivity between producer and consumer
 
 ### Installation
 
@@ -50,6 +60,19 @@ cp conf/bisect_producer.conf.example conf/bisect_producer.conf
 cp conf/bisect_consumer.conf.example conf/bisect_consumer.conf
 # Edit conf/bisect_consumer.conf
 ```
+### Docker Images
+
+By default, the tool uses pre-built Docker images from Docker Hub:
+- **Builder image**: `cubridci/cubridci:develop` (for building CUBRID)
+- **Tester image**: `cubridci/cubridci:test_shell` (for running tests)
+
+To pull these images manually:
+```bash
+docker pull cubridci/cubridci:develop
+docker pull cubridci/cubridci:test_shell
+```
+
+If you prefer to build images from source, set `use_prebuilt_docker_images=false` in your configuration.
 
 ### Starting Services
 
@@ -75,7 +98,6 @@ curl -X POST -H "Content-Type: application/json" \
   }' \
   http://localhost:8089/bisect
 ```
-
 ### Running Tests
 
 Use the provided test scripts:
@@ -121,8 +143,13 @@ consumer_port=8090
 
 # Maximum concurrent bisect operations
 max_concurrent_bisects=4
-```
 
+# Docker configuration
+use_docker=true
+use_prebuilt_docker_images=true  # Use pre-built images from Docker Hub
+docker_build_image=cubrid-bisect-builder:latest
+docker_test_image=cubrid-bisect-tester:latest
+```
 ### Consumer Configuration (bisect_consumer.conf)
 ```properties
 # HTTP server port
@@ -136,6 +163,11 @@ cubrid_src_dir=/path/to/cubrid
 
 # Required: Path to shell test cases
 shell_tc_dir=/path/to/cubrid-testcases
+
+# Docker configuration
+use_docker_consumer=true
+use_prebuilt_docker_images=true  # Use pre-built images from Docker Hub
+docker_test_image=cubrid-bisect-tester:latest
 ```
 
 ## API Reference
@@ -155,7 +187,6 @@ shell_tc_dir=/path/to/cubrid-testcases
   "autoDeleteBuilds": boolean        // Optional: Delete build files (default: true)
 }
 ```
-
 ### Callback Response
 
 ```json
@@ -197,55 +228,28 @@ The bisect tool handles these statuses intelligently:
 - `fail` → marks commit as bad
 - `execution_error`, `environment_error` → skips commit (can't determine good/bad)
 - `build_error` → marks commit as bad (broken build)
+## CUBRID Installation Process
+
+The consumer now properly installs CUBRID by:
+1. Extracting the tar.gz build package
+2. Finding the CUBRID binaries location
+3. Running the `setup.sh` script to configure CUBRID environment
+4. Verifying the installation with `cubrid_rel` command
+5. Creating necessary directories (databases, etc.)
+
+This ensures proper CUBRID setup following the official installation guide.
 
 ## Results Storage
 
-The CTP Bisect system supports **local results storage** in addition to HTTP callback delivery. Results are automatically saved to local files whenever a bisect task completes, regardless of whether the HTTP callback succeeds or fails.
+The CTP Bisect system supports **local results storage** in addition to HTTP callback delivery. Results are automatically saved to local files whenever a bisect task completes.
 
 ### Storage Location
 
 **Primary Location**: `/tmp/bisect_work/results/`
 
-This directory contains:
-- Individual result files: `bisect_result_YYYYMMDD_HHMMSS_TASKID.json`
-- Latest result file: `latest_result.json` (copy of most recent result)
-
-### File Format
-
-Results are stored as JSON files with the following structure:
-
-```json
-{
-  "suspectedStartCommit": "bb2cc88",
-  "suspectedEndCommit": "e4c8127", 
-  "workerIp": "192.168.1.5",
-  "generatedAt": "2025-08-05T14:44:51.857Z",
-  "tests": [
-    {
-      "name": "shell/_06_issues/_12_2h/bug_bts_7583/cases/bug_bts_7583.sh",
-      "status": "found",
-      "firstBadCommit": "bb2cc88e1df96910a3bb30384cd6d307cd6d839a",
-      "author": "jongmin-won <55681111+jongmin-won@users.noreply.github.com>",
-      "runtimeMs": 397149
-    }
-  ]
-}
-```
-
 ### Viewing Results
 
-Use the results viewer utility:
-
 ```bash
-./tests/utils/results_viewer.sh
-```
-
-Or manually:
-
-```bash
-# List all result files
-ls -la /tmp/bisect_work/results/
-
 # View latest result
 cat /tmp/bisect_work/results/latest_result.json
 
@@ -253,63 +257,32 @@ cat /tmp/bisect_work/results/latest_result.json
 jq . /tmp/bisect_work/results/latest_result.json
 ```
 
-### Integration with Build Preservation
-
-When using `autoDeleteBuilds: false`, both results and builds are preserved:
-
-- **Results**: `/tmp/bisect_work/results/bisect_result_TIMESTAMP_TASKID.json`
-- **Builds**: `/tmp/bisect_work/bisect_TIMESTAMP/` (contains full CUBRID build)
-
-### Benefits
-
-1. **Reliability**: Results are never lost, even if HTTP callback fails
-2. **Persistence**: Results remain available after system restarts
-3. **Debugging**: Easy access to historical bisect results
-4. **Automation**: Scripts can parse local JSON files for further processing
-
-No additional configuration required. Local storage is automatically enabled for all bisect tasks.
-
 ## Project Structure
 
 ```
 CTP/bisect/
 ├── src/com/navercorp/cubridqa/bisect/
 │   ├── BisectProducer.java      # HTTP server, request handling
-│   ├── BisectConsumer.java      # Test execution service
+│   ├── BisectConsumer.java      # Test execution service (with setup.sh support)
 │   ├── BisectTask.java          # Bisect logic and coordination
-│   └── BisectConfig.java        # Configuration management
-├── script/
-│   ├── start_producer.sh        # Start producer service
-│   ├── stop_producer.sh         # Stop producer service
-│   ├── start_consumer.sh        # Start consumer service
-│   └── stop_consumer.sh         # Stop consumer service
+│   ├── BisectConfig.java        # Configuration management
+│   ├── DockerBuildManager.java  # Docker build management (with pre-built image support)
+│   └── DockerConsumerManager.java # Docker test management (with pre-built image support)
+├── conf/                        # Configuration files
+├── script/                      # Service management scripts
 ├── tests/                       # Testing and diagnostic tools
-│   ├── data/                    # Test data files
-│   ├── examples/                # Example bisect test scripts
-│   ├── diagnostic/              # System diagnostic tools
-│   ├── utils/                   # Utility scripts and tools
-│   └── README.md                # Testing documentation
-├── conf/
-│   ├── bisect_producer.conf.example
-│   └── bisect_consumer.conf.example
-├── runtime/                     # Runtime files (PID files, etc.)
-├── lib/                         # Dependencies (JSON library)
-├── build/                       # Compiled classes
-├── log/                         # Log files (created at runtime)
-├── build.sh                     # Build script
-├── ARCHITECTURE.md             # System architecture details
-├── SCALING.md                  # Scaling guide
 └── README.md                   # This file
 ```
-
 ## How It Works
 
 ### Git Bisect Process
 1. Tool finds parent of `suspectedStartCommit` as the good commit
 2. Runs git bisect between good commit and `suspectedEndCommit`
 3. For each commit in binary search:
-   - Builds CUBRID
+   - Builds CUBRID (using Docker if enabled)
    - Sends build to consumer
+   - Consumer installs CUBRID using setup.sh
+   - Consumer runs test and checks results
    - Marks commit as good/bad based on test result
 4. Returns the first bad commit where test started failing
 
@@ -317,67 +290,57 @@ CTP/bisect/
 Consumer service:
 1. Receives build package and test information
 2. Extracts CUBRID build to temporary directory
-3. Sets up environment variables
-4. Executes shell test script
-5. Checks for "NOK" in result file
-6. Returns pass/fail status to producer
-
-## Monitoring
-
-### Check Service Status
-```bash
-# Check if services are running
-ps aux | grep -E "Bisect(Producer|Consumer)"
-
-# Check service health
-curl http://localhost:8089/health
-curl http://localhost:8090/health
-```
-
-### View Logs
-```bash
-# Producer logs
-tail -f log/bisect_producer.log
-
-# Consumer logs
-tail -f log/bisect_consumer.log
-```
+3. Runs setup.sh script to configure CUBRID
+4. Verifies installation with cubrid_rel command
+5. Sets up environment variables
+6. Executes shell test script
+7. Checks for "NOK" in result file
+8. Returns pass/fail status to producer
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Consumer not receiving requests**
-   - Check firewall settings for ports 8089/8090
-   - Verify consumer is running: `curl http://localhost:8090/health`
-   - Check producer logs for connection errors
+1. **CUBRID installation errors**
+   - Check that setup.sh script exists in the extracted build
+   - Verify CUBRID binaries are present (bin/cubrid_rel)
+   - Check environment variables are set correctly
+   - Ensure databases directory is created
 
-2. **Build failures**
-   - Ensure CUBRID build dependencies are installed
-   - Check disk space in work directory
-   - Verify git repository is clean
+2. **Docker image pull failures**
+   - Verify internet connectivity
+   - Check Docker Hub access
+   - Try pulling images manually: `docker pull cubridci/cubridci:develop`
+   - Set `use_prebuilt_docker_images=false` to build from source
 
-3. **Test not found**
-   - Verify `shell_tc_dir` path in configuration
-   - Check test path matches exactly (case-sensitive)
+3. **Test execution failures**
+   - Verify test scripts exist in shell_tc_dir
+   - Check test script has execute permissions
+   - Ensure CUBRID is properly installed with setup.sh
+   - Check for missing dependencies
+## Recent Updates (v3.0)
 
-4. **Slow performance**
-   - Consider increasing `max_concurrent_bisects`
-   - Add more consumer nodes for parallel testing
-   - Check network latency between nodes
+### Task 1: Fixed Consumer Test Execution
+- Enhanced Docker test script to properly handle CUBRID setup
+- Added setup.sh execution in Docker environment
+- Improved error handling for incomplete test output
+- Fixed test script execution to ensure proper result generation
 
-5. **Results not being saved locally**
-   - Check write permissions on `/tmp/bisect_work/`
-   - Verify disk space availability
-   - Check producer logs for "Results saved locally" messages
-   - Ensure the updated bisect-tool.jar is being used
+### Task 2: Replaced run_cubrid_install with setup.sh
+- Consumer now directly runs setup.sh after extracting CUBRID
+- Follows official CUBRID installation guide
+- Removed all dependencies on run_cubrid_install script
+- Fixed hardcoded paths to use dynamic configuration
+- Updated findCTPHome method to look for shell directory instead of run_cubrid_install
 
-### Debug Mode
-
-Enable detailed logging by modifying the start scripts:
-```bash
-java -Djava.util.logging.ConsoleHandler.level=ALL ...
-```
+### Task 3: Pre-built Docker Images Support
+- Added `use_prebuilt_docker_images` configuration option (default: true)
+- Automatically pulls images from Docker Hub:
+  - `cubridci/cubridci:develop` for building
+  - `cubridci/cubridci:test_shell` for testing
+- Falls back to building from source if configured
+- Significantly reduces initial setup time
+- Updated both DockerBuildManager and DockerConsumerManager
 
 ## Performance
 
@@ -385,11 +348,13 @@ java -Djava.util.logging.ConsoleHandler.level=ALL ...
 - **Example**: 128 commits → maximum 7 builds
 - **Typical timing**: ~3-5 minutes per test (depending on build/test complexity)
 - **Parallelization**: Multiple tests run concurrently on same commit range
+- **Docker images**: Pre-built images reduce setup time significantly
 
 ## Requirements
 
 - Java 8 or higher
 - Git 2.0+
+- Docker (optional but recommended)
 - CUBRID build environment
 - Network connectivity between producer and consumer
 - Sufficient disk space (20GB+ recommended)

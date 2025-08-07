@@ -41,14 +41,51 @@ public class DockerConsumerManager {
             return;
         }
         
-        // Ensure cubridci repository is available
-        ensureCubridCIRepository();
-        
-        // Build test image from test_shell branch
-        buildTestImage();
+        // Check if we should use pre-built images
+        if (config.usePrebuiltDockerImages()) {
+            logger.info("Using pre-built Docker images for testing");
+            pullPrebuiltTestImage();
+        } else {
+            logger.info("Building Docker test image from source");
+            // Ensure cubridci repository is available
+            ensureCubridCIRepository();
+            
+            // Build test image from test_shell branch
+            buildTestImage();
+        }
         
         imageReady = true;
     }
+    
+    /**
+     * Pull pre-built Docker test image from Docker Hub
+     */
+    private void pullPrebuiltTestImage() throws IOException, InterruptedException {
+        logger.info("Pulling pre-built Docker image: cubridci/cubridci:test_shell");
+        
+        // Pull the test_shell image for testing
+        ProcessBuilder pb = new ProcessBuilder("docker", "pull", "cubridci/cubridci:test_shell");
+        pb.inheritIO();
+        Process process = pb.start();
+        int exitCode = process.waitFor();
+        
+        if (exitCode != 0) {
+            throw new IOException("Failed to pull Docker image: cubridci/cubridci:test_shell");
+        }
+        
+        // Tag it with our expected name
+        pb = new ProcessBuilder("docker", "tag", "cubridci/cubridci:test_shell", TEST_IMAGE);
+        pb.inheritIO();
+        process = pb.start();
+        exitCode = process.waitFor();
+        
+        if (exitCode != 0) {
+            logger.warning("Failed to tag image, will use cubridci/cubridci:test_shell directly");
+        } else {
+            logger.info("Successfully tagged image as: " + TEST_IMAGE);
+        }
+    }
+
     
     /**
      * Ensure cubridci repository is available with test_shell branch

@@ -22,6 +22,7 @@ public class BisectConfig {
     private static final String CONSUMER_PORT = "consumer_port";
     private static final String MAX_CONCURRENT_BISECTS = "max_concurrent_bisects";
     private static final String USE_DOCKER = "use_docker";
+    private static final String USE_PREBUILT_DOCKER_IMAGES = "use_prebuilt_docker_images";
     private static final String DOCKER_BUILD_IMAGE = "docker_build_image";
     private static final String DOCKER_TEST_IMAGE = "docker_test_image";
     private static final String STANDALONE_MODE = "standalone_mode";
@@ -138,6 +139,11 @@ public class BisectConfig {
     public boolean useDocker() {
         return Boolean.parseBoolean(properties.getProperty(USE_DOCKER, "true"));
     }
+
+    public boolean usePrebuiltDockerImages() {
+        return Boolean.parseBoolean(properties.getProperty(USE_PREBUILT_DOCKER_IMAGES, "true"));
+    }
+    
     
     public boolean useDockerForConsumer() {
         return Boolean.parseBoolean(properties.getProperty("use_docker_consumer", "true"));

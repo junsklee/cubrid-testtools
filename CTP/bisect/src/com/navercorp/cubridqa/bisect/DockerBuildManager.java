@@ -42,14 +42,51 @@ public class DockerBuildManager {
             return;
         }
         
-        // Ensure cubridci repository is available
-        ensureCubridCIRepository();
-        
-        // Build custom image using cubridci Dockerfile
-        buildCustomImage();
+        // Check if we should use pre-built images
+        if (config.usePrebuiltDockerImages()) {
+            logger.info("Using pre-built Docker images");
+            pullPrebuiltImages();
+        } else {
+            logger.info("Building Docker images from source");
+            // Ensure cubridci repository is available
+            ensureCubridCIRepository();
+            
+            // Build custom image using cubridci Dockerfile
+            buildCustomImage();
+        }
         
         imageReady = true;
     }
+    
+    /**
+     * Pull pre-built Docker images from Docker Hub
+     */
+    private void pullPrebuiltImages() throws IOException, InterruptedException {
+        logger.info("Pulling pre-built Docker image: cubridci/cubridci:develop");
+        
+        // Pull the develop image for building
+        ProcessBuilder pb = new ProcessBuilder("docker", "pull", "cubridci/cubridci:develop");
+        pb.inheritIO();
+        Process process = pb.start();
+        int exitCode = process.waitFor();
+        
+        if (exitCode != 0) {
+            throw new IOException("Failed to pull Docker image: cubridci/cubridci:develop");
+        }
+        
+        // Tag it with our expected name
+        pb = new ProcessBuilder("docker", "tag", "cubridci/cubridci:develop", BUILD_IMAGE);
+        pb.inheritIO();
+        process = pb.start();
+        exitCode = process.waitFor();
+        
+        if (exitCode != 0) {
+            logger.warning("Failed to tag image, will use cubridci/cubridci:develop directly");
+        } else {
+            logger.info("Successfully tagged image as: " + BUILD_IMAGE);
+        }
+    }
+
     
     /**
      * Ensure cubridci repository is cloned and has both branches available
