@@ -5,6 +5,7 @@ package com.navercorp.cubridqa.bisect;
 
 import java.io.*;
 import java.net.*;
+import java.net.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.logging.*;
@@ -70,6 +71,99 @@ public class BisectTask {
             // Ensure CUBRID source repository is set up and updated
             setupCubridRepository();
             
+            // Check if this is a single commit test (start and end are the same)
+            boolean isSingleCommitTest = suspectedStartCommit.equals(suspectedEndCommit);
+            
+            if (isSingleCommitTest) {
+                logger.info("Single commit test detected - testing only commit: " + suspectedStartCommit);
+                // For single commit test, directly test the commit without bisect
+                for (int i = 0; i < tests.length(); i++) {
+                    String test = tests.getString(i);
+                    logger.info("Testing single commit for test: " + test);
+                    
+                    // Build once and test
+                    File workDir = createTempDirectory();
+                    // Build CUBRID for this commit
+                    logger.info("Building CUBRID for commit: " + suspectedStartCommit);
+                    ProcessBuilder pb = new ProcessBuilder();
+                    pb.directory(new File(config.getCubridSrcDir()));
+                    
+                    // Checkout the commit
+                    executeCommand(pb, "git", "checkout", suspectedStartCommit);
+                    executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
+                    
+                    // Build CUBRID
+                    String buildPackage = null;
+                    if (config.useDocker() && dockerBuildManager.isReady()) {
+                        buildPackage = dockerBuildManager.buildCubrid(suspectedStartCommit, workDir, buildType);
+                    } else {
+                        // Direct build
+                        executeCommand(pb, "./build.sh", config.getBuildArg());
+                        
+                        // Create package
+                        String packageName = "cubrid_" + suspectedStartCommit.substring(0, 7) + ".tar.gz";
+                        File packageFile = new File(workDir, packageName);
+                        pb.directory(new File(config.getCubridSrcDir(), config.getBuildDir()));
+                        executeCommand(pb, "tar", "czf", packageFile.getAbsolutePath(), ".");
+                        buildPackage = packageFile.getAbsolutePath();
+                    }
+                    
+                    logger.info("Build package created: " + buildPackage);
+                    // Test the build
+                    // Test the build by sending request to consumer
+                    String testDir = config.getShellTcDir() + "/" + test.substring(0, test.lastIndexOf("/"));
+                    String testScript = test.substring(test.lastIndexOf("/") + 1);
+                    String testName = testScript.replace(".sh", "");
+                    
+                    JSONObject testRequest = new JSONObject();
+                    testRequest.put("buildPackage", buildPackage);
+                    testRequest.put("testPath", test);
+                    testRequest.put("testDir", testDir);
+                    testRequest.put("testScript", testScript);
+                    testRequest.put("testName", testName);
+                    
+                    // Send HTTP request to consumer
+                    URL url = new URL("http://" + workerIp + ":" + config.getConsumerPort() + "/test");
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setDoOutput(true);
+                    
+                    try (OutputStream os = conn.getOutputStream()) {
+                        os.write(testRequest.toString().getBytes());
+                    }
+                    
+                    // Read response
+                    StringBuilder response = new StringBuilder();
+                    try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            response.append(line);
+                        }
+                    }
+                    
+                    JSONObject responseJson = new JSONObject(response.toString());
+                    boolean testPassed = "pass".equals(responseJson.getString("status"));
+                    logger.info("Test result: " + responseJson.getString("status"));
+                    
+                    JSONObject result = new JSONObject();
+                    result.put("name", test);
+                    result.put("status", testPassed ? "pass" : "fail");
+                    result.put("message", "Single commit test " + (testPassed ? "passed" : "failed"));
+                    if (!testPassed) {
+                        result.put("failedCommit", suspectedStartCommit);
+                        String author = getCommitAuthor(suspectedStartCommit);
+                        if (author != null) result.put("author", author);
+                    }
+                    results.add(result);
+                    
+                    // Clean up if requested
+                    if (request.optBoolean("autoDeleteBuilds", true)) {
+                        deleteDirectory(workDir);
+                    }
+                }
+            } else {
+            
             // Find the parent of suspectedStartCommit to use as the good commit
             String goodCommit = getParentCommit(suspectedStartCommit);
             if (goodCommit == null) {
@@ -90,6 +184,7 @@ public class BisectTask {
                 results.add(result);
             }
             
+            }
             // Send callback with results
             sendCallback();
             

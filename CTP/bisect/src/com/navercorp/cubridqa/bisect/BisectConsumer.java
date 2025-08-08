@@ -202,17 +202,20 @@ public class BisectConsumer {
         // Create a temporary directory for Docker volumes
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         
-        // Copy test files to Docker work directory
-        Path testSourceDir = Paths.get(testDir);
-        Path dockerTestDir = dockerWorkDir.resolve("test");
-        copyDirectory(testSourceDir, dockerTestDir);
+        // Don't copy test files - they will be accessed from mounted directory
+        // Test files are mounted at /home/cubrid-testcases-private-ex
         
         // Copy build package to Docker work directory
         Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
         Files.copy(Paths.get(buildPackage), dockerBuildPackage);
         
         // Create test execution script for Docker
-        String dockerScript = createDockerTestScript(testScript, testName, expectedBuildVersion);
+        // Calculate relative test directory path for Docker
+        String baseTestDir = config.getShellTcDir();
+        String relativeTestDir = testDir.startsWith(baseTestDir) ? 
+            testDir.substring(baseTestDir.length()).replaceFirst("^/", "") : testDir;
+        
+        String dockerScript = createDockerTestScript(testScript, testName, expectedBuildVersion, relativeTestDir);
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());
         dockerScriptPath.toFile().setExecutable(true);
@@ -235,11 +238,15 @@ public class BisectConsumer {
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
-        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:" + System.getProperty("user.home") + "/cubrid-testtools"); // Mount test tools from host
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools");
         dockerCommand.add("-v");
-        dockerCommand.add(config.getShellTcDir() + ":" + config.getShellTcDir() + ":ro"); // Mount test cases from host
+        dockerCommand.add(config.getShellTcDir() + ":/home/cubrid-testcases-private-ex:ro");
         dockerCommand.add("-e");
         dockerCommand.add("GITHUB_TOKEN=" + githubToken);
+        dockerCommand.add("-e");
+        dockerCommand.add("CTP_HOME=/home/cubrid-testtools/CTP");
+        dockerCommand.add("-e");
+        dockerCommand.add("init_path=/home/cubrid-testtools/CTP/shell/init_path");
         dockerCommand.add("-w");
         dockerCommand.add("/workspace");
         dockerCommand.add(config.getDockerTestImage());
@@ -275,7 +282,7 @@ public class BisectConsumer {
         logger.info("Docker test completed with exit code: " + exitCode);
         
         // Check for result file in Docker work directory
-        Path resultFile = dockerTestDir.resolve("nok.result");
+        Path resultFile = dockerWorkDir.resolve("nok.result");
         if (Files.exists(resultFile)) {
             String resultContent = new String(Files.readAllBytes(resultFile));
             logger.info("Docker test result: " + resultContent.trim());
@@ -925,7 +932,7 @@ public class BisectConsumer {
         
         // Ensure result file exists
         script.append("# Ensure result file exists based on exit code if not already created\n");
-        script.append("if [ ! -f \"nok.result\" ]; then\n");
+        script.append("if [ ! -f \"/workspace/nok.result\" ]; then\n");
         script.append("    if [ $TEST_EXIT_CODE -eq 0 ]; then\n");
         script.append("        write_ok\n");
         script.append("    else\n");
@@ -941,7 +948,7 @@ public class BisectConsumer {
     /**
      * Create Docker test execution script with improved isolation and error handling
      */
-    private String createDockerTestScript(String testScript, String testName, String expectedBuildVersion) {
+    private String createDockerTestScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir) {
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
         script.append("# Auto-generated Docker test execution script\n");
@@ -994,14 +1001,14 @@ public class BisectConsumer {
         
         // Change to test directory and run test
         script.append("# Execute test\n");
-        script.append("cd /workspace/test\n");
+        script.append("cd /home/cubrid-testcases-private-ex && find . -name \"" + testScript + "\" -type f | head -1 | xargs dirname | xargs cd\n");
         script.append("echo \"Starting test: ").append(testName).append("\"\n");
         script.append("bash \"").append(testScript).append("\"\n");
         script.append("TEST_EXIT_CODE=$?\n\n");
         
         // Ensure result file exists
         script.append("# Ensure result file exists based on exit code if not already created\n");
-        script.append("if [ ! -f \"nok.result\" ]; then\n");
+        script.append("if [ ! -f \"/workspace/nok.result\" ]; then\n");
         script.append("    if [ $TEST_EXIT_CODE -eq 0 ]; then\n");
         script.append("        echo \"Test ").append(testName).append(": OK\" > nok.result\n");
         script.append("    else\n");
