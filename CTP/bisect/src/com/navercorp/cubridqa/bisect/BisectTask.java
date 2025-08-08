@@ -26,6 +26,59 @@ public class BisectTask {
     private final DockerBuildManager dockerBuildManager;
     private final StandaloneDockerManager standaloneManager;
     
+    /**
+     * Cache for built packages to avoid rebuilding same commits
+     * Key: commit hash + build type, Value: package file path
+     */
+    private static final Map<String, String> buildCache = new HashMap<>();
+    
+    /**
+     * Get cached build package if available
+     */
+    private String getCachedBuild(String commit, String buildType) {
+        String cacheKey = commit + "_" + buildType;
+        String cachedPath = buildCache.get(cacheKey);
+        
+        if (cachedPath != null && new File(cachedPath).exists()) {
+            logger.info("Using cached build for commit " + commit + " (" + buildType + ")");
+            return cachedPath;
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Add build to cache
+     */
+    private void cacheBuild(String commit, String buildType, String packagePath) {
+        String cacheKey = commit + "_" + buildType;
+        buildCache.put(cacheKey, packagePath);
+        logger.info("Cached build for commit " + commit + " (" + buildType + ")");
+    }
+    
+    /**
+     * Clear old builds from cache to prevent memory issues
+     * Keeps only the last N builds
+     */
+    private void cleanBuildCache(int maxCacheSize) {
+        if (buildCache.size() > maxCacheSize) {
+            // Remove oldest entries (simple FIFO approach)
+            int toRemove = buildCache.size() - maxCacheSize;
+            Iterator<Map.Entry<String, String>> iter = buildCache.entrySet().iterator();
+            while (iter.hasNext() && toRemove > 0) {
+                Map.Entry<String, String> entry = iter.next();
+                // Delete the actual file
+                File file = new File(entry.getValue());
+                if (file.exists()) {
+                    file.delete();
+                }
+                iter.remove();
+                toRemove--;
+            }
+            logger.info("Cleaned build cache, kept " + maxCacheSize + " entries");
+        }
+    }
+
     public BisectTask(String taskId, JSONObject request, BisectConfig config) {
         this.taskId = taskId;
         this.request = request;
@@ -165,7 +218,41 @@ public class BisectTask {
             } else {
             
             // Find the parent of suspectedStartCommit to use as the good commit
-            String goodCommit = getParentCommit(suspectedStartCommit);
+                // Validate commit range
+                if (!validateCommitRange(suspectedStartCommit, suspectedEndCommit)) {
+                    logger.warning("Invalid commit range, attempting to swap start and end commits");
+                    // Try swapping
+                    String temp = suspectedStartCommit;
+                    suspectedStartCommit = suspectedEndCommit;
+                    suspectedEndCommit = temp;
+                    if (!validateCommitRange(suspectedStartCommit, suspectedEndCommit)) {
+                        throw new RuntimeException("Invalid commit range: commits are not related or on different branches");
+                    }
+                    logger.info("Swapped commit order for valid range");
+                }
+                
+                // Get commit count for estimation
+                int commitCount = getCommitCount(suspectedStartCommit, suspectedEndCommit);
+                if (commitCount > 0) {
+                    int estimatedBuilds = (int) Math.ceil(Math.log(commitCount + 1) / Math.log(2));
+                    logger.info(String.format("Commit range contains %d commits, estimated ~%d builds needed", 
+                        commitCount, estimatedBuilds));
+                }
+                
+                // Check if a custom good commit was provided
+                String goodCommit = request.optString("goodCommit", null);
+                if (goodCommit != null) {
+                    logger.info("Using custom good commit: " + goodCommit);
+                    // Validate that good commit is ancestor of bad commit
+                    if (!validateCommitRange(goodCommit, suspectedEndCommit)) {
+                        throw new RuntimeException("Invalid: good commit " + goodCommit + 
+                            " is not an ancestor of bad commit " + suspectedEndCommit);
+                    }
+                } else {
+                    // Find the parent of suspectedStartCommit to use as good commit
+                    logger.info("No good commit provided, using parent of " + suspectedStartCommit);
+                    goodCommit = getParentCommit(suspectedStartCommit);
+                }
             if (goodCommit == null) {
                 throw new RuntimeException("Could not find parent of suspected start commit: " + suspectedStartCommit);
             }
@@ -884,6 +971,70 @@ public class BisectTask {
         return output.toString();
     }
     
+    /**
+     * Validate that the commit range is valid
+     * Returns true if endCommit is a descendant of startCommit
+     */
+    private boolean validateCommitRange(String startCommit, String endCommit) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(new File(config.getCubridSrcDir()));
+        
+        try {
+            // Check if endCommit is reachable from startCommit
+            pb.command("git", "merge-base", "--is-ancestor", startCommit, endCommit);
+            Process process = pb.start();
+            int exitCode = process.waitFor();
+            
+            if (exitCode == 0) {
+                logger.info("Commit range validated: " + startCommit + " is ancestor of " + endCommit);
+                return true;
+            } else {
+                logger.warning("Invalid commit range: " + startCommit + " is not ancestor of " + endCommit);
+                
+                // Check if they're in reverse order
+                pb.command("git", "merge-base", "--is-ancestor", endCommit, startCommit);
+                process = pb.start();
+                exitCode = process.waitFor();
+                
+                if (exitCode == 0) {
+                    logger.warning("Commits appear to be in reverse order");
+                }
+                return false;
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to validate commit range: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Get the number of commits between two commits
+     */
+    private int getCommitCount(String startCommit, String endCommit) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(new File(config.getCubridSrcDir()));
+        pb.command("git", "rev-list", "--count", startCommit + ".." + endCommit);
+        
+        Process process = pb.start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line);
+            }
+        }
+        
+        int exitCode = process.waitFor();
+        if (exitCode == 0) {
+            try {
+                return Integer.parseInt(output.toString().trim());
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
     private File createTempDirectory() throws IOException {
         File tempDir = new File(config.getWorkDir(), "bisect_" + System.currentTimeMillis());
         if (!tempDir.mkdirs()) {
