@@ -85,47 +85,62 @@ public class DockerBuildManager {
         File buildScript = createDockerBuildScript(commitHash, buildType, workDir);
         
         // Prepare Docker command
-        List<String> dockerCommand = new ArrayList<>();
-        dockerCommand.add("docker");
-        dockerCommand.add("run");
-        dockerCommand.add("--rm");
-        dockerCommand.add("-v");
-        dockerCommand.add(config.getCubridSrcDir() + ":/cubrid-src:ro");
-        dockerCommand.add("-v");
-        dockerCommand.add(workDir.getAbsolutePath() + ":/output:rw");
-        dockerCommand.add("-v");
-        dockerCommand.add(buildScript.getAbsolutePath() + ":/build.sh:ro");
-        dockerCommand.add("-e");
-        dockerCommand.add("COMMIT_HASH=" + commitHash);
-        dockerCommand.add("-e");
-        dockerCommand.add("BUILD_TYPE=" + buildType);
-        dockerCommand.add("-e");
-        dockerCommand.add("GITHUB_TOKEN=" + githubToken);
-        dockerCommand.add(config.getDockerBuildImage());
-        dockerCommand.add("bash");
-        dockerCommand.add("/build.sh");
+        List<String> baseDockerCmd = new ArrayList<>();
+        baseDockerCmd.add("docker");
+        baseDockerCmd.add("run");
+        baseDockerCmd.add("--rm");
+        // Use host networking to reduce DNS/network issues during dependency downloads
+        baseDockerCmd.add("--network=host");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(config.getCubridSrcDir() + ":/cubrid-src:ro");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(workDir.getAbsolutePath() + ":/output:rw");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(buildScript.getAbsolutePath() + ":/build.sh:ro");
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("COMMIT_HASH=" + commitHash);
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BUILD_TYPE=" + buildType);
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("GITHUB_TOKEN=" + githubToken);
+        baseDockerCmd.add(config.getDockerBuildImage());
+        baseDockerCmd.add("bash");
+        baseDockerCmd.add("/build.sh");
         
-        logger.info("Running Docker build: " + String.join(" ", dockerCommand));
-        
-        ProcessBuilder pb = new ProcessBuilder(dockerCommand);
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
-        
-        // Capture output
-        StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-                logger.info("DOCKER: " + line);
+        int attempts = 0;
+        IOException lastError = null;
+        while (attempts < 2) { // first attempt + 1 retry
+            attempts++;
+            List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
+            logger.info("Running Docker build (attempt " + attempts + "): " + String.join(" ", dockerCommand));
+
+            ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            
+            // Capture output
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                    logger.info("DOCKER: " + line);
+                }
             }
+            
+            int exitCode = process.waitFor();
+            if (exitCode == 0) {
+                lastError = null;
+                break;
+            }
+            lastError = new IOException("Docker build failed with exit code: " + exitCode);
+            logger.warning("Docker build attempt " + attempts + " failed (exit=" + exitCode + ")." +
+                           (attempts < 2 ? " Retrying..." : " No more retries."));
+            try { Thread.sleep(5000); } catch (InterruptedException ignore) { }
         }
-        
-        int exitCode = process.waitFor();
-        
-        if (exitCode != 0) {
-            throw new IOException("Docker build failed with exit code: " + exitCode);
+        if (lastError != null) {
+            throw lastError;
         }
         
         // Return path to built package
@@ -154,7 +169,7 @@ public class DockerBuildManager {
             writer.println("rm -rf cubridmanager/*");
             writer.println();
             writer.println("# Build CUBRID");
-            writer.println("./build.sh " + config.getBuildArg());
+            writer.println("./build.sh " + config.getBuildArg() + " || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println();
             writer.println("# Create package");
             writer.println("cd " + config.getBuildDir());
@@ -181,7 +196,13 @@ public class DockerBuildManager {
         // Clean and build
         executeCommand(pb, "rm", "-rf", config.getBuildDir());
         executeCommand(pb, "rm", "-rf", "cubridmanager");
-        executeCommand(pb, "./build.sh", config.getBuildArg());
+        // Split build args by whitespace into tokens to avoid passing as a single string
+        java.util.List<String> buildCmd = new java.util.ArrayList<>();
+        buildCmd.add("./build.sh");
+        for (String token : config.getBuildArg().trim().split("\\s+")) {
+            if (!token.isEmpty()) buildCmd.add(token);
+        }
+        executeCommand(pb, buildCmd.toArray(new String[0]));
         
         // Create package
         String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";

@@ -25,7 +25,7 @@ EOF
 
 echo "Sending build request to Builder service..."
 echo "Request:"
-echo "$REQUEST_JSON" | python -m json.tool
+echo "$REQUEST_JSON"
 
 # Send request
 RESPONSE=$(curl -s -X POST \
@@ -35,10 +35,10 @@ RESPONSE=$(curl -s -X POST \
 
 echo ""
 echo "Response:"
-echo "$RESPONSE" | python -m json.tool
+echo "$RESPONSE"
 
 # Extract task ID if successful
-TASK_ID=$(echo "$RESPONSE" | python -c "import sys, json; data = json.load(sys.stdin); print(data.get('taskId', ''))" 2>/dev/null)
+TASK_ID=$(echo "$RESPONSE" | grep -o '"taskId":"[^"]*"' | cut -d'"' -f4)
 
 if [ ! -z "$TASK_ID" ]; then
     echo ""

@@ -64,7 +64,7 @@ public class BuilderTask {
                 String commit = entry.getKey();
                 String buildPackage = entry.getValue();
                 
-                if (buildPackage == null) {
+                if (buildPackage == null || buildPackage.isEmpty()) {
                     // Build failed
                     for (int i = 0; i < tests.length(); i++) {
                         JSONObject result = new JSONObject()
@@ -148,7 +148,7 @@ public class BuilderTask {
                     
                 } catch (Exception e) {
                     logger.log(Level.SEVERE, "Failed to build commit " + commit, e);
-                    builtPackages.put(commit, null); // Mark as failed
+                    builtPackages.put(commit, ""); // Mark as failed with empty string (ConcurrentHashMap disallows null)
                     progress.put(commit, -1); // Error
                 }
                 return null;
@@ -191,7 +191,13 @@ public class BuilderTask {
         // Clean and build
         executeCommand(pb, "rm", "-rf", config.getBuildDir());
         executeCommand(pb, "rm", "-rf", "cubridmanager");  // temporary fix
-        executeCommand(pb, "./build.sh", config.getBuildArg());
+        // Split build args by whitespace into tokens to avoid passing as a single string
+        List<String> buildCmd = new ArrayList<>();
+        buildCmd.add("./build.sh");
+        for (String token : config.getBuildArg().trim().split("\\s+")) {
+            if (!token.isEmpty()) buildCmd.add(token);
+        }
+        executeCommand(pb, buildCmd.toArray(new String[0]));
         
         // Create package
         String packageName = "cubrid_" + commit.substring(0, 7) + ".tar.gz";

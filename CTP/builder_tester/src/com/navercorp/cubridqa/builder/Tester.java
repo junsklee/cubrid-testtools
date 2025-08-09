@@ -233,7 +233,7 @@ public class Tester {
         pb.redirectErrorStream(true);
         Process process = pb.start();
         
-        StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "DOCKER");
+        StreamReader outputGobbler = new StreamReader(process.getInputStream(), "DOCKER");
         outputGobbler.start();
         
         boolean completed = process.waitFor(30, TimeUnit.MINUTES);
@@ -361,8 +361,8 @@ public class Tester {
         
         Process process = pb.start();
         
-        StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "OUTPUT");
-        StreamGobbler errorGobbler = new StreamGobbler(process.getErrorStream(), "ERROR");
+        StreamReader outputGobbler = new StreamReader(process.getInputStream(), "OUTPUT");
+        StreamReader errorGobbler = new StreamReader(process.getErrorStream(), "ERROR");
         outputGobbler.start();
         errorGobbler.start();
         
@@ -440,7 +440,7 @@ public class Tester {
         
         Process process = pb.start();
         
-        StreamGobbler outputGobbler = new StreamGobbler(process.getInputStream(), "EXTRACT");
+        StreamReader outputGobbler = new StreamReader(process.getInputStream(), "EXTRACT");
         outputGobbler.start();
         
         boolean completed = process.waitFor(5, TimeUnit.MINUTES);
@@ -468,6 +468,43 @@ public class Tester {
         
         logger.info("CUBRID binaries found at: " + actualCubridDir);
         
+        // Try running setup.sh if available to configure installation
+        try {
+            Path setupScript = actualCubridDir.resolve("share/scripts/setup.sh");
+            if (!Files.exists(setupScript)) {
+                setupScript = actualCubridDir.resolve("setup.sh");
+            }
+            if (Files.exists(setupScript)) {
+                logger.info("Running setup.sh to configure CUBRID installation");
+                ProcessBuilder setupPb = new ProcessBuilder("sh", setupScript.toString(), actualCubridDir.toString());
+                setupPb.directory(actualCubridDir.toFile());
+                setupPb.redirectErrorStream(true);
+                Map<String, String> setupEnv = setupPb.environment();
+                setupEnv.put("CUBRID", actualCubridDir.toString());
+                setupEnv.put("CUBRID_DATABASES", actualCubridDir.resolve("databases").toString());
+                setupEnv.put("PATH", actualCubridDir.resolve("bin") + ":" + System.getenv("PATH"));
+                setupEnv.put("LD_LIBRARY_PATH", actualCubridDir.resolve("lib") + ":" +
+                        System.getenv().getOrDefault("LD_LIBRARY_PATH", ""));
+                Process setupProc = setupPb.start();
+                StreamReader setupOutput = new StreamReader(setupProc.getInputStream(), "SETUP");
+                setupOutput.start();
+                boolean setupCompleted = setupProc.waitFor(2, TimeUnit.MINUTES);
+                if (!setupCompleted) {
+                    setupProc.destroyForcibly();
+                    logger.warning("setup.sh timeout after 2 minutes, continuing anyway");
+                } else if (setupProc.exitValue() != 0) {
+                    setupOutput.join(1000);
+                    logger.warning("setup.sh exited with code: " + setupProc.exitValue());
+                } else {
+                    logger.info("setup.sh completed successfully");
+                }
+            } else {
+                logger.info("setup.sh not found, skipping setup");
+            }
+        } catch (Exception e) {
+            logger.warning("setup.sh execution failed: " + e.getMessage());
+        }
+
         // Ensure databases directory exists
         Path databasesDir = actualCubridDir.resolve("databases");
         if (!Files.exists(databasesDir)) {
@@ -593,6 +630,19 @@ public class Tester {
         script.append("    exit 1\n");
         script.append("fi\n\n");
         
+        script.append("# Run setup.sh to configure CUBRID if available\n");
+        script.append("if [ -f \"$CUBRID_ROOT/share/scripts/setup.sh\" ]; then\n");
+        script.append("    echo \"Running setup.sh...\"\n");
+        script.append("    cd \"$CUBRID_ROOT\"\n");
+        script.append("    sh share/scripts/setup.sh \"$CUBRID_ROOT\"\n");
+        script.append("    cd -\n");
+        script.append("elif [ -f \"$CUBRID_ROOT/setup.sh\" ]; then\n");
+        script.append("    echo \"Running setup.sh...\"\n");
+        script.append("    cd \"$CUBRID_ROOT\"\n");
+        script.append("    sh setup.sh \"$CUBRID_ROOT\"\n");
+        script.append("    cd -\n");
+        script.append("fi\n\n");
+
         script.append("# Set up CUBRID environment\n");
         script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
         script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
@@ -609,6 +659,18 @@ public class Tester {
         script.append("fi\n\n");
         
         script.append("mkdir -p \"$CUBRID_DATABASES\"\n\n");
+
+        // If expected build version provided, verify
+        script.append("# Verify expected build version if provided\n");
+        script.append("if [ -n \"" + (expectedBuildVersion != null ? expectedBuildVersion : "") + "\" ]; then\n");
+        script.append("    INSTALLED_VER=$(cubrid_rel 2>/dev/null | head -1)\n");
+        script.append("    echo \"Installed version: $INSTALLED_VER\"\n");
+        if (expectedBuildVersion != null) {
+            script.append("    if [[ \"$INSTALLED_VER\" != *\"" + expectedBuildVersion + "\"* ]]; then\n");
+            script.append("        echo \"WARNING: Expected build version "+ expectedBuildVersion +" not found in installed version\"\n");
+            script.append("    fi\n");
+        }
+        script.append("fi\n\n");
         
         script.append("# Run test\n");
         script.append("cd /home/cubrid-testcases-private-ex/").append(relativeTestDir).append("\n");
@@ -642,6 +704,16 @@ public class Tester {
             return body.toString();
         }
     }
+    
+    private class StreamReader extends Thread {
+        private final InputStream is;
+        private final String type;
+        private final StringBuilder output = new StringBuilder();
+        
+        public StreamReader(InputStream is, String type) {
+            this.is = is;
+            this.type = type;
+        }
         
         public String getOutput() {
             return output.toString();
@@ -662,6 +734,30 @@ public class Tester {
             } catch (IOException e) {
                 logger.warning("Error reading " + type + " stream: " + e.getMessage());
             }
+        }
+    }
+    
+    private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(statusCode, response.getBytes("UTF-8").length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(response.getBytes("UTF-8"));
+        }
+    }
+    
+    private void deleteDirectory(File dir) {
+        if (dir.exists()) {
+            File[] files = dir.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isDirectory()) {
+                        deleteDirectory(file);
+                    } else {
+                        file.delete();
+                    }
+                }
+            }
+            dir.delete();
         }
     }
     

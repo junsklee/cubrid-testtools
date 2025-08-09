@@ -43,6 +43,12 @@ public class Builder {
     }
     
     public void start() {
+        // Ensure work directory exists
+        File workDir = new File(config.getWorkDir());
+        if (!workDir.exists()) {
+            workDir.mkdirs();
+        }
+
         // Initialize Docker environment if enabled
         if (config.useDocker()) {
             try {
@@ -57,6 +63,7 @@ public class Builder {
         server.start();
         logger.info("Builder service started on port " + config.getListenPort());
         logger.info("CUBRID source: " + config.getCubridSrcDir());
+        logger.info("Work directory: " + config.getWorkDir());
         logger.info("Max concurrent builds: " + config.getMaxConcurrentBuilds());
         logger.info("Docker enabled: " + config.useDocker());
     }
@@ -233,6 +240,18 @@ public class Builder {
         }
     }
     
+    private void validateRequest(JSONObject request) throws IllegalArgumentException {
+        if (!request.has("commits") || request.getJSONArray("commits").length() == 0) {
+            throw new IllegalArgumentException("Request must contain non-empty 'commits' array");
+        }
+        if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
+            throw new IllegalArgumentException("Request must contain non-empty 'tests' array");
+        }
+        if (!request.has("workerIp") || request.getString("workerIp").trim().isEmpty()) {
+            throw new IllegalArgumentException("Request must contain non-empty 'workerIp'");
+        }
+    }
+    
     private void validateTesterReachability(String workerIp) throws Exception {
         logger.info("Checking tester reachability at " + workerIp + ":" + config.getTesterPort());
         
@@ -292,6 +311,14 @@ public class Builder {
             consoleHandler.setLevel(Level.INFO);
             consoleHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(consoleHandler);
+            // File handler for detailed logging
+            String logDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log";
+            new File(logDir).mkdirs();
+            FileHandler fileHandler = new FileHandler(logDir + "/builder.log", true);
+            fileHandler.setLevel(Level.ALL);
+            fileHandler.setFormatter(new SimpleFormatter());
+            rootLogger.addHandler(fileHandler);
+
             rootLogger.setLevel(Level.INFO);
             
             // Load configuration
