@@ -59,47 +59,48 @@ public class BuilderTask {
             // Build all commits concurrently
             Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType);
             
-            // Test all builds with bounded concurrency per commit
+            // Build a global queue of tests across all commits
+            List<Callable<JSONObject>> pendingTests = new ArrayList<>();
             for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
-                String commit = entry.getKey();
-                String buildPackage = entry.getValue();
-
+                final String commit = entry.getKey();
+                final String buildPackage = entry.getValue();
                 if (buildPackage == null || buildPackage.isEmpty()) {
                     for (int i = 0; i < tests.length(); i++) {
-                        JSONObject result = new JSONObject()
+                        results.add(new JSONObject()
                             .put("commit", commit)
                             .put("test", tests.getString(i))
                             .put("status", "build_failed")
-                            .put("message", "Build failed for commit " + commit);
-                        results.add(result);
+                            .put("message", "Build failed for commit " + commit));
                     }
                     continue;
                 }
-
-                int maxTests = Math.max(1, config.getMaxConcurrentTests());
-                ExecutorService testPool = Executors.newFixedThreadPool(Math.min(maxTests, Math.max(1, tests.length())));
-                List<Future<JSONObject>> testFutures = new ArrayList<>();
-
                 for (int i = 0; i < tests.length(); i++) {
                     final String raw = tests.getString(i);
                     final String testPath = raw.startsWith("shell/") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
-                    testFutures.add(testPool.submit(() -> runTest(commit, buildPackage, testPath, workerIp)));
+                    pendingTests.add(() -> runTest(commit, buildPackage, testPath, workerIp));
                 }
-
-                for (Future<JSONObject> f : testFutures) {
-                    try {
-                        results.add(f.get());
-                    } catch (Exception e) {
-                        logger.log(Level.WARNING, "Test execution threw", e);
-                        results.add(new JSONObject()
-                            .put("commit", commit)
-                            .put("test", "unknown")
-                            .put("status", "error")
-                            .put("message", e.getMessage()));
-                    }
-                }
-                testPool.shutdown();
             }
+
+            // Run tests with global bounded concurrency
+            int maxTests = Math.max(1, config.getMaxConcurrentTests());
+            ExecutorService testPool = Executors.newFixedThreadPool(maxTests);
+            List<Future<JSONObject>> futuresTests = new ArrayList<>();
+            for (Callable<JSONObject> ct : pendingTests) {
+                futuresTests.add(testPool.submit(ct));
+            }
+            for (Future<JSONObject> f : futuresTests) {
+                try {
+                    results.add(f.get());
+                } catch (Exception e) {
+                    logger.log(Level.WARNING, "Test execution threw", e);
+                    results.add(new JSONObject()
+                        .put("commit", "unknown")
+                        .put("test", "unknown")
+                        .put("status", "error")
+                        .put("message", e.getMessage()));
+                }
+            }
+            testPool.shutdown();
             
             // Send callback with results
             sendCallback(callbackUrl);
@@ -264,7 +265,7 @@ public class BuilderTask {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setDoOutput(true);
             conn.setConnectTimeout(5000);
-            conn.setReadTimeout(300000); // 5 min timeout for test
+            conn.setReadTimeout(1800000); // 30 min timeout to accommodate longer tests
             
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(testRequest.toString().getBytes());

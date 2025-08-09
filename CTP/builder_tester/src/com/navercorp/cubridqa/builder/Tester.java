@@ -105,6 +105,7 @@ public class Tester {
                 
                 // Send response
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
+                // Avoid broken pipe by writing a short JSON and closing promptly
                 sendResponse(exchange, 200, result.toString());
                 logger.info("Sent response: " + result.toString());
                 
