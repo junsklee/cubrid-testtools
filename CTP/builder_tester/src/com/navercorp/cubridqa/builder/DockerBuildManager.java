@@ -74,11 +74,26 @@ public class DockerBuildManager {
         }
         
         logger.info("Building CUBRID commit " + commitHash + " in Docker container");
+        final String commitShort = commitHash.substring(0, Math.min(commitHash.length(), 7));
         
         // Check for GitHub token
         String githubToken = System.getenv("GITHUB_TOKEN");
         if (githubToken == null || githubToken.trim().isEmpty()) {
             throw new IOException("GITHUB_TOKEN environment variable is not set");
+        }
+        
+        // Prepare host directories to avoid filling Docker overlay under /var
+        File hostRoot = new File(config.getDockerHostRoot());
+        if (!hostRoot.exists()) {
+            hostRoot.mkdirs();
+        }
+        File hostWorkDir = new File(hostRoot, "work");
+        if (!hostWorkDir.exists()) {
+            hostWorkDir.mkdirs();
+        }
+        File gradleCacheDir = new File(hostRoot, ".gradle");
+        if (!gradleCacheDir.exists()) {
+            gradleCacheDir.mkdirs();
         }
         
         // Create build script
@@ -95,6 +110,11 @@ public class DockerBuildManager {
         baseDockerCmd.add(config.getCubridSrcDir() + ":/cubrid-src:ro");
         baseDockerCmd.add("-v");
         baseDockerCmd.add(workDir.getAbsolutePath() + ":/output:rw");
+        // Bind host work and Gradle cache into the container
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(hostWorkDir.getAbsolutePath() + ":/work:rw");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(gradleCacheDir.getAbsolutePath() + ":/root/.gradle:rw");
         baseDockerCmd.add("-v");
         baseDockerCmd.add(buildScript.getAbsolutePath() + ":/build.sh:ro");
         baseDockerCmd.add("-e");
@@ -109,10 +129,14 @@ public class DockerBuildManager {
         
         int attempts = 0;
         IOException lastError = null;
+        // Prepare per-build log file
+        Path buildsLogDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "builds");
+        try { Files.createDirectories(buildsLogDir); } catch (Exception ignore) {}
+        Path perBuildLog = buildsLogDir.resolve("build_" + commitShort + "_" + System.currentTimeMillis() + ".log");
         while (attempts < 2) { // first attempt + 1 retry
             attempts++;
             List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
-            logger.info("Running Docker build (attempt " + attempts + "): " + String.join(" ", dockerCommand));
+            logger.info("Running Docker build [" + commitShort + "] (attempt " + attempts + "): " + String.join(" ", dockerCommand));
 
             ProcessBuilder pb = new ProcessBuilder(dockerCommand);
             pb.redirectErrorStream(true);
@@ -120,13 +144,18 @@ public class DockerBuildManager {
             
             // Capture output
             StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                 java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8)) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     output.append(line).append("\n");
-                    logger.info("DOCKER: " + line);
+                    logger.info("DOCKER[" + commitShort + "]: " + line);
+                    try {
+                        logWriter.write(line);
+                        logWriter.newLine();
+                    } catch (Exception ignore) {}
                 }
+                try { logWriter.flush(); } catch (Exception ignore) {}
             }
             
             int exitCode = process.waitFor();
@@ -134,8 +163,8 @@ public class DockerBuildManager {
                 lastError = null;
                 break;
             }
-            lastError = new IOException("Docker build failed with exit code: " + exitCode);
-            logger.warning("Docker build attempt " + attempts + " failed (exit=" + exitCode + ")." +
+            lastError = new IOException("Docker build failed with exit code: " + exitCode + " (log: " + perBuildLog.toString() + ")");
+            logger.warning("Docker build [" + commitShort + "] attempt " + attempts + " failed (exit=" + exitCode + ")." +
                            (attempts < 2 ? " Retrying..." : " No more retries."));
             try { Thread.sleep(5000); } catch (InterruptedException ignore) { }
         }
@@ -156,9 +185,16 @@ public class DockerBuildManager {
             writer.println("#!/bin/bash");
             writer.println("set -e");
             writer.println();
-            writer.println("# Copy source to working directory");
-            writer.println("cp -r /cubrid-src /tmp/cubrid-build");
-            writer.println("cd /tmp/cubrid-build");
+            writer.println("# Prepare working directory (prefer host-mounted /work if available), per-commit to avoid collisions");
+            writer.println("if [ -d /work ]; then");
+            writer.println("  target=/work/cubrid-build_${COMMIT_HASH:0:7}");
+            writer.println("else");
+            writer.println("  target=/tmp/cubrid-build_${COMMIT_HASH:0:7}");
+            writer.println("fi");
+            writer.println("rm -rf \"$target\"");
+            writer.println("mkdir -p \"$target\" ");
+            writer.println("cp -a /cubrid-src/. \"$target\"/");
+            writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Checkout specific commit");
             writer.println("git checkout ${COMMIT_HASH}");

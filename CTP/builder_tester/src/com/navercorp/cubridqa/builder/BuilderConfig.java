@@ -21,6 +21,7 @@ public class BuilderConfig {
     private static final String WORK_DIR = "work_dir";
     private static final String TESTER_PORT = "tester_port";
     private static final String MAX_CONCURRENT_BUILDS = "max_concurrent_builds";
+    private static final String MAX_CONCURRENT_TESTS = "max_concurrent_tests";
     private static final String USE_DOCKER = "use_docker";
     private static final String USE_PREBUILT_DOCKER_IMAGES = "use_prebuilt_docker_images";
     private static final String DOCKER_BUILD_IMAGE = "docker_build_image";
@@ -134,6 +135,10 @@ public class BuilderConfig {
     public int getMaxConcurrentBuilds() {
         return Integer.parseInt(properties.getProperty(MAX_CONCURRENT_BUILDS, "4"));
     }
+
+    public int getMaxConcurrentTests() {
+        return Integer.parseInt(properties.getProperty(MAX_CONCURRENT_TESTS, "4"));
+    }
     
     public boolean useDocker() {
         return Boolean.parseBoolean(properties.getProperty(USE_DOCKER, "true"));
@@ -159,6 +164,18 @@ public class BuilderConfig {
         return Integer.parseInt(properties.getProperty(BUILD_CACHE_SIZE, "20"));
     }
     
+    public boolean getKeepFailedContainers() {
+        return Boolean.parseBoolean(properties.getProperty("keep_failed_containers", "true"));
+    }
+
+    public int getBuildTimeoutMinutes() {
+        return Integer.parseInt(properties.getProperty("build_timeout_minutes", "180"));
+    }
+    
+    public String getDockerHostRoot() {
+        return properties.getProperty("docker_host_root", System.getProperty("user.home") + "/docker-work");
+    }
+    
     @Override
     public String toString() {
         return "BuilderConfig{" +
@@ -170,6 +187,7 @@ public class BuilderConfig {
                ", workDir='" + getWorkDir() + '\'' +
                ", testerPort=" + getTesterPort() +
                ", maxConcurrentBuilds=" + getMaxConcurrentBuilds() +
+               ", maxConcurrentTests=" + getMaxConcurrentTests() +
                ", useDocker=" + useDocker() +
                ", buildCacheSize=" + getBuildCacheSize() +
                '}';

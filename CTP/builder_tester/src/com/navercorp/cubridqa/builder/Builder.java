@@ -90,6 +90,13 @@ public class Builder {
             }
             
             try {
+                // Clean up stale containers from previous runs before starting new task
+                try {
+                    cleanupStaleContainers();
+                } catch (Exception cleanupEx) {
+                    logger.warning("Container cleanup skipped due to error: " + cleanupEx.getMessage());
+                }
+                
                 // Read request body
                 String requestBody = readRequestBody(exchange);
                 JSONObject request = new JSONObject(requestBody);
@@ -300,6 +307,54 @@ public class Builder {
             throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json");
         sendResponse(exchange, statusCode, response.toString());
+    }
+
+    // Remove containers left from prior runs. Per requirement, perform from Builder only.
+    private void cleanupStaleContainers() throws IOException, InterruptedException {
+        if (!DockerUtils.isDockerAvailable()) {
+            logger.info("Docker not available; skipping container cleanup");
+            return;
+        }
+        // 1) Remove tester debug containers kept alive from previous runs
+        removeByNamePrefix("tester_debug_");
+        // 2) Prune exited containers for our known images (safe)
+        removeExitedByAncestor(config.getDockerBuildImage());
+        removeExitedByAncestor(config.getDockerTestImage());
+    }
+
+    private void removeByNamePrefix(String prefix) throws IOException, InterruptedException {
+        String listCmd = "docker ps -aq --filter name=" + prefix;
+        List<String> ids = readCommandOutput(new String[]{"bash", "-lc", listCmd});
+        if (!ids.isEmpty()) {
+            logger.info("Removing stale tester containers by name prefix '" + prefix + "': " + String.join(",", ids));
+            List<String> cmd = new ArrayList<>();
+            cmd.add("bash"); cmd.add("-lc");
+            cmd.add("docker rm -f " + String.join(" ", ids));
+            new ProcessBuilder(cmd).inheritIO().start().waitFor();
+        }
+    }
+
+    private void removeExitedByAncestor(String image) throws IOException, InterruptedException {
+        if (image == null || image.trim().isEmpty()) return;
+        String listCmd = "docker ps -aq --filter status=exited --filter ancestor=" + image;
+        List<String> ids = readCommandOutput(new String[]{"bash", "-lc", listCmd});
+        if (!ids.isEmpty()) {
+            logger.info("Pruning exited containers for image '" + image + "': " + String.join(",", ids));
+            List<String> cmd = new ArrayList<>();
+            cmd.add("bash"); cmd.add("-lc");
+            cmd.add("docker rm " + String.join(" ", ids));
+            new ProcessBuilder(cmd).inheritIO().start().waitFor();
+        }
+    }
+
+    private List<String> readCommandOutput(String[] cmd) throws IOException, InterruptedException {
+        Process p = new ProcessBuilder(cmd).start();
+        List<String> lines = new ArrayList<>();
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            String line; while ((line = r.readLine()) != null) { if (!line.trim().isEmpty()) lines.add(line.trim()); }
+        }
+        p.waitFor();
+        return lines;
     }
     
     public static void main(String[] args) {

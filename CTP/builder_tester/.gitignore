@@ -1,0 +1,45 @@
+# Build artifacts
+/build/
+/out/
+*.class
+
+# Generated JARs (keep third-party json.jar)
+/lib/builder-tester.jar
+
+# Logs and runtime outputs
+/log/
+*.log
+*.log.*
+*.out
+*.err
+*.tmp
+*.temp
+
+# PID files
+*.pid
+/bin/*.pid
+
+# Bin runtime logs
+/bin/*.log
+
+# Editor/IDE settings
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+
+# OS/filesystem noise
+.DS_Store
+Thumbs.db
+
+# Swap/backup files
+*~
+*.swp
+*.swo
+*.orig
+*.rej
+
+# Misc
+*.bak
+*.cache

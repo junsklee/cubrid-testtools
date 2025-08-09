@@ -152,7 +152,7 @@ public class Tester {
     private JSONObject runTest(JSONObject request) throws Exception {
         Path workDir = Files.createTempDirectory(Paths.get(config.getWorkDir()), "test_");
         logger.info("Working directory: " + workDir);
-        
+        boolean keepAliveRequested = request.optBoolean("keepAlive", config.getKeepFailedContainers());
         try {
             // Check if we should use Docker for test execution
             if (useDocker && dockerManager != null && DockerUtils.isDockerAvailable()) {
@@ -162,8 +162,16 @@ public class Tester {
                 return runTestDirectly(request, workDir);
             }
         } finally {
-            // Cleanup
-            deleteDirectory(workDir.toFile());
+            // Cleanup unless keep-alive requested or a keep marker is present
+            try {
+                if (!keepAliveRequested && !Files.exists(workDir.resolve("KEEP_WORKSPACE"))) {
+                    deleteDirectory(workDir.toFile());
+                } else {
+                    logger.info("Preserving workDir for debugging: " + workDir);
+                }
+            } catch (Exception ignore) {
+                // best effort
+            }
         }
     }
     
@@ -175,6 +183,8 @@ public class Tester {
         String testScript = request.getString("testScript");
         String testName = request.getString("testName");
         String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+        boolean keepAlive = request.optBoolean("keepAlive", config.getKeepFailedContainers());
+        String containerName = request.optString("containerName", "tester_debug_" + testName.replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis());
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         
@@ -192,6 +202,14 @@ public class Tester {
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());
         dockerScriptPath.toFile().setExecutable(true);
+        try {
+            Path logsDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "tests");
+            Files.createDirectories(logsDir);
+            String safeTestNameForScript = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+            Path scriptLogPath = logsDir.resolve("docker_script_" + safeTestNameForScript + "_" + System.currentTimeMillis() + ".sh");
+            Files.write(scriptLogPath, dockerScript.getBytes("UTF-8"));
+            logger.info("Saved generated Docker test script to: " + scriptLogPath.toString());
+        } catch (Exception ignore) { }
         
         // Check for GitHub token
         String githubToken = System.getenv("GITHUB_TOKEN");
@@ -207,13 +225,20 @@ public class Tester {
         List<String> dockerCommand = new ArrayList<>();
         dockerCommand.add("docker");
         dockerCommand.add("run");
-        dockerCommand.add("--rm");
+        if (keepAlive) {
+            dockerCommand.add("-d");
+            dockerCommand.add("--name");
+            dockerCommand.add(containerName);
+        } else {
+            dockerCommand.add("--rm");
+        }
         dockerCommand.add("-v");
-        dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
+        dockerCommand.add(dockerWorkDir.toString() + ":/workspace:z");
         dockerCommand.add("-v");
-        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools");
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:z");
         dockerCommand.add("-v");
-        dockerCommand.add(config.getShellTcDir() + ":/home/cubrid-testcases-private-ex:ro");
+        // Mount testcases read-write to allow tests that write result artifacts
+        dockerCommand.add(config.getShellTcDir() + ":/home/cubrid-testcases-private-ex:z");
         dockerCommand.add("-e");
         dockerCommand.add("GITHUB_TOKEN=" + githubToken);
         dockerCommand.add("-e");
@@ -222,10 +247,19 @@ public class Tester {
         dockerCommand.add("init_path=/home/cubrid-testtools/CTP/shell/init_path");
         dockerCommand.add("-w");
         dockerCommand.add("/workspace");
-        dockerCommand.add(config.getDockerTestImage());
-        dockerCommand.add("test"); // Use 'test' role for tester image
-        dockerCommand.add("bash");
-        dockerCommand.add("/workspace/run_test.sh");
+        if (keepAlive) {
+            dockerCommand.add("--entrypoint");
+            dockerCommand.add("bash");
+            dockerCommand.add(config.getDockerTestImage());
+            dockerCommand.add("-lc");
+            dockerCommand.add("/workspace/run_test.sh; echo READY; tail -f /dev/null");
+        } else {
+            dockerCommand.add("--entrypoint");
+            dockerCommand.add("bash");
+            dockerCommand.add(config.getDockerTestImage());
+            dockerCommand.add("-lc");
+            dockerCommand.add("/workspace/run_test.sh");
+        }
         
         logger.info("Executing Docker command: " + String.join(" ", dockerCommand));
         
@@ -233,9 +267,28 @@ public class Tester {
         pb.redirectErrorStream(true);
         Process process = pb.start();
         
+        if (keepAlive) {
+            try { Files.createFile(workDir.resolve("KEEP_WORKSPACE")); } catch (Exception ignore) {}
+            // For detached container, read quick output then return handle for exec
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                StringBuilder out = new StringBuilder();
+                while ((line = br.readLine()) != null) {
+                    out.append(line).append('\n');
+                }
+                logger.info("Started debug container: " + containerName);
+            } catch (Exception ignore) {}
+            String execCmd = "docker exec -it " + containerName + " bash";
+            return new JSONObject()
+                .put("status", "started")
+                .put("test", testName)
+                .put("containerName", containerName)
+                .put("execCommand", execCmd)
+                .put("workspace", dockerWorkDir.toString());
+        }
+        
         StreamReader outputGobbler = new StreamReader(process.getInputStream(), "DOCKER");
         outputGobbler.start();
-        
         boolean completed = process.waitFor(30, TimeUnit.MINUTES);
         if (!completed) {
             process.destroyForcibly();
@@ -245,37 +298,76 @@ public class Tester {
                 .put("message", "Docker test timeout after 30 minutes")
                 .put("test", testName);
         }
-        
         int exitCode = process.exitValue();
         outputGobbler.join(2000);
         String dockerOutput = outputGobbler.getOutput();
-        
         logger.info("Docker test completed with exit code: " + exitCode);
-        
-        // Check for result file
-        Path resultFile = dockerWorkDir.resolve("nok.result");
-        if (Files.exists(resultFile)) {
-            String resultContent = new String(Files.readAllBytes(resultFile));
-            logger.info("Test result: " + resultContent.trim());
-            
-            if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
-                return new JSONObject()
-                    .put("status", TestStatus.FAIL.getValue())
-                    .put("test", testName)
-                    .put("execution_mode", "docker");
-            } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
-                return new JSONObject()
-                    .put("status", TestStatus.PASS.getValue())
-                    .put("test", testName)
-                    .put("execution_mode", "docker");
-            }
+
+        // Persist full docker output for diagnostics
+        try {
+            Path logsDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "tests");
+            Files.createDirectories(logsDir);
+            String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+            Path logFile = logsDir.resolve("docker_" + safeTestName + "_" + System.currentTimeMillis() + ".log");
+            Files.write(logFile, dockerOutput.getBytes("UTF-8"));
+            logger.info("Saved full docker test log to: " + logFile.toString());
+        } catch (Exception ignore) {
+            // Swallow logging persistence issues; primary result below still returned
         }
+ 
+         // Check for result file derived from testScript base name
+         String resultBaseFromScript = testScript.endsWith(".sh")
+             ? testScript.substring(0, testScript.length() - 3)
+             : (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
+         Path namedResult = dockerWorkDir.resolve(resultBaseFromScript + ".result");
+         if (Files.exists(namedResult)) {
+             String resultContent = new String(Files.readAllBytes(namedResult));
+             logger.info("Test result file (" + namedResult.getFileName() + "): " + resultContent.trim());
+             if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
+                 return new JSONObject()
+                     .put("status", TestStatus.FAIL.getValue())
+                     .put("test", testName)
+                     .put("execution_mode", "docker");
+             } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
+                 return new JSONObject()
+                     .put("status", TestStatus.PASS.getValue())
+                     .put("test", testName)
+                     .put("execution_mode", "docker");
+             }
+         }
         
         // Check for Docker-specific errors
         if (exitCode != 0) {
             if (dockerOutput.contains("docker: command not found")) {
                 logger.warning("Docker not available, falling back to direct execution");
                 return runTestDirectly(request, workDir);
+            }
+            // Keep container on failure if configured: rerun in detached mode for debugging
+            if (config.getKeepFailedContainers()) {
+                try { Files.createFile(workDir.resolve("KEEP_WORKSPACE")); } catch (Exception ignore) {}
+                List<String> keepCmd = new ArrayList<>();
+                keepCmd.add("docker"); keepCmd.add("run"); keepCmd.add("-d");
+                keepCmd.add("--name"); keepCmd.add(containerName);
+                keepCmd.add("-v"); keepCmd.add(dockerWorkDir.toString() + ":/workspace:z");
+                keepCmd.add("-v"); keepCmd.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:z");
+                 keepCmd.add("-v"); keepCmd.add(config.getShellTcDir() + ":/home/cubrid-testcases-private-ex:z");
+                keepCmd.add("-e"); keepCmd.add("GITHUB_TOKEN=" + githubToken);
+                keepCmd.add("-e"); keepCmd.add("CTP_HOME=/home/cubrid-testtools/CTP");
+                keepCmd.add("-e"); keepCmd.add("init_path=/home/cubrid-testtools/CTP/shell/init_path");
+                keepCmd.add("-w"); keepCmd.add("/workspace");
+                keepCmd.add("--entrypoint"); keepCmd.add("bash");
+                keepCmd.add(config.getDockerTestImage());
+                keepCmd.add("-lc"); keepCmd.add("echo READY; tail -f /dev/null");
+                try { new ProcessBuilder(keepCmd).start().waitFor(5, TimeUnit.SECONDS); } catch (Exception ignore) {}
+                logger.info("Failure container kept for debugging: " + containerName);
+                String execCmd = "docker exec -it " + containerName + " bash";
+                return new JSONObject()
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", "Docker test execution failed; container kept for debugging")
+                    .put("test", testName)
+                    .put("containerName", containerName)
+                    .put("execCommand", execCmd)
+                    .put("workspace", dockerWorkDir.toString());
             }
             
             return new JSONObject()
@@ -338,13 +430,12 @@ public class Tester {
         }
         
         // Run the test
-        String resultFile = "nok.result";
+        String resultBaseFromScript = testScript.endsWith(".sh")
+            ? testScript.substring(0, testScript.length() - 3)
+            : (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
+        File namedResultFileObj = new File(testDir, resultBaseFromScript + ".result");
         logger.info("Running test: " + testScript);
-        
-        File resultFileObj = new File(testDir, resultFile);
-        if (resultFileObj.exists()) {
-            resultFileObj.delete();
-        }
+        if (namedResultFileObj.exists()) namedResultFileObj.delete();
         
         // Create wrapper script
         String wrapperScript = createTestWrapperScript(testDir, testScript, testName, ctpHome);
@@ -394,19 +485,14 @@ public class Tester {
                 .put("exit_code", exitCode);
         }
         
-        // Check result file
-        if (resultFileObj.exists()) {
-            String resultContent = new String(Files.readAllBytes(resultFileObj.toPath()));
-            logger.info("Result: " + resultContent.trim());
-            
+        // Check named result first then nok.result
+        if (namedResultFileObj.exists()) {
+            String resultContent = new String(Files.readAllBytes(namedResultFileObj.toPath()));
+            logger.info("Named Result (" + resultBaseFromScript + ".result): " + resultContent.trim());
             if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
-                return new JSONObject()
-                    .put("status", TestStatus.FAIL.getValue())
-                    .put("test", testName);
+                return new JSONObject().put("status", TestStatus.FAIL.getValue()).put("test", testName);
             } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
-                return new JSONObject()
-                    .put("status", TestStatus.PASS.getValue())
-                    .put("test", testName);
+                return new JSONObject().put("status", TestStatus.PASS.getValue()).put("test", testName);
             }
         }
         
@@ -587,26 +673,9 @@ public class Tester {
         script.append("    source \"$CTP_HOME/shell/init_path/init.sh\"\n");
         script.append("fi\n\n");
         
-        script.append("# Helper functions\n");
-        script.append("write_ok() {\n");
-        script.append("    echo \"OK\" > nok.result\n");
-        script.append("}\n\n");
-        script.append("write_nok() {\n");
-        script.append("    echo \"NOK\" > nok.result\n");
-        script.append("}\n\n");
-        
         script.append("# Execute test\n");
         script.append("bash \"").append(testScript).append("\"\n");
         script.append("TEST_EXIT_CODE=$?\n\n");
-        
-        script.append("# Ensure result file exists\n");
-        script.append("if [ ! -f \"nok.result\" ]; then\n");
-        script.append("    if [ $TEST_EXIT_CODE -eq 0 ]; then\n");
-        script.append("        write_ok\n");
-        script.append("    else\n");
-        script.append("        write_nok\n");
-        script.append("    fi\n");
-        script.append("fi\n\n");
         
         script.append("exit $TEST_EXIT_CODE\n");
         
@@ -614,84 +683,109 @@ public class Tester {
     }
     
     private String createDockerTestScript(String testScript, String testName, 
-                                         String expectedBuildVersion, String relativeTestDir) {
-        StringBuilder script = new StringBuilder();
-        script.append("#!/bin/bash\n");
-        script.append("set -e\n\n");
-        
-        script.append("# Extract CUBRID build\n");
-        script.append("echo \"Extracting CUBRID build...\"\n");
-        script.append("mkdir -p /tmp/cubrid_install\n");
-        script.append("cd /tmp/cubrid_install\n");
-        script.append("tar -xzf /workspace/build.tar.gz\n");
-        script.append("CUBRID_ROOT=$(find /tmp/cubrid_install -name \"bin\" -type d | head -1 | xargs dirname)\n");
-        script.append("if [ -z \"$CUBRID_ROOT\" ]; then\n");
-        script.append("    echo \"ERROR: Could not find CUBRID installation\"\n");
-        script.append("    exit 1\n");
-        script.append("fi\n\n");
-        
-        script.append("# Run setup.sh to configure CUBRID if available\n");
-        script.append("if [ -f \"$CUBRID_ROOT/share/scripts/setup.sh\" ]; then\n");
-        script.append("    echo \"Running setup.sh...\"\n");
-        script.append("    cd \"$CUBRID_ROOT\"\n");
-        script.append("    sh share/scripts/setup.sh \"$CUBRID_ROOT\"\n");
-        script.append("    cd -\n");
-        script.append("elif [ -f \"$CUBRID_ROOT/setup.sh\" ]; then\n");
-        script.append("    echo \"Running setup.sh...\"\n");
-        script.append("    cd \"$CUBRID_ROOT\"\n");
-        script.append("    sh setup.sh \"$CUBRID_ROOT\"\n");
-        script.append("    cd -\n");
-        script.append("fi\n\n");
+                                           String expectedBuildVersion, String relativeTestDir) {
+         StringBuilder script = new StringBuilder();
+         script.append("#!/bin/bash\n");
+         script.append("set -e\n");
+         script.append("set -x\n\n");
+         
+         script.append("# Extract CUBRID build\n");
+         script.append("echo \"Extracting CUBRID build...\"\n");
+         script.append("mkdir -p /tmp/cubrid_install\n");
+         script.append("cd /tmp/cubrid_install\n");
+         script.append("tar -xzf /workspace/build.tar.gz\n");
+         script.append("# Prefer packaged install layout\n");
+         script.append("if [ -d /tmp/cubrid_install/_install/CUBRID ]; then\n");
+         script.append("  CUBRID_ROOT=/tmp/cubrid_install/_install/CUBRID\n");
+         script.append("else\n");
+         script.append("  CUBRID_ROOT=$(find /tmp/cubrid_install -name \"bin\" -type d | head -1 | xargs dirname)\n");
+         script.append("fi\n");
+         script.append("if [ -z \"$CUBRID_ROOT\" ]; then\n");
+         script.append("    echo \"ERROR: Could not find CUBRID installation\"\n");
+         script.append("    exit 1\n");
+         script.append("fi\n\n");
+         
+         script.append("# Run setup.sh to configure CUBRID if available (non-interactive)\n");
+         script.append("if [ -f \"$CUBRID_ROOT/share/scripts/setup.sh\" ]; then\n");
+         script.append("    echo \"Running setup.sh...\"\n");
+         script.append("    cd \"$CUBRID_ROOT\"\n");
+         script.append("    yes | sh share/scripts/setup.sh \"$CUBRID_ROOT\" || true\n");
+         script.append("    cd -\n");
+         script.append("elif [ -f \"$CUBRID_ROOT/setup.sh\" ]; then\n");
+         script.append("    echo \"Running setup.sh...\"\n");
+         script.append("    cd \"$CUBRID_ROOT\"\n");
+         script.append("    yes | sh setup.sh \"$CUBRID_ROOT\" || true\n");
+         script.append("    cd -\n");
+         script.append("fi\n\n");
+ 
+         script.append("# Set up CUBRID environment\n");
+         script.append("# Source default env if created by setup\n");
+         script.append("if [ -f /root/.cubrid.sh ]; then\n");
+         script.append("  . /root/.cubrid.sh\n");
+         script.append("fi\n");
+         script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
+         script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
+         script.append("export PATH=\"$CUBRID_ROOT/bin:$PATH\"\n");
+         script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:$LD_LIBRARY_PATH\"\n");
+         script.append("export CUBRID_LANG=\"en_US\"\n");
+         script.append("export CUBRID_CHARSET=\"en_US\"\n\n");
 
-        script.append("# Set up CUBRID environment\n");
-        script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
-        script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
-        script.append("export PATH=\"$CUBRID_ROOT/bin:$PATH\"\n");
-        script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$LD_LIBRARY_PATH\"\n");
-        script.append("export CUBRID_LANG=\"en_US\"\n");
-        script.append("export CUBRID_CHARSET=\"en_US\"\n\n");
-        
-        script.append("# Verify installation\n");
-        script.append("echo \"Verifying CUBRID installation...\"\n");
-        script.append("if ! cubrid_rel; then\n");
-        script.append("    echo \"ERROR: CUBRID verification failed\"\n");
-        script.append("    exit 1\n");
-        script.append("fi\n\n");
-        
-        script.append("mkdir -p \"$CUBRID_DATABASES\"\n\n");
-
-        // If expected build version provided, verify
-        script.append("# Verify expected build version if provided\n");
-        script.append("if [ -n \"" + (expectedBuildVersion != null ? expectedBuildVersion : "") + "\" ]; then\n");
-        script.append("    INSTALLED_VER=$(cubrid_rel 2>/dev/null | head -1)\n");
-        script.append("    echo \"Installed version: $INSTALLED_VER\"\n");
-        if (expectedBuildVersion != null) {
-            script.append("    if [[ \"$INSTALLED_VER\" != *\"" + expectedBuildVersion + "\"* ]]; then\n");
-            script.append("        echo \"WARNING: Expected build version "+ expectedBuildVersion +" not found in installed version\"\n");
-            script.append("    fi\n");
-        }
-        script.append("fi\n\n");
-        
-        script.append("# Run test\n");
-        script.append("cd /home/cubrid-testcases-private-ex/").append(relativeTestDir).append("\n");
-        script.append("bash ").append(testScript).append("\n");
-        script.append("TEST_EXIT=$?\n\n");
-        
-        script.append("# Copy result\n");
-        script.append("if [ -f \"nok.result\" ]; then\n");
-        script.append("    cp nok.result /workspace/\n");
-        script.append("else\n");
-        script.append("    if [ $TEST_EXIT -eq 0 ]; then\n");
-        script.append("        echo \"OK\" > /workspace/nok.result\n");
-        script.append("    else\n");
-        script.append("        echo \"NOK\" > /workspace/nok.result\n");
-        script.append("    fi\n");
-        script.append("fi\n\n");
-        
-        script.append("exit $TEST_EXIT\n");
-        
-        return script.toString();
-    }
+         script.append("# Emit debug env snapshot for docker exec sessions\n");
+         script.append("cat > /workspace/debug_env.sh <<'EOS'\n");
+         script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
+         script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
+         script.append("export PATH=\"$CUBRID_ROOT/bin:$PATH\"\n");
+         script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:$LD_LIBRARY_PATH\"\n");
+         script.append("export CTP_HOME=\"/home/cubrid-testtools/CTP\"\n");
+         script.append("export init_path=\"/home/cubrid-testtools/CTP/shell/init_path\"\n");
+         script.append("EOS\n");
+         script.append("chmod +x /workspace/debug_env.sh\n\n");
+         
+         script.append("# Verify installation\n");
+         script.append("echo \"Verifying CUBRID installation...\"\n");
+         script.append("if ! cubrid_rel; then\n");
+         script.append("    echo \"ERROR: CUBRID verification failed\"\n");
+         script.append("    exit 1\n");
+         script.append("fi\n\n");
+         
+         script.append("mkdir -p \"$CUBRID_DATABASES\"\n\n");
+ 
+         // If expected build version provided, verify
+         script.append("# Verify expected build version if provided\n");
+         script.append("if [ -n \"");
+         script.append(expectedBuildVersion != null ? expectedBuildVersion : "");
+         script.append("\" ]; then\n");
+         script.append("    INSTALLED_VER=$(cubrid_rel 2>/dev/null | head -1)\n");
+         script.append("    echo \"Installed version: $INSTALLED_VER\"\n");
+         if (expectedBuildVersion != null) {
+             script.append("    if [[ \"$INSTALLED_VER\" != *\"");
+             script.append(expectedBuildVersion);
+             script.append("\"* ]]; then\n");
+             script.append("        echo \"WARNING: Expected build version ");
+             script.append(expectedBuildVersion);
+             script.append(" not found in installed version\"\n");
+             script.append("    fi\n");
+         }
+         script.append("fi\n\n");
+         
+         script.append("# Run test\n");
+         script.append("cd /home/cubrid-testcases-private-ex/").append(relativeTestDir).append("\n");
+         script.append("bash ").append(testScript).append("\n");
+         script.append("TEST_EXIT=$?\n\n");
+         
+         // Determine result base name from test script (strip .sh)
+         String resultBase = testScript.endsWith(".sh") ? 
+             testScript.substring(0, testScript.length() - 3) :
+             (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
+         script.append("# Copy result file if generated by test\n");
+         script.append("if [ -f \"" + resultBase + ".result\" ]; then\n");
+         script.append("    cp \"" + resultBase + ".result\" /workspace/\n");
+         script.append("fi\n\n");
+         
+         script.append("exit $TEST_EXIT\n");
+         
+         return script.toString();
+     }
     
     private String readRequestBody(HttpExchange exchange) throws IOException {
         try (BufferedReader reader = new BufferedReader(

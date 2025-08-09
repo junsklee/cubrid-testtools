@@ -3,13 +3,13 @@
 # Test Client for Builder-Tester System
 
 # Configuration
-BUILDER_URL="http://localhost:8089"
-CALLBACK_URL="http://localhost:8888/callback"  # Your callback endpoint
-WORKER_IP="localhost"  # Where tester is running
+BUILDER_URL="http://192.168.1.5:8089"
+CALLBACK_URL="http://192.168.1.5:8888/callback"  # Your callback endpoint
+WORKER_IP="192.168.1.5"  # Where tester is running
 
 # Test data
-COMMITS='["abc123", "def456", "ghi789"]'  # Replace with real commit hashes
-TESTS='["sql/_01_object/_09_partition/update/cases/1001.sh"]'  # Replace with real test paths
+COMMITS='["0d7296a", "dd32812", "6ea587e", "228cd61"]'  # Replace with real commit hashes
+TESTS='["shell/_01_utility/_38_csql/csql_hist/cases/csql_hist.sh", "shell/_01_utility/_38_csql/csql_hist_01/cases/csql_hist_01.sh", "shell/_06_issues/_12_2h/bug_bts_9521_1/cases/bug_bts_9521_1.sh"]'
 
 # Create request JSON
 REQUEST_JSON=$(cat <<EOF

@@ -59,13 +59,12 @@ public class BuilderTask {
             // Build all commits concurrently
             Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType);
             
-            // Test all builds
+            // Test all builds with bounded concurrency per commit
             for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
                 String commit = entry.getKey();
                 String buildPackage = entry.getValue();
-                
+
                 if (buildPackage == null || buildPackage.isEmpty()) {
-                    // Build failed
                     for (int i = 0; i < tests.length(); i++) {
                         JSONObject result = new JSONObject()
                             .put("commit", commit)
@@ -76,13 +75,30 @@ public class BuilderTask {
                     }
                     continue;
                 }
-                
-                // Test this build with all tests
+
+                int maxTests = Math.max(1, config.getMaxConcurrentTests());
+                ExecutorService testPool = Executors.newFixedThreadPool(Math.min(maxTests, Math.max(1, tests.length())));
+                List<Future<JSONObject>> testFutures = new ArrayList<>();
+
                 for (int i = 0; i < tests.length(); i++) {
-                    String testPath = tests.getString(i);
-                    JSONObject testResult = runTest(commit, buildPackage, testPath, workerIp);
-                    results.add(testResult);
+                    final String raw = tests.getString(i);
+                    final String testPath = raw.startsWith("shell/") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+                    testFutures.add(testPool.submit(() -> runTest(commit, buildPackage, testPath, workerIp)));
                 }
+
+                for (Future<JSONObject> f : testFutures) {
+                    try {
+                        results.add(f.get());
+                    } catch (Exception e) {
+                        logger.log(Level.WARNING, "Test execution threw", e);
+                        results.add(new JSONObject()
+                            .put("commit", commit)
+                            .put("test", "unknown")
+                            .put("status", "error")
+                            .put("message", e.getMessage()));
+                    }
+                }
+                testPool.shutdown();
             }
             
             // Send callback with results
@@ -157,12 +173,13 @@ public class BuilderTask {
             futures.add(future);
         }
         
-        // Wait for all builds to complete
+        // Wait for all builds to complete with configurable timeout
+        long timeoutMinutes = config.getBuildTimeoutMinutes();
         for (Future<Void> future : futures) {
             try {
-                future.get(30, TimeUnit.MINUTES); // 30 min timeout per build
+                future.get(timeoutMinutes, TimeUnit.MINUTES);
             } catch (TimeoutException e) {
-                logger.severe("Build timeout");
+                logger.severe("Build timeout after " + timeoutMinutes + " minutes");
                 future.cancel(true);
             }
         }
@@ -224,8 +241,22 @@ public class BuilderTask {
                 .put("testDir", testDir)
                 .put("testScript", testScript)
                 .put("testName", testName)
-                .put("expectedBuildVersion", commit.substring(0, 7));
+                .put("expectedBuildVersion", commit.substring(0, 7))
+                .put("keepAlive", false);
             
+            // Persist test request for diagnostics
+            try {
+                java.nio.file.Path logsDir = java.nio.file.Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "test_requests");
+                java.nio.file.Files.createDirectories(logsDir);
+                String safeTest = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                String safeCommit = commit.substring(0, Math.min(commit.length(), 7));
+                java.nio.file.Path reqFile = logsDir.resolve("testreq_" + safeCommit + "_" + safeTest + "_" + System.currentTimeMillis() + ".json");
+                java.nio.file.Files.write(reqFile, testRequest.toString(2).getBytes("UTF-8"));
+                // overwrite last_test_request.json shortcut
+                java.nio.file.Path lastReq = java.nio.file.Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "last_test_request.json");
+                java.nio.file.Files.write(lastReq, testRequest.toString(2).getBytes("UTF-8"));
+            } catch (Exception ignore) { }
+
             // Send HTTP request to tester
             URL url = new URL("http://" + workerIp + ":" + config.getTesterPort() + "/test");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
