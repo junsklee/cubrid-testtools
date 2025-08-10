@@ -6,6 +6,7 @@ package com.navercorp.cubridqa.builder;
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
+import java.nio.file.attribute.*;
 import java.util.*;
 import java.util.logging.*;
 import java.util.concurrent.*;
@@ -17,6 +18,11 @@ import org.json.JSONObject;
  * 
  * This service runs on test nodes and executes shell tests with provided CUBRID builds.
  * It extracts the build, sets up the environment, runs the test, and returns pass/fail status.
+ * 
+ * Concurrent Test Execution:
+ * - Each test runs in an isolated Docker container with its own workspace
+ * - Test case directories are copied to prevent shared volume conflicts
+ * - Database operations are isolated per container
  */
 public class Tester {
     private static final Logger logger = Logger.getLogger(Tester.class.getName());
@@ -198,13 +204,15 @@ public class Tester {
         Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
         Files.copy(Paths.get(buildPackage), dockerBuildPackage);
         
-        // Create test execution script for Docker
-        String baseTestDir = config.getShellTcDir();
-        String relativeTestDir = testDir.startsWith(baseTestDir) ? 
-            testDir.substring(baseTestDir.length()).replaceFirst("^/", "") : testDir;
+        // Copy test case directory to isolated workspace
+        Path testCasesDir = dockerWorkDir.resolve("testcases");
+        Files.createDirectories(testCasesDir);
+        copyTestCaseDirectory(Paths.get(testDir), testCasesDir);
+        logger.info("Copied test case directory to isolated workspace: " + testCasesDir);
         
+        // Create test execution script for Docker (now using isolated testcases dir)
         String dockerScript = createDockerTestScript(testScript, testName, 
-                                                     expectedBuildVersion, relativeTestDir);
+                                                     expectedBuildVersion, "");
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());
         dockerScriptPath.toFile().setExecutable(true);
@@ -239,12 +247,10 @@ public class Tester {
             dockerCommand.add("--rm");
         }
         dockerCommand.add("-v");
-        dockerCommand.add(dockerWorkDir.toString() + ":/workspace:z");
+        dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
-        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:z");
-        dockerCommand.add("-v");
-        // Mount testcases read-write to allow tests that write result artifacts
-        dockerCommand.add(config.getShellTcDir() + ":/home/cubrid-testcases-private-ex:z");
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:ro");
+        // No longer mounting the entire testcases directory - using isolated copy instead
         dockerCommand.add("-e");
         dockerCommand.add("GITHUB_TOKEN=" + githubToken);
         dockerCommand.add("-e");
@@ -354,9 +360,8 @@ public class Tester {
                 List<String> keepCmd = new ArrayList<>();
                 keepCmd.add("docker"); keepCmd.add("run"); keepCmd.add("-d");
                 keepCmd.add("--name"); keepCmd.add(containerName);
-                keepCmd.add("-v"); keepCmd.add(dockerWorkDir.toString() + ":/workspace:z");
-                keepCmd.add("-v"); keepCmd.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:z");
-                 keepCmd.add("-v"); keepCmd.add(config.getShellTcDir() + ":/home/cubrid-testcases-private-ex:z");
+                keepCmd.add("-v"); keepCmd.add(dockerWorkDir.toString() + ":/workspace");
+                keepCmd.add("-v"); keepCmd.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:ro");
                 keepCmd.add("-e"); keepCmd.add("GITHUB_TOKEN=" + githubToken);
                 keepCmd.add("-e"); keepCmd.add("CTP_HOME=/home/cubrid-testtools/CTP");
                 keepCmd.add("-e"); keepCmd.add("init_path=/home/cubrid-testtools/CTP/shell/init_path");
@@ -781,7 +786,7 @@ public class Tester {
          script.append("fi\n\n");
          
          script.append("# Run test\n");
-         script.append("cd /home/cubrid-testcases-private-ex/").append(relativeTestDir).append("\n");
+         script.append("cd /workspace/testcases\n");
          script.append("bash ").append(testScript).append("\n");
          script.append("TEST_EXIT=$?\n\n");
          
@@ -849,6 +854,24 @@ public class Tester {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(response.getBytes("UTF-8"));
         }
+    }
+    
+    private void copyTestCaseDirectory(Path source, Path target) throws IOException {
+        Files.walk(source)
+            .forEach(sourcePath -> {
+                try {
+                    Path targetPath = target.resolve(source.relativize(sourcePath));
+                    if (Files.isDirectory(sourcePath)) {
+                        if (!Files.exists(targetPath)) {
+                            Files.createDirectories(targetPath);
+                        }
+                    } else {
+                        Files.copy(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } catch (IOException e) {
+                    logger.warning("Failed to copy: " + sourcePath + " - " + e.getMessage());
+                }
+            });
     }
     
     private void deleteDirectory(File dir) {
