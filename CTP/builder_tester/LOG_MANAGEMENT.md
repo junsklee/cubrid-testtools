@@ -48,7 +48,7 @@ This document describes the comprehensive design of the logging system for the B
 └── .metadata.json                # Track request history for cleanup
 ```
 
-### 3. Configuration Setttings
+### 3. Configuration Settings
 
 #### builder.conf
 ```properties

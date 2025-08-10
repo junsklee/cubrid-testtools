@@ -96,8 +96,10 @@ Keep-alive (debug) run:
 
 ## Logs
 
-- `~/cubrid-testtools/CTP/builder_tester/log/{builder.log,tester.log,builds,tests}`
-- `bin/builder_output.log` and `bin/tester_output.log`
+- System logs: `~/cubrid-testtools/CTP/builder_tester/log/system/{builder.log,tester.log}`
+- Request logs: `~/cubrid-testtools/CTP/builder_tester/log/requests/req_*/{builder.log,builds/,tests/}`
+- Metadata: `~/cubrid-testtools/CTP/builder_tester/log/.metadata.json`
+- Service stdout: `bin/builder_output.log`, `bin/tester_output.log`
 
 ## Troubleshooting
 

@@ -8,6 +8,7 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
 - docs/architecture/README.md – Components and flow
 - docs/usage/README.md – Setup and usage, CLI and APIs
 - docs/configuration/README.md – All configuration options and defaults
+ - log/LOG_MANAGEMENT.md – Request-based logging design and operations
 
 ## Isolated per-commit builds
 
@@ -88,9 +89,15 @@ Notes:
 - Tester mounts the testcase repository into the container read-write so tests can produce result artifacts.
 
 ## Logs
-- Builder logs: `~/cubrid-testtools/CTP/builder_tester/log/builder.log`, plus `bin/builder_output.log`
-- Tester logs: `~/cubrid-testtools/CTP/builder_tester/log/tester.log`, plus `bin/tester_output.log`
-- Per-build/test logs: `~/cubrid-testtools/CTP/builder_tester/log/builds|tests`
+- System logs: `~/cubrid-testtools/CTP/builder_tester/log/system/{builder.log,tester.log}`
+- Request-scoped logs and artifacts: `~/cubrid-testtools/CTP/builder_tester/log/requests/req_*/{builder.log,builds/,tests/}`
+- Legacy logs from prior versions: `~/cubrid-testtools/CTP/builder_tester/log/system/legacy_*`
+- Optional service stdout/stderr (when using start scripts): `bin/builder_output.log`, `bin/tester_output.log`
+
+Retention and grouping are configurable via `conf/*.conf`:
+- `max_request_logs` (keep last N request directories)
+- `max_tar_files` (builder: keep last N tar files in work dir)
+- `enable_request_grouping` (toggle request-based log grouping)
 
 ## Project structure
 ```

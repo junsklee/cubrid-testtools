@@ -22,6 +22,10 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `build_timeout_minutes` (int): Per-build timeout (default 180)
 - `build_cache_size` (int): Max cached builds (default 20)
 - `docker_host_root` (path): Host dir for `/work` and Gradle cache binds (default `~/docker-work`)
+### Log management
+- `max_request_logs` (int): Keep last N request directories (default 5)
+- `max_tar_files` (int): Keep last N tar archives in work dir (default 10)
+- `enable_request_grouping` (bool): Group logs by request ID (default true)
 
 ## Tester (`conf/tester.conf`)
 - `tester_port` (int): Tester HTTP port (default 8090)
@@ -33,6 +37,9 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `use_prebuilt_docker_images` (bool): Pull prebuilt images (default true)
 - `docker_test_image` (string): Test image (default `cubridci/cubridci:test_shell`)
 - `keep_failed_containers` (bool): Keep failed test containers (default true)
+### Log management
+- `max_request_logs` (int): Keep last N request directories (default 5)
+- `enable_request_grouping` (bool): Group logs by request ID (default true)
 
 ## Environment variables
 - `GITHUB_TOKEN`: required for Docker builder/tester images to fetch dependencies/private repos

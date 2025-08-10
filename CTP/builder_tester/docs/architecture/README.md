@@ -35,7 +35,10 @@
 
 - Builder work dir: `/tmp/builder_work`
 - Tester work dir: `/tmp/tester_work`
-- Logs (on host): `~/cubrid-testtools/CTP/builder_tester/log/{builder.log,tester.log,builds,tests}`
+- Logs (on host):
+  - System: `~/cubrid-testtools/CTP/builder_tester/log/system/{builder.log,tester.log}`
+  - Requests: `~/cubrid-testtools/CTP/builder_tester/log/requests/req_*/{request.json,builder.log,builds/,tests/}`
+  - Metadata: `~/cubrid-testtools/CTP/builder_tester/log/.metadata.json`
 
 ## Docker run details (Tester)
 
