@@ -7,6 +7,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.logging.*;
+import com.navercorp.cubridqa.builder.logging.*;
 
 /**
  * DockerBuildManager - Manages CUBRID builds within Docker containers
@@ -134,9 +135,21 @@ public class DockerBuildManager {
         int attempts = 0;
         IOException lastError = null;
         // Prepare per-build log file
-        Path buildsLogDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "builds");
-        try { Files.createDirectories(buildsLogDir); } catch (Exception ignore) {}
-        Path perBuildLog = buildsLogDir.resolve("build_" + commitShort + "_" + System.currentTimeMillis() + ".log");
+        Path perBuildLog = null;
+        try {
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String buildsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "builds");
+                perBuildLog = Paths.get(buildsDir, "build_" + commitShort + ".log");
+            } else {
+                Path buildsLogDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "builds");
+                Files.createDirectories(buildsLogDir);
+                perBuildLog = buildsLogDir.resolve("build_" + commitShort + "_" + System.currentTimeMillis() + ".log");
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to create build log directory: " + e.getMessage());
+            perBuildLog = Paths.get(workDir.getAbsolutePath(), "build_" + commitShort + ".log");
+        }
         while (attempts < 2) { // first attempt + 1 retry
             attempts++;
             List<String> dockerCommand = new ArrayList<>(baseDockerCmd);

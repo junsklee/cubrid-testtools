@@ -12,6 +12,7 @@ import java.util.logging.*;
 import java.util.concurrent.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
+import com.navercorp.cubridqa.builder.logging.*;
 
 /**
  * Tester - Receives test requests from Builder and executes tests
@@ -47,6 +48,19 @@ public class Tester {
     
     public Tester(BuilderConfig config) throws IOException {
         this.config = config;
+        
+        // Initialize logging infrastructure
+        LogConfig logConfig = new LogConfig(
+            config.getMaxRequestLogs(),
+            10, // Tester doesn't manage tar files, but we need a value
+            System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log",
+            config.isRequestGroupingEnabled()
+        );
+        try {
+            RequestLogManager.initialize(logConfig);
+        } catch (IOException e) {
+            logger.warning("Failed to initialize RequestLogManager: " + e.getMessage());
+        }
         this.useDocker = config.useDockerForTester();
         this.dockerManager = useDocker ? new DockerTesterManager(config) : null;
         
@@ -104,7 +118,14 @@ public class Tester {
                 String requestBody = readRequestBody(exchange);
                 JSONObject request = new JSONObject(requestBody);
                 
-                logger.info("Test request for: " + request.getString("testPath"));
+                // Extract request ID if provided
+                String requestId = request.optString("requestId", null);
+                if (requestId != null) {
+                    RequestContext.setRequestId(requestId);
+                }
+                
+                logger.info("Test request for: " + request.getString("testPath") + 
+                           (requestId != null ? " [" + requestId + "]" : ""));
                 logger.info("Build package: " + request.getString("buildPackage"));
                 
                 // Run test
@@ -123,6 +144,8 @@ public class Tester {
                     .put("message", e.getMessage());
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 500, error.toString());
+            } finally {
+                RequestContext.clear();
             }
         }
     }
@@ -217,12 +240,14 @@ public class Tester {
         Files.write(dockerScriptPath, dockerScript.getBytes());
         dockerScriptPath.toFile().setExecutable(true);
         try {
-            Path logsDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "tests");
-            Files.createDirectories(logsDir);
-            String safeTestNameForScript = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-            Path scriptLogPath = logsDir.resolve("docker_script_" + safeTestNameForScript + "_" + System.currentTimeMillis() + ".sh");
-            Files.write(scriptLogPath, dockerScript.getBytes("UTF-8"));
-            logger.info("Saved generated Docker test script to: " + scriptLogPath.toString());
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                String safeTestNameForScript = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                Path scriptLogPath = Paths.get(testsDir, "docker_script_" + safeTestNameForScript + ".sh");
+                Files.write(scriptLogPath, dockerScript.getBytes("UTF-8"));
+                logger.info("Saved generated Docker test script to: " + scriptLogPath.toString());
+            }
         } catch (Exception ignore) { }
         
         // Check for GitHub token
@@ -317,12 +342,14 @@ public class Tester {
 
         // Persist full docker output for diagnostics
         try {
-            Path logsDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "tests");
-            Files.createDirectories(logsDir);
-            String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-            Path logFile = logsDir.resolve("docker_" + safeTestName + "_" + System.currentTimeMillis() + ".log");
-            Files.write(logFile, dockerOutput.getBytes("UTF-8"));
-            logger.info("Saved full docker test log to: " + logFile.toString());
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                Path logFile = Paths.get(testsDir, "docker_" + safeTestName + ".log");
+                Files.write(logFile, dockerOutput.getBytes("UTF-8"));
+                logger.info("Saved full docker test log to: " + logFile.toString());
+            }
         } catch (Exception ignore) {
             // Swallow logging persistence issues; primary result below still returned
         }
@@ -901,10 +928,10 @@ public class Tester {
             consoleHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(consoleHandler);
             
-            // File handler for detailed logging
-            String logDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log";
-            new File(logDir).mkdirs();
-            FileHandler fileHandler = new FileHandler(logDir + "/tester.log", true);
+            // System log directory
+            String systemLogDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system";
+            new File(systemLogDir).mkdirs();
+            FileHandler fileHandler = new FileHandler(systemLogDir + "/tester.log", true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(fileHandler);

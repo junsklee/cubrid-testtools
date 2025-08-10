@@ -11,6 +11,7 @@ import java.util.logging.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
+import com.navercorp.cubridqa.builder.logging.*;
 
 /**
  * Builder - Receives build requests and builds CUBRID at specified commits
@@ -27,12 +28,23 @@ public class Builder {
     private final ExecutorService buildExecutor;
     private final Map<String, BuilderTask> activeTasks;
     private final DockerBuildManager dockerManager;
+    private final LogRotationManager logRotationManager;
     
     public Builder(BuilderConfig config) throws IOException {
         this.config = config;
         this.buildExecutor = Executors.newFixedThreadPool(config.getMaxConcurrentBuilds());
         this.activeTasks = new ConcurrentHashMap<>();
         this.dockerManager = new DockerBuildManager(config);
+        
+        // Initialize logging infrastructure
+        LogConfig logConfig = new LogConfig(
+            config.getMaxRequestLogs(),
+            config.getMaxTarFiles(),
+            System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log",
+            config.isRequestGroupingEnabled()
+        );
+        RequestLogManager.initialize(logConfig);
+        this.logRotationManager = new LogRotationManager(logConfig);
         
         // Create HTTP server
         this.server = HttpServer.create(new InetSocketAddress(config.getListenPort()), 0);
@@ -90,6 +102,12 @@ public class Builder {
             }
             
             try {
+                // Generate request ID for this build request
+                String requestId = RequestContext.generateRequestId();
+                
+                // Perform cleanup of old logs and tar files
+                logRotationManager.performCleanup(config.getWorkDir());
+                
                 // Clean up stale containers from previous runs before starting new task
                 try {
                     cleanupStaleContainers();
@@ -100,6 +118,12 @@ public class Builder {
                 // Read request body
                 String requestBody = readRequestBody(exchange);
                 JSONObject request = new JSONObject(requestBody);
+                
+                // Add request ID to the request object
+                request.put("requestId", requestId);
+                
+                // Record the request in metadata
+                logRotationManager.recordRequest(requestId, request);
                 
                 // Validate request
                 validateRequest(request);
@@ -114,12 +138,12 @@ public class Builder {
                 // Check tester reachability
                 validateTesterReachability(workerIp);
                 
-                // Log request
-                logger.info(String.format("Received build request for %d commits and %d tests",
-                    commits.length(), tests.length()));
+                // Log request with request ID
+                logger.info(String.format("[%s] Received build request for %d commits and %d tests",
+                    requestId, commits.length(), tests.length()));
                 
-                // Create task ID
-                String taskId = generateTaskId(request);
+                // Create task ID (use request ID as task ID)
+                String taskId = requestId;
                 
                 // Check if already running
                 if (activeTasks.containsKey(taskId)) {
@@ -276,12 +300,6 @@ public class Builder {
         }
     }
     
-    private String generateTaskId(JSONObject request) {
-        String data = request.getJSONArray("commits").toString() + "_" +
-                     request.getJSONArray("tests").toString();
-        return Integer.toHexString(data.hashCode());
-    }
-    
     private String readRequestBody(HttpExchange exchange) throws IOException {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(exchange.getRequestBody()))) {
@@ -366,10 +384,11 @@ public class Builder {
             consoleHandler.setLevel(Level.INFO);
             consoleHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(consoleHandler);
-            // File handler for detailed logging
-            String logDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log";
-            new File(logDir).mkdirs();
-            FileHandler fileHandler = new FileHandler(logDir + "/builder.log", true);
+            
+            // System log directory
+            String systemLogDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system";
+            new File(systemLogDir).mkdirs();
+            FileHandler fileHandler = new FileHandler(systemLogDir + "/builder.log", true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(fileHandler);

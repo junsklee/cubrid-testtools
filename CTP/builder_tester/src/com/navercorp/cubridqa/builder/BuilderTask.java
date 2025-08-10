@@ -11,6 +11,7 @@ import java.util.concurrent.*;
 import java.util.logging.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
+import com.navercorp.cubridqa.builder.logging.*;
 
 /**
  * BuilderTask - Builds CUBRID at multiple commits and runs tests
@@ -24,6 +25,7 @@ public class BuilderTask {
     private final DockerBuildManager dockerManager;
     private final List<JSONObject> results;
     private final Map<String, Integer> progress;
+    private Logger taskLogger;
     
     // Thread-safe build cache shared across all tasks
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
@@ -39,7 +41,19 @@ public class BuilderTask {
     }
     
     public void run() {
-        logger.info("Starting builder task: " + taskId);
+        // Set request context for this thread
+        String requestId = request.optString("requestId", taskId);
+        RequestContext.setRequestId(requestId);
+        
+        try {
+            // Get request-scoped logger
+            taskLogger = RequestLogManager.getInstance().getRequestLogger(requestId, "builder");
+            taskLogger.info("Starting builder task: " + taskId);
+        } catch (IOException e) {
+            taskLogger.warning("Failed to create request logger, using system logger: " + e.getMessage());
+            taskLogger = logger;
+        }
+        
         long startTime = System.currentTimeMillis();
         
         try {
@@ -50,7 +64,7 @@ public class BuilderTask {
             String workerIp = request.optString("workerIp", "localhost");
             String callbackUrl = request.getString("callbackUrl");
             
-            logger.info(String.format("Building %d commits for %d tests", 
+            taskLogger.info(String.format("Building %d commits for %d tests", 
                 commits.length(), tests.length()));
             
             // Ensure CUBRID source repository is set up
@@ -58,7 +72,7 @@ public class BuilderTask {
 
             // Determine common baseline = parent of earliest commit in the list
             String baselineCommit = determineBaselineCommit(commits);
-            logger.info("Using baseline (parent of earliest commit): " + baselineCommit);
+            taskLogger.info("Using baseline (parent of earliest commit): " + baselineCommit);
 
             // Build all commits concurrently (each in isolation via worktree + cherry-pick)
             Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, baselineCommit);
@@ -96,7 +110,7 @@ public class BuilderTask {
                 try {
                     results.add(f.get());
                 } catch (Exception e) {
-                    logger.log(Level.WARNING, "Test execution threw", e);
+                    taskLogger.log(Level.WARNING, "Test execution threw", e);
                     results.add(new JSONObject()
                         .put("commit", "unknown")
                         .put("test", "unknown")
@@ -110,16 +124,16 @@ public class BuilderTask {
             sendCallback(callbackUrl);
             
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Builder task failed: " + taskId, e);
+            taskLogger.log(Level.SEVERE, "Builder task failed: " + taskId, e);
             try {
                 sendErrorCallback(request.getString("callbackUrl"), e.getMessage());
             } catch (Exception ex) {
-                logger.log(Level.SEVERE, "Failed to send error callback", ex);
+                taskLogger.log(Level.SEVERE, "Failed to send error callback", ex);
             }
         }
         
         long duration = System.currentTimeMillis() - startTime;
-        logger.info(String.format("Builder task %s completed in %d seconds", 
+        taskLogger.info(String.format("Builder task %s completed in %d seconds", 
             taskId, duration / 1000));
     }
     
@@ -144,7 +158,7 @@ public class BuilderTask {
                     String cachedPackage = buildCache.get(cacheKey);
                     
                     if (cachedPackage != null && new File(cachedPackage).exists()) {
-                        logger.info("Using cached build for commit " + commit);
+                        taskLogger.info("Using cached build for commit " + commit);
                         builtPackages.put(commit, cachedPackage);
                         progress.put(commit, 100); // Complete
                         return null;
@@ -168,7 +182,7 @@ public class BuilderTask {
                     progress.put(commit, 100); // Complete
                     
                 } catch (Exception e) {
-                    logger.log(Level.SEVERE, "Failed to build commit " + commit, e);
+                    taskLogger.log(Level.SEVERE, "Failed to build commit " + commit, e);
                     builtPackages.put(commit, ""); // Mark as failed with empty string (ConcurrentHashMap disallows null)
                     progress.put(commit, -1); // Error
                 }
@@ -184,7 +198,7 @@ public class BuilderTask {
             try {
                 future.get(timeoutMinutes, TimeUnit.MINUTES);
             } catch (TimeoutException e) {
-                logger.severe("Build timeout after " + timeoutMinutes + " minutes");
+                taskLogger.severe("Build timeout after " + timeoutMinutes + " minutes");
                 future.cancel(true);
             }
         }
@@ -215,10 +229,10 @@ public class BuilderTask {
                     return json.getInt("maxConcurrentTests");
                 }
             } else {
-                logger.warning("Health check responded with status: " + status);
+                taskLogger.warning("Health check responded with status: " + status);
             }
         } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to fetch tester concurrency from health endpoint, using default", e);
+            taskLogger.log(Level.WARNING, "Failed to fetch tester concurrency from health endpoint, using default", e);
         }
         // Fallback to a sane default if tester does not report or on error
         return 4;
@@ -226,7 +240,7 @@ public class BuilderTask {
     
     private String buildCommit(String commit, String buildType, File workDir, String baselineCommit) 
             throws Exception {
-        logger.info("Building commit " + commit);
+        taskLogger.info("Building commit " + commit);
         
         // Use Docker if available
         if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
@@ -250,7 +264,7 @@ public class BuilderTask {
         try {
             executeCommand(repoPb, "git", "worktree", "add", "-b", tempBranch, wtDir.getAbsolutePath(), baselineCommit);
         } catch (Exception e) {
-            logger.warning("git worktree add -b failed (" + e.getMessage() + "), falling back to manual branch creation");
+            taskLogger.warning("git worktree add -b failed (" + e.getMessage() + "), falling back to manual branch creation");
             // Fallback for older git: create branch first, then add worktree
             executeCommand(repoPb, "git", "branch", "-f", tempBranch, baselineCommit);
             executeCommand(repoPb, "git", "worktree", "add", wtDir.getAbsolutePath(), tempBranch);
@@ -308,7 +322,7 @@ public class BuilderTask {
             return packageFile.getAbsolutePath();
         } finally {
             // 6) Tear down worktree
-            try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception e) { logger.warning("Failed to remove worktree " + wtDir.getAbsolutePath() + ": " + e.getMessage()); }
+            try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception e) { taskLogger.warning("Failed to remove worktree " + wtDir.getAbsolutePath() + ": " + e.getMessage()); }
             // delete temporary branch if exists
             try { executeCommand(repoPb, "git", "branch", "-D", tempBranch); } catch (Exception ignore) {}
             // If build failed, ensure worktree dir is wiped
@@ -362,17 +376,21 @@ public class BuilderTask {
                 .put("expectedBuildVersion", commit.substring(0, 7))
                 .put("keepAlive", false);
             
+            // Add request ID if available
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null) {
+                testRequest.put("requestId", requestId);
+            }
+            
             // Persist test request for diagnostics
             try {
-                java.nio.file.Path logsDir = java.nio.file.Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "test_requests");
-                java.nio.file.Files.createDirectories(logsDir);
-                String safeTest = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                String safeCommit = commit.substring(0, Math.min(commit.length(), 7));
-                java.nio.file.Path reqFile = logsDir.resolve("testreq_" + safeCommit + "_" + safeTest + "_" + System.currentTimeMillis() + ".json");
-                java.nio.file.Files.write(reqFile, testRequest.toString(2).getBytes("UTF-8"));
-                // overwrite last_test_request.json shortcut
-                java.nio.file.Path lastReq = java.nio.file.Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "last_test_request.json");
-                java.nio.file.Files.write(lastReq, testRequest.toString(2).getBytes("UTF-8"));
+                if (requestId != null && config.isRequestGroupingEnabled()) {
+                    String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                    String safeTest = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                    String safeCommit = commit.substring(0, Math.min(commit.length(), 7));
+                    java.nio.file.Path reqFile = Paths.get(testsDir, String.format("test_%s_%s.json", safeCommit, safeTest));
+                    java.nio.file.Files.write(reqFile, testRequest.toString(2).getBytes("UTF-8"));
+                }
             } catch (Exception ignore) { }
 
             // Send HTTP request to tester
@@ -407,7 +425,7 @@ public class BuilderTask {
                 .put("message", responseJson.optString("message", ""));
                 
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to test commit " + commit + 
+            taskLogger.log(Level.SEVERE, "Failed to test commit " + commit + 
                       " with test " + testPath, e);
             return new JSONObject()
                 .put("commit", commit)
@@ -421,7 +439,7 @@ public class BuilderTask {
         File srcDir = new File(config.getCubridSrcDir());
         
         if (!srcDir.exists()) {
-            logger.info("Cloning CUBRID repository...");
+            taskLogger.info("Cloning CUBRID repository...");
             srcDir.getParentFile().mkdirs();
             ProcessBuilder pb = new ProcessBuilder();
             executeCommand(pb, "git", "clone", 
@@ -433,11 +451,11 @@ public class BuilderTask {
         pb.directory(srcDir);
         
         // Fetch latest changes (all remotes); also fetch submodules on-demand
-        logger.info("Fetching latest changes (all remotes)...");
+        taskLogger.info("Fetching latest changes (all remotes)...");
         try {
             executeCommand(pb, "git", "fetch", "--all", "--prune", "--recurse-submodules=on-demand");
         } catch (Exception e) {
-            logger.warning("Fetch --all failed: " + e.getMessage() + ". Falling back to origin only.");
+            taskLogger.warning("Fetch --all failed: " + e.getMessage() + ". Falling back to origin only.");
             try { executeCommand(pb, "git", "fetch", "origin"); } catch (Exception ignore) {}
         }
         
@@ -451,7 +469,7 @@ public class BuilderTask {
         executeCommand(pb, "git", "pull", "origin", "develop");
         executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
         
-        logger.info("CUBRID repository ready");
+        taskLogger.info("CUBRID repository ready");
     }
     
     private void sendCallback(String callbackUrl) {
@@ -461,7 +479,7 @@ public class BuilderTask {
                 .put("results", new JSONArray(results))
                 .put("timestamp", System.currentTimeMillis());
             
-            logger.info("Sending results to " + callbackUrl);
+            taskLogger.info("Sending results to " + callbackUrl);
             
             URL url = new URL(callbackUrl);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -474,10 +492,10 @@ public class BuilderTask {
             }
             
             int responseCode = conn.getResponseCode();
-            logger.info("Callback response: " + responseCode);
+            taskLogger.info("Callback response: " + responseCode);
             
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to send callback", e);
+            taskLogger.log(Level.SEVERE, "Failed to send callback", e);
         }
     }
     
@@ -501,7 +519,7 @@ public class BuilderTask {
             
             conn.getResponseCode();
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to send error callback", e);
+            taskLogger.log(Level.SEVERE, "Failed to send error callback", e);
         }
     }
     
@@ -524,8 +542,8 @@ public class BuilderTask {
         int exitCode = process.waitFor();
         
         if (exitCode != 0) {
-            logger.warning("Command failed: " + String.join(" ", command));
-            logger.warning("Output: " + output.toString());
+            taskLogger.warning("Command failed: " + String.join(" ", command));
+            taskLogger.warning("Output: " + output.toString());
             throw new RuntimeException("Command failed with exit code " + exitCode);
         }
     }
@@ -544,8 +562,8 @@ public class BuilderTask {
         }
         int exitCode = process.waitFor();
         if (exitCode != 0) {
-            logger.warning("Command failed: " + String.join(" ", command));
-            logger.warning("Output: " + output.toString());
+            taskLogger.warning("Command failed: " + String.join(" ", command));
+            taskLogger.warning("Output: " + output.toString());
             throw new RuntimeException("Command failed with exit code " + exitCode);
         }
         return output.toString();
