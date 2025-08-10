@@ -8,7 +8,7 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.logging.*;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
 
@@ -65,7 +65,8 @@ public class Tester {
         this.server = HttpServer.create(new InetSocketAddress(config.getTesterPort()), 0);
         this.server.createContext("/test", new TestRequestHandler());
         this.server.createContext("/health", new HealthCheckHandler());
-        this.server.setExecutor(null);
+        int maxThreads = Math.max(1, config.getMaxConcurrentTests());
+        this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }
     
     public void start() {
@@ -186,6 +187,9 @@ public class Tester {
         String expectedBuildVersion = request.optString("expectedBuildVersion", null);
         boolean keepAlive = request.optBoolean("keepAlive", config.getKeepFailedContainers());
         String containerName = request.optString("containerName", "tester_debug_" + testName.replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis());
+        if (containerName == null || containerName.trim().isEmpty()) {
+            containerName = "tester_debug_" + testName.replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis();
+        }
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         
