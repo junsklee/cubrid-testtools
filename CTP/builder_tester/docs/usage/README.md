@@ -45,7 +45,7 @@ Manual:
 curl -X POST http://localhost:8089/build \
   -H "Content-Type: application/json" \
   -d '{
-    "commits": ["6ea587e"],
+    "commits": ["0d7296a", "dd32812", "6ea587e", "228cd61"],
     "tests": ["shell/_01_utility/_38_csql/csql_hist/cases/csql_hist.sh"],
     "callbackUrl": "http://localhost:8888/callback",
     "workerIp": "localhost",
@@ -86,6 +86,13 @@ Keep-alive (debug) run:
   "workspace": "/tmp/tester_work/test_.../docker_..."
 }
 ```
+
+## Notes on isolated builds
+
+- Baseline = parent of earliest commit in `commits[]`
+- Docker build path (default): clone into writable target, checkout temp branch at baseline, cherry-pick only the target commit, `git submodule sync && git submodule update --init --recursive --checkout --force`, clean, build, package
+- Direct host fallback: create temp branch + `git worktree add` at baseline, cherry-pick only the target commit, sync submodules, clean, build, package, remove worktree and delete temp branch
+- Merge commits are cherry-picked with `-m 1`
 
 ## Logs
 

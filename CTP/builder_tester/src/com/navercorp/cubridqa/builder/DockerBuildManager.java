@@ -66,11 +66,11 @@ public class DockerBuildManager {
         pullPrebuiltImage();
     }
     
-    public String buildCubrid(String commitHash, File workDir, String buildType) 
+    public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit) 
             throws IOException, InterruptedException {
         
         if (!dockerAvailable || !imageReady) {
-            return buildCubridDirect(commitHash, workDir, buildType);
+            return buildCubridDirect(commitHash, workDir, buildType, baselineCommit);
         }
         
         logger.info("Building CUBRID commit " + commitHash + " in Docker container");
@@ -97,7 +97,7 @@ public class DockerBuildManager {
         }
         
         // Create build script
-        File buildScript = createDockerBuildScript(commitHash, buildType, workDir);
+        File buildScript = createDockerBuildScript(commitHash, buildType, baselineCommit, workDir);
         
         // Prepare Docker command
         List<String> baseDockerCmd = new ArrayList<>();
@@ -122,9 +122,13 @@ public class DockerBuildManager {
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BUILD_TYPE=" + buildType);
         baseDockerCmd.add("-e");
+        baseDockerCmd.add("BASELINE_COMMIT=" + baselineCommit);
+        baseDockerCmd.add("-e");
         baseDockerCmd.add("GITHUB_TOKEN=" + githubToken);
         baseDockerCmd.add(config.getDockerBuildImage());
+        // Run build script in login shell to ensure git-worktree is available and PATH updated
         baseDockerCmd.add("bash");
+        baseDockerCmd.add("-lc");
         baseDockerCmd.add("/build.sh");
         
         int attempts = 0;
@@ -177,7 +181,7 @@ public class DockerBuildManager {
         return new File(workDir, packageName).getAbsolutePath();
     }
     
-    private File createDockerBuildScript(String commitHash, String buildType, File workDir) 
+    private File createDockerBuildScript(String commitHash, String buildType, String baselineCommit, File workDir) 
             throws IOException {
         File script = new File(workDir, "docker_build.sh");
         
@@ -193,14 +197,29 @@ public class DockerBuildManager {
             writer.println("fi");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\" ");
-            writer.println("cp -a /cubrid-src/. \"$target\"/");
             writer.println("cd \"$target\"");
             writer.println();
-            writer.println("# Checkout specific commit");
-            writer.println("git checkout ${COMMIT_HASH}");
-            writer.println("git submodule update --init --recursive");
+            writer.println("# Clone source into writable target to avoid touching read-only bind mount");
+            writer.println("git clone --no-checkout /cubrid-src repo");
+            writer.println("cd repo");
+            writer.println("git config advice.detachedHead false");
+            writer.println("git config user.email build@localhost");
+            writer.println("git config user.name Build Bot");
+            writer.println("git fetch --all --recurse-submodules=on-demand || true");
+            writer.println();
+            writer.println("# Checkout baseline on a temporary branch and cherry-pick the commit (no worktree required)");
+            writer.println("tmp_branch=isolate_${COMMIT_HASH:0:7}_tmp");
+            writer.println("git checkout -B \"$tmp_branch\" \"${BASELINE_COMMIT}\"");
+            writer.println("if git rev-list --parents -n1 \"${COMMIT_HASH}\" | awk '{exit (NF>2)?0:1}'; then");
+            writer.println("  git cherry-pick -m 1 -x \"${COMMIT_HASH}\" || { git cherry-pick --abort; echo 'Cherry-pick failed'; exit 1; }");
+            writer.println("else");
+            writer.println("  git cherry-pick -x \"${COMMIT_HASH}\" || { git cherry-pick --abort; echo 'Cherry-pick failed'; exit 1; }");
+            writer.println("fi");
+            writer.println("git submodule sync --recursive");
+            writer.println("git submodule update --init --recursive --checkout --force");
             writer.println();
             writer.println("# Clean any previous builds");
+            writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
             writer.println("rm -rf cubridmanager/*");
             writer.println();
@@ -211,6 +230,12 @@ public class DockerBuildManager {
             writer.println("cd " + config.getBuildDir());
             writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
             writer.println();
+            writer.println("# Cleanup temporary branch and workspace");
+            writer.println("cd \"$target/repo\"");
+            writer.println("git checkout --detach || true");
+            writer.println("git branch -D \"$tmp_branch\" || true");
+            writer.println("cd /");
+            writer.println("rm -rf \"$target\" || true");
             writer.println("echo \"Build completed successfully\"");
         }
         
@@ -218,36 +243,59 @@ public class DockerBuildManager {
         return script;
     }
     
-    private String buildCubridDirect(String commitHash, File workDir, String buildType) 
+    private String buildCubridDirect(String commitHash, File workDir, String buildType, String baselineCommit) 
             throws IOException, InterruptedException {
         logger.warning("Building CUBRID directly on host");
         
-        ProcessBuilder pb = new ProcessBuilder();
-        pb.directory(new File(config.getCubridSrcDir()));
-        
-        // Checkout commit
-        executeCommand(pb, "git", "checkout", commitHash);
-        executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
-        
-        // Clean and build
-        executeCommand(pb, "rm", "-rf", config.getBuildDir());
-        executeCommand(pb, "rm", "-rf", "cubridmanager");
-        // Split build args by whitespace into tokens to avoid passing as a single string
-        java.util.List<String> buildCmd = new java.util.ArrayList<>();
-        buildCmd.add("./build.sh");
-        for (String token : config.getBuildArg().trim().split("\\s+")) {
-            if (!token.isEmpty()) buildCmd.add(token);
+        // Use the same isolated worktree + cherry-pick strategy on host
+        File repoRoot = new File(config.getCubridSrcDir());
+        ProcessBuilder repoPb = new ProcessBuilder();
+        repoPb.directory(repoRoot);
+        try {
+            executeCommand(repoPb, "git", "fetch", "--all", "--recurse-submodules=on-demand");
+        } catch (Exception ignore) {}
+        if (baselineCommit == null || baselineCommit.trim().isEmpty()) {
+            baselineCommit = executeAndGet(repoPb, "git", "rev-parse", commitHash + "^").trim();
         }
-        executeCommand(pb, buildCmd.toArray(new String[0]));
-        
-        // Create package
-        String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
-        File packageFile = new File(workDir, packageName);
-        
-        pb.directory(new File(config.getCubridSrcDir(), config.getBuildDir()));
-        executeCommand(pb, "tar", "czf", packageFile.getAbsolutePath(), ".");
-        
-        return packageFile.getAbsolutePath();
+        File wtDir = new File(workDir, "wt_" + commitHash.substring(0, 7));
+        executeCommand(repoPb, "git", "worktree", "add", "--detach", wtDir.getAbsolutePath(), baselineCommit);
+
+        boolean ok = false;
+        try {
+            ProcessBuilder wtPb = new ProcessBuilder();
+            wtPb.directory(wtDir);
+            // detect merge commit
+            String parents = executeAndGet(repoPb, "git", "rev-list", "--parents", "-n1", commitHash).trim();
+            boolean isMerge = parents.split("\\s+").length > 2;
+            if (isMerge) {
+                try { executeCommand(wtPb, "git", "cherry-pick", "-m", "1", "-x", commitHash); }
+                catch (Exception e) { try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} throw e; }
+            } else {
+                try { executeCommand(wtPb, "git", "cherry-pick", "-x", commitHash); }
+                catch (Exception e) { try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} throw e; }
+            }
+            executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
+            executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
+            executeCommand(wtPb, "git", "clean", "-xdf");
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", "cubridmanager");
+            java.util.List<String> buildCmd = new java.util.ArrayList<>();
+            buildCmd.add("./build.sh");
+            for (String token : config.getBuildArg().trim().split("\\s+")) {
+                if (!token.isEmpty()) buildCmd.add(token);
+            }
+            executeCommand(wtPb, buildCmd.toArray(new String[0]));
+            String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
+            File packageFile = new File(workDir, packageName);
+            ProcessBuilder tarPb = new ProcessBuilder();
+            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
+            ok = true;
+            return packageFile.getAbsolutePath();
+        } finally {
+            try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception ignore) {}
+            if (!ok) { try { deleteRecursively(wtDir); } catch (Exception ignore) {} }
+        }
     }
     
     private void executeCommand(ProcessBuilder pb, String... command) 
@@ -258,6 +306,35 @@ public class DockerBuildManager {
         if (exitCode != 0) {
             throw new IOException("Command failed: " + String.join(" ", command));
         }
+    }
+
+    private String executeAndGet(ProcessBuilder pb, String... command) throws IOException, InterruptedException {
+        pb.command(command);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
+        }
+        int exit = process.waitFor();
+        if (exit != 0) {
+            throw new IOException("Command failed: " + String.join(" ", command));
+        }
+        return output.toString();
+    }
+
+    private void deleteRecursively(File f) {
+        if (f == null || !f.exists()) return;
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File c : children) deleteRecursively(c);
+            }
+        }
+        try { f.delete(); } catch (Exception ignore) {}
     }
     
     public boolean isDockerAvailable() {

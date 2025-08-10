@@ -21,7 +21,7 @@ public class BuilderConfig {
     private static final String WORK_DIR = "work_dir";
     private static final String TESTER_PORT = "tester_port";
     private static final String MAX_CONCURRENT_BUILDS = "max_concurrent_builds";
-    private static final String MAX_CONCURRENT_TESTS = "max_concurrent_tests";
+    private static final String MAX_CONCURRENT_TESTS = "max_concurrent_tests"; // Only valid in tester.conf
     private static final String USE_DOCKER = "use_docker";
     private static final String USE_PREBUILT_DOCKER_IMAGES = "use_prebuilt_docker_images";
     private static final String DOCKER_BUILD_IMAGE = "docker_build_image";
@@ -137,6 +137,7 @@ public class BuilderConfig {
     }
 
     public int getMaxConcurrentTests() {
+        // Note: Only tester.conf should define this. If absent (e.g., when using builder.conf), this value is unused.
         return Integer.parseInt(properties.getProperty(MAX_CONCURRENT_TESTS, "4"));
     }
     

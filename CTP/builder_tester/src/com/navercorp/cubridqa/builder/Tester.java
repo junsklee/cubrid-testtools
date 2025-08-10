@@ -135,7 +135,8 @@ public class Tester {
                     .put("service", "Tester")
                     .put("timestamp", System.currentTimeMillis())
                     .put("workDir", config.getWorkDir())
-                    .put("dockerEnabled", useDocker);
+                    .put("dockerEnabled", useDocker)
+                    .put("maxConcurrentTests", Math.max(1, config.getMaxConcurrentTests()));
                 
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 200, healthResponse.toString());
@@ -729,11 +730,12 @@ public class Tester {
          script.append("  . /root/.cubrid.sh\n");
          script.append("fi\n");
          script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
-         script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
-         script.append("export PATH=\"$CUBRID_ROOT/bin:$PATH\"\n");
+         script.append("export PATH=\"$CUBRID_ROOT/bin:/home/cubrid-testtools/CTP/shell/init_path:$PATH\"\n");
          script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:$LD_LIBRARY_PATH\"\n");
          script.append("export CUBRID_LANG=\"en_US\"\n");
-         script.append("export CUBRID_CHARSET=\"en_US\"\n\n");
+         script.append("export CUBRID_CHARSET=\"en_US\"\n");
+         script.append("export CTP_HOME=\"/home/cubrid-testtools/CTP\"\n");
+         script.append("export init_path=\"/home/cubrid-testtools/CTP/shell/init_path\"\n\n");
 
          script.append("# Emit debug env snapshot for docker exec sessions\n");
          script.append("cat > /workspace/debug_env.sh <<'EOS'\n");
@@ -753,7 +755,12 @@ public class Tester {
          script.append("    exit 1\n");
          script.append("fi\n\n");
          
-         script.append("mkdir -p \"$CUBRID_DATABASES\"\n\n");
+         script.append("mkdir -p \"$CUBRID_DATABASES\"\n");
+         script.append("# Ensure clean server log directory to avoid leftover state\n");
+         script.append("mkdir -p \"$CUBRID/log/server\"\n");
+         script.append("rm -f \"$CUBRID/log/server/*\" || true\n");
+         script.append("# Reset databases registry so createdb uses this workspace\n");
+         script.append(": > \"$CUBRID_DATABASES/databases.txt\"\n\n");
  
          // If expected build version provided, verify
          script.append("# Verify expected build version if provided\n");

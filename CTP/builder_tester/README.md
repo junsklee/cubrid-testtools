@@ -9,6 +9,16 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
 - docs/usage/README.md – Setup and usage, CLI and APIs
 - docs/configuration/README.md – All configuration options and defaults
 
+## Isolated per-commit builds
+
+- Each target commit is built in isolation against a common baseline using a hermetic flow:
+  - Baseline is computed as the parent of the earliest commit in your `commits[]` list
+  - For each commit, one of the following is used:
+    - Docker build (default): clone into a writable work dir inside the container, checkout a temporary branch at the baseline, cherry-pick only that one commit, sync submodules to gitlinks, clean, build, and package
+    - Direct host fallback: create a temporary branch + `git worktree add` at the baseline, cherry-pick only that commit, sync submodules to gitlinks, clean, build, package, then remove the worktree and delete the temp branch
+  - Merge commits are cherry-picked with `-m 1` (mainline 1) by default
+  - This avoids cumulative history and keeps builds hermetic
+
 ## Quick start
 
 Prerequisites:

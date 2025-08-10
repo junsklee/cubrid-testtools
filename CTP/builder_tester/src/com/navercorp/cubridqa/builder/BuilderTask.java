@@ -55,9 +55,13 @@ public class BuilderTask {
             
             // Ensure CUBRID source repository is set up
             setupCubridRepository();
-            
-            // Build all commits concurrently
-            Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType);
+
+            // Determine common baseline = parent of earliest commit in the list
+            String baselineCommit = determineBaselineCommit(commits);
+            logger.info("Using baseline (parent of earliest commit): " + baselineCommit);
+
+            // Build all commits concurrently (each in isolation via worktree + cherry-pick)
+            Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, baselineCommit);
             
             // Build a global queue of tests across all commits
             List<Callable<JSONObject>> pendingTests = new ArrayList<>();
@@ -81,8 +85,8 @@ public class BuilderTask {
                 }
             }
 
-            // Run tests with global bounded concurrency
-            int maxTests = Math.max(1, config.getMaxConcurrentTests());
+            // Run tests with global bounded concurrency fetched from Tester service
+            int maxTests = Math.max(1, fetchTesterConcurrency(workerIp));
             ExecutorService testPool = Executors.newFixedThreadPool(maxTests);
             List<Future<JSONObject>> futuresTests = new ArrayList<>();
             for (Callable<JSONObject> ct : pendingTests) {
@@ -119,7 +123,7 @@ public class BuilderTask {
             taskId, duration / 1000));
     }
     
-    private Map<String, String> buildCommitsConcurrently(JSONArray commits, String buildType) 
+    private Map<String, String> buildCommitsConcurrently(JSONArray commits, String buildType, String baselineCommit) 
             throws Exception {
         Map<String, String> builtPackages = new ConcurrentHashMap<>();
         ExecutorService executor = Executors.newFixedThreadPool(
@@ -152,8 +156,8 @@ public class BuilderTask {
                     Path workDir = Files.createTempDirectory(
                         Paths.get(config.getWorkDir()), "build_" + commit.substring(0, 7) + "_");
                     
-                    // Build the commit
-                    String buildPackage = buildCommit(commit, buildType, workDir.toFile());
+                    // Build the commit (isolated on baseline via worktree + cherry-pick)
+                    String buildPackage = buildCommit(commit, buildType, workDir.toFile(), baselineCommit);
                     
                     if (buildPackage != null) {
                         builtPackages.put(commit, buildPackage);
@@ -188,43 +192,156 @@ public class BuilderTask {
         executor.shutdown();
         return builtPackages;
     }
+
+    private int fetchTesterConcurrency(String workerIp) {
+        try {
+            URL url = new URL("http://" + workerIp + ":" + config.getTesterPort() + "/health");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(3000);
+
+            int status = conn.getResponseCode();
+            if (status >= 200 && status < 300) {
+                StringBuilder response = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        response.append(line);
+                    }
+                }
+                JSONObject json = new JSONObject(response.toString());
+                if (json.has("maxConcurrentTests")) {
+                    return json.getInt("maxConcurrentTests");
+                }
+            } else {
+                logger.warning("Health check responded with status: " + status);
+            }
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Failed to fetch tester concurrency from health endpoint, using default", e);
+        }
+        // Fallback to a sane default if tester does not report or on error
+        return 4;
+    }
     
-    private String buildCommit(String commit, String buildType, File workDir) 
+    private String buildCommit(String commit, String buildType, File workDir, String baselineCommit) 
             throws Exception {
         logger.info("Building commit " + commit);
         
         // Use Docker if available
         if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
-            return dockerManager.buildCubrid(commit, workDir, buildType);
+            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit);
         }
         
-        // Direct build fallback
+        // Direct build fallback using isolated worktree + cherry-pick
+        File repoRoot = new File(config.getCubridSrcDir());
+        ProcessBuilder repoPb = new ProcessBuilder();
+        repoPb.directory(repoRoot);
+
+        // Optional: ensure everything is available locally (non-fatal if it fails)
+        try {
+            executeCommand(repoPb, "git", "fetch", "--all", "--recurse-submodules=on-demand");
+        } catch (Exception ignore) { }
+
+        // 1) Create worktree at the baseline using a temporary branch (avoid --detach for older Git)
+        String shortCommit = commit.substring(0, Math.min(commit.length(), 7));
+        String tempBranch = "isolate_" + shortCommit + "_tmp";
+        File wtDir = new File(workDir, "wt_" + shortCommit);
+        try {
+            executeCommand(repoPb, "git", "worktree", "add", "-b", tempBranch, wtDir.getAbsolutePath(), baselineCommit);
+        } catch (Exception e) {
+            logger.warning("git worktree add -b failed (" + e.getMessage() + "), falling back to manual branch creation");
+            // Fallback for older git: create branch first, then add worktree
+            executeCommand(repoPb, "git", "branch", "-f", tempBranch, baselineCommit);
+            executeCommand(repoPb, "git", "worktree", "add", wtDir.getAbsolutePath(), tempBranch);
+        }
+
+        boolean success = false;
+        try {
+            // 2) Cherry-pick only that commit onto the baseline
+            boolean isMerge = isMergeCommit(commit, repoRoot);
+            ProcessBuilder wtPb = new ProcessBuilder();
+            wtPb.directory(wtDir);
+            if (isMerge) {
+                try {
+                    executeCommand(wtPb, "git", "cherry-pick", "-m", "1", "-x", commit);
+                } catch (Exception e) {
+                    // Abort and rethrow
+                    try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {}
+                    throw new RuntimeException("Cherry-pick failed for " + commit + ": " + e.getMessage(), e);
+                }
+            } else {
+                try {
+                    executeCommand(wtPb, "git", "cherry-pick", "-x", commit);
+                } catch (Exception e) {
+                    try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {}
+                    throw new RuntimeException("Cherry-pick failed for " + commit + ": " + e.getMessage(), e);
+                }
+            }
+
+            // 3) Make submodules match the gitlinks from this isolated tree
+            executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
+            executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
+
+            // 4) Clean & build
+            executeCommand(wtPb, "git", "clean", "-xdf");
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", "cubridmanager"); // temporary fix parity
+
+            // Build command
+            List<String> buildCmd = new ArrayList<>();
+            buildCmd.add("./build.sh");
+            for (String token : config.getBuildArg().trim().split("\\s+")) {
+                if (!token.isEmpty()) buildCmd.add(token);
+            }
+            executeCommand(wtPb, buildCmd.toArray(new String[0]));
+
+            // 5) Create package from the isolated worktree build output
+            String packageName = "cubrid_" + commit.substring(0, 7) + ".tar.gz";
+            File packageFile = new File(workDir, packageName);
+
+            ProcessBuilder tarPb = new ProcessBuilder();
+            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
+
+            success = true;
+            return packageFile.getAbsolutePath();
+        } finally {
+            // 6) Tear down worktree
+            try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception e) { logger.warning("Failed to remove worktree " + wtDir.getAbsolutePath() + ": " + e.getMessage()); }
+            // delete temporary branch if exists
+            try { executeCommand(repoPb, "git", "branch", "-D", tempBranch); } catch (Exception ignore) {}
+            // If build failed, ensure worktree dir is wiped
+            if (!success) {
+                try {
+                    deleteRecursively(wtDir);
+                } catch (Exception ignore) {}
+            }
+        }
+    }
+
+    private String determineBaselineCommit(JSONArray commits) throws Exception {
+        if (commits == null || commits.length() == 0) {
+            throw new IllegalArgumentException("No commits provided");
+        }
+        String earliest = commits.getString(0);
+        File repoRoot = new File(config.getCubridSrcDir());
         ProcessBuilder pb = new ProcessBuilder();
-        pb.directory(new File(config.getCubridSrcDir()));
-        
-        // Checkout commit
-        executeCommand(pb, "git", "checkout", commit);
-        executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
-        
-        // Clean and build
-        executeCommand(pb, "rm", "-rf", config.getBuildDir());
-        executeCommand(pb, "rm", "-rf", "cubridmanager");  // temporary fix
-        // Split build args by whitespace into tokens to avoid passing as a single string
-        List<String> buildCmd = new ArrayList<>();
-        buildCmd.add("./build.sh");
-        for (String token : config.getBuildArg().trim().split("\\s+")) {
-            if (!token.isEmpty()) buildCmd.add(token);
+        pb.directory(repoRoot);
+        String base = executeCommandAndGetOutput(pb, "git", "rev-parse", earliest + "^").trim();
+        if (base.isEmpty()) {
+            throw new RuntimeException("Failed to determine baseline for " + earliest);
         }
-        executeCommand(pb, buildCmd.toArray(new String[0]));
-        
-        // Create package
-        String packageName = "cubrid_" + commit.substring(0, 7) + ".tar.gz";
-        File packageFile = new File(workDir, packageName);
-        
-        pb.directory(new File(config.getCubridSrcDir(), config.getBuildDir()));
-        executeCommand(pb, "tar", "czf", packageFile.getAbsolutePath(), ".");
-        
-        return packageFile.getAbsolutePath();
+        return base;
+    }
+
+    private boolean isMergeCommit(String commit, File repoRoot) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(repoRoot);
+        String out = executeCommandAndGetOutput(pb, "git", "rev-list", "--parents", "-n1", commit).trim();
+        if (out.isEmpty()) return false;
+        String[] parts = out.split("\\s+");
+        return parts.length > 2;
     }
     
     private JSONObject runTest(String commit, String buildPackage, String testPath, 
@@ -315,9 +432,14 @@ public class BuilderTask {
         ProcessBuilder pb = new ProcessBuilder();
         pb.directory(srcDir);
         
-        // Fetch latest changes
-        logger.info("Fetching latest changes...");
-        executeCommand(pb, "git", "fetch", "origin");
+        // Fetch latest changes (all remotes); also fetch submodules on-demand
+        logger.info("Fetching latest changes (all remotes)...");
+        try {
+            executeCommand(pb, "git", "fetch", "--all", "--prune", "--recurse-submodules=on-demand");
+        } catch (Exception e) {
+            logger.warning("Fetch --all failed: " + e.getMessage() + ". Falling back to origin only.");
+            try { executeCommand(pb, "git", "fetch", "origin"); } catch (Exception ignore) {}
+        }
         
         // Checkout develop branch
         try {
@@ -406,6 +528,40 @@ public class BuilderTask {
             logger.warning("Output: " + output.toString());
             throw new RuntimeException("Command failed with exit code " + exitCode);
         }
+    }
+
+    private String executeCommandAndGetOutput(ProcessBuilder pb, String... command)
+            throws IOException, InterruptedException {
+        pb.command(command);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
+        }
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            logger.warning("Command failed: " + String.join(" ", command));
+            logger.warning("Output: " + output.toString());
+            throw new RuntimeException("Command failed with exit code " + exitCode);
+        }
+        return output.toString();
+    }
+
+    private void deleteRecursively(File path) {
+        if (path == null || !path.exists()) return;
+        if (path.isDirectory()) {
+            File[] files = path.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    deleteRecursively(f);
+                }
+            }
+        }
+        try { path.delete(); } catch (Exception ignore) {}
     }
     
     private void cleanBuildCache(int maxSize) {

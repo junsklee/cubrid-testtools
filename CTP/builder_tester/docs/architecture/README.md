@@ -11,7 +11,7 @@
 ## Flow
 
 1. Client POSTs to Builder `/build` with `commits[]`, `tests[]`, `callbackUrl`, `workerIp`, `buildType`.
-2. Builder task builds each commit (Docker or direct). For each built artifact, it calls Tester `/test` on `workerIp` with the test details.
+2. Builder task builds each commit (Docker or direct) in isolation onto a common baseline (parent of earliest commit). For each built artifact, it calls Tester `/test` on `workerIp` with the test details.
 3. Tester extracts the build, configures CUBRID, runs the shell test in Docker (or direct fallback). The testcases mount is read-write. Result is read from `<scriptBase>.result` (e.g., `foo.sh` → `foo.result`).
 4. Builder aggregates results and POSTs them to `callbackUrl`.
 
@@ -56,6 +56,13 @@
 
 - Builder pulls/uses `cubridci/cubridci:develop` and runs builds inside containers
 - Host bind mounts used to improve performance and persistence:
+### Commit isolation details
+
+- Compute baseline as the parent of the earliest requested commit
+- Docker build path (default): clone into writable target, checkout a temporary branch at the baseline, cherry-pick the single target commit, sync submodules to gitlinks, clean and build, then package
+- Direct host fallback: create a temporary branch + `git worktree add` at baseline, cherry-pick only the target commit, sync submodules, clean and build, package, then remove the worktree and delete the temp branch
+- Merge commits are cherry-picked with `-m 1`
+- Host binds:
   - `config.docker_host_root` (default `~/docker-work`) binds to `/work` and `/root/.gradle`
   - `config.getCubridSrcDir()` mounted read-only
   - Build artifacts written to `/output` (host work dir)
