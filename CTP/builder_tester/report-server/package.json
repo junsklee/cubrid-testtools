@@ -1,0 +1,21 @@
+{
+  "name": "cubrid-test-report-server",
+  "version": "1.0.0",
+  "description": "Interactive test report viewer and callback handler for CUBRID Builder-Tester",
+  "main": "report-server.js",
+  "scripts": {
+    "start": "node report-server.js",
+    "start:custom": "node report-server.js 8091"
+  },
+  "keywords": [
+    "cubrid",
+    "test",
+    "report",
+    "visualization"
+  ],
+  "author": "CUBRID QA Team",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

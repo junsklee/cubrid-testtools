@@ -51,6 +51,16 @@ public class Builder {
         this.server.createContext("/build", new BuildRequestHandler());
         this.server.createContext("/status", new StatusHandler());
         this.server.createContext("/health", new HealthCheckHandler());
+        
+        // Add report handler for viewing test results
+        try {
+            String logDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log";
+            this.server.createContext("/report", new com.navercorp.cubridqa.builder.report.ReportHandler(logDir));
+            this.server.createContext("/callback", new com.navercorp.cubridqa.builder.report.ReportHandler(logDir));
+        } catch (IOException e) {
+            logger.warning("Failed to initialize report handler: " + e.getMessage());
+        }
+        
         this.server.setExecutor(null); // creates a default executor
     }
     

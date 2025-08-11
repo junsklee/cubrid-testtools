@@ -10,3 +10,7 @@
 - Tester debug mode (keep-alive): returns container handle for interactive debugging
 - Read-write testcase mount to allow tests to produce result files
 - Result detection from test script base name: `foo.sh` → `foo.result`
+- **Interactive Web Report Viewer**: Visualize test results with automated verdict analysis
+- **Report Generation**: Automatic HTML reports with statistics, grouped by test case
+- **Callback Support**: POST results to callback URL for automated report generation
+- **Export Functionality**: Download test results as JSON or CSV from web interface

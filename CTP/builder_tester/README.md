@@ -73,6 +73,9 @@ curl http://localhost:8090/health
 - POST `/build` – Accepts `{ commits[], tests[], callbackUrl, workerIp, buildType }`, responds with `{ status, taskId }`
 - GET `/status` – Returns running task(s)
 - GET `/health`
+- GET `/report` – View test result reports (lists all reports)
+- GET `/report?id=req_xxx` – View specific test report
+- POST `/callback` – Receive test results and generate interactive HTML report
 
 Concurrency:
 - Builds: limited by `max_concurrent_builds`
@@ -87,6 +90,48 @@ Concurrency:
 Notes:
 - Test result is detected from the test script base name: for `csql_hist.sh`, the tester expects `csql_hist.result`.
 - Tester mounts the testcase repository into the container read-write so tests can produce result artifacts.
+
+## Test Result Visualization
+
+The Builder-Tester system includes an interactive web-based report viewer for analyzing test results:
+
+### Features
+- **Interactive Reports**: View test results grouped by test case with pass/fail status for each commit
+- **Automated Verdict Analysis**: Automatically determines failure patterns:
+  - `Unstable: Not reproduced` - No failures across commits
+  - `Bug or Revise: Caused by <commit>` - Single commit failure
+  - `Pre-existing Failure` - Failures across all commits
+  - `Unstable: Fails intermittently` - Partial failures
+- **Statistics Dashboard**: Visual KPIs showing pass rate, failed tests, and unstable tests
+- **Export Options**: Download results as JSON or CSV
+
+### Using the Report Viewer
+
+#### Option 1: Integrated with Builder (Recommended)
+The report viewer is automatically available when running the Builder:
+```bash
+# View all reports
+curl http://localhost:8089/report
+
+# Use callback in your request
+curl -X POST http://localhost:8089/build \
+  -d '{"commits": [...], "tests": [...], "callbackUrl": "http://localhost:8089/callback"}'
+```
+
+#### Option 2: Standalone Node.js Server
+For independent operation or custom ports:
+```bash
+cd report-server
+node report-server.js 8091
+
+# Send results to the standalone server
+curl -X POST http://localhost:8091/callback -d @results.json
+```
+
+### Report Storage
+Reports are saved in `~/cubrid-testtools/CTP/builder_tester/log/requests/req_*/`:
+- `results.json` - Raw test data
+- `report.html` - Self-contained interactive HTML report
 
 ## Logs
 - System logs: `~/cubrid-testtools/CTP/builder_tester/log/system/{builder.log,tester.log}`
@@ -109,7 +154,10 @@ builder_tester/
 │   ├── Tester.java
 │   ├── DockerBuildManager.java
 │   ├── DockerTesterManager.java
-│   └── DockerUtils.java
+│   ├── DockerUtils.java
+│   └── report/
+│       ├── ReportHandler.java     # Callback handler and report generator
+│       └── ReportTemplate.java    # HTML/JS report template
 ├── conf/
 │   ├── builder.conf
 │   └── tester.conf
@@ -117,9 +165,14 @@ builder_tester/
 │   ├── compile.sh
 │   ├── start_builder.sh | stop_builder.sh | run_builder.sh
 │   ├── start_tester.sh  | stop_tester.sh  | run_tester.sh
-│   └── test_client.sh
+│   ├── test_client.sh
+│   └── test_report_client.sh     # Test client with callback example
 ├── lib/
 │   └── json.jar
+├── report-server/                 # Standalone Node.js report server
+│   ├── report-server.js
+│   ├── package.json
+│   └── README.md
 └── docs/
     ├── features/README.md
     ├── architecture/README.md
