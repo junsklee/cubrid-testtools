@@ -102,9 +102,23 @@ public class BuilderTask {
             // Run tests with global bounded concurrency fetched from Tester service
             int maxTests = Math.max(1, fetchTesterConcurrency(workerIp));
             ExecutorService testPool = Executors.newFixedThreadPool(maxTests);
+            
+            // Capture request ID for test threads
+            final String testRequestId = RequestContext.getRequestId();
+            
             List<Future<JSONObject>> futuresTests = new ArrayList<>();
             for (Callable<JSONObject> ct : pendingTests) {
-                futuresTests.add(testPool.submit(ct));
+                futuresTests.add(testPool.submit(() -> {
+                    // Set request context for this test thread
+                    if (testRequestId != null) {
+                        RequestContext.setRequestId(testRequestId);
+                    }
+                    try {
+                        return ct.call();
+                    } finally {
+                        RequestContext.clear();
+                    }
+                }));
             }
             for (Future<JSONObject> f : futuresTests) {
                 try {
@@ -143,6 +157,9 @@ public class BuilderTask {
         ExecutorService executor = Executors.newFixedThreadPool(
             Math.min(commits.length(), config.getMaxConcurrentBuilds()));
         
+        // Capture the current request ID to propagate to build threads
+        final String requestId = RequestContext.getRequestId();
+        
         List<Future<Void>> futures = new ArrayList<>();
         
         for (int i = 0; i < commits.length(); i++) {
@@ -150,6 +167,11 @@ public class BuilderTask {
             final int index = i;
             
             Future<Void> future = executor.submit(() -> {
+                // Set the request context for this thread
+                if (requestId != null) {
+                    RequestContext.setRequestId(requestId);
+                }
+                
                 try {
                     progress.put(commit, 0); // Starting
                     
@@ -185,6 +207,9 @@ public class BuilderTask {
                     taskLogger.log(Level.SEVERE, "Failed to build commit " + commit, e);
                     builtPackages.put(commit, ""); // Mark as failed with empty string (ConcurrentHashMap disallows null)
                     progress.put(commit, -1); // Error
+                } finally {
+                    // Clear the request context for this thread
+                    RequestContext.clear();
                 }
                 return null;
             });
