@@ -234,6 +234,8 @@ public class Tester {
         String testScript = request.getString("testScript");
         String testName = request.getString("testName");
         String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+        String commit = request.optString("commit", "unknown");
+        String commitShort = request.optString("commitShort", commit.substring(0, Math.min(commit.length(), 7)));
         boolean keepAlive = request.optBoolean("keepAlive", config.getKeepFailedContainers());
         String containerName = request.optString("containerName", "tester_debug_" + testName.replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis());
         if (containerName == null || containerName.trim().isEmpty()) {
@@ -263,7 +265,8 @@ public class Tester {
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 String safeTestNameForScript = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                Path scriptLogPath = Paths.get(testsDir, "docker_script_" + safeTestNameForScript + ".sh");
+                // Include commit in the script name for uniqueness
+                Path scriptLogPath = Paths.get(testsDir, String.format("docker_script_%s_%s.sh", commitShort, safeTestNameForScript));
                 Files.write(scriptLogPath, dockerScript.getBytes("UTF-8"));
                 testLogger.info("Saved generated Docker test script to: " + scriptLogPath.toString());
             }
@@ -365,7 +368,8 @@ public class Tester {
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                Path logFile = Paths.get(testsDir, "docker_" + safeTestName + ".log");
+                // Include commit in the log file name for uniqueness
+                Path logFile = Paths.get(testsDir, String.format("docker_%s_%s.log", commitShort, safeTestName));
                 Files.write(logFile, dockerOutput.getBytes("UTF-8"));
                 testLogger.info("Saved full docker test log to: " + logFile.toString());
             }
@@ -381,17 +385,31 @@ public class Tester {
          if (Files.exists(namedResult)) {
              String resultContent = new String(Files.readAllBytes(namedResult));
              testLogger.info("Test result file (" + namedResult.getFileName() + "): " + resultContent.trim());
-             if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
-                 return new JSONObject()
-                     .put("status", TestStatus.FAIL.getValue())
-                     .put("test", testName)
-                     .put("execution_mode", "docker");
-             } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
-                 return new JSONObject()
-                     .put("status", TestStatus.PASS.getValue())
-                     .put("test", testName)
-                     .put("execution_mode", "docker");
+             
+             // Extract execution time from result if available
+             String executionTime = extractExecutionTime(resultContent);
+             
+             JSONObject response = new JSONObject()
+                 .put("test", testName)
+                 .put("commit", commit)
+                 .put("commitShort", commitShort)
+                 .put("execution_mode", "docker")
+                 .put("timestamp", System.currentTimeMillis());
+             
+             if (executionTime != null) {
+                 response.put("execution_time", executionTime);
              }
+             
+             if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
+                 response.put("status", TestStatus.FAIL.getValue());
+             } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
+                 response.put("status", TestStatus.PASS.getValue());
+             } else {
+                 response.put("status", TestStatus.EXECUTION_ERROR.getValue())
+                        .put("message", "Could not determine test result");
+             }
+             
+             return response;
          }
         
         // Check for Docker-specific errors
@@ -422,16 +440,22 @@ public class Tester {
                     .put("status", TestStatus.EXECUTION_ERROR.getValue())
                     .put("message", "Docker test execution failed; container kept for debugging")
                     .put("test", testName)
+                    .put("commit", commit)
+                    .put("commitShort", commitShort)
                     .put("containerName", containerName)
                     .put("execCommand", execCmd)
-                    .put("workspace", dockerWorkDir.toString());
+                    .put("workspace", dockerWorkDir.toString())
+                    .put("timestamp", System.currentTimeMillis());
             }
             
             return new JSONObject()
                 .put("status", TestStatus.EXECUTION_ERROR.getValue())
                 .put("message", "Docker test execution failed")
                 .put("test", testName)
-                .put("exit_code", exitCode);
+                .put("commit", commit)
+                .put("commitShort", commitShort)
+                .put("exit_code", exitCode)
+                .put("timestamp", System.currentTimeMillis());
         }
         
         return new JSONObject()
@@ -450,6 +474,8 @@ public class Tester {
         String testScript = request.getString("testScript");
         String testName = request.getString("testName");
         String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+        String commit = request.optString("commit", "unknown");
+        String commitShort = request.optString("commitShort", commit.substring(0, Math.min(commit.length(), 7)));
         
         testLogger.info("Direct test execution");
         testLogger.info("  Build package: " + buildPackage);
@@ -898,6 +924,20 @@ public class Tester {
         }
     }
     
+    /**
+     * Extract execution time from test result content
+     * Looking for patterns like "time=42" or "time: 42"
+     */
+    private String extractExecutionTime(String resultContent) {
+        // Look for time pattern in result
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("time[=:]\\s*(\\d+)");
+        java.util.regex.Matcher matcher = pattern.matcher(resultContent);
+        if (matcher.find()) {
+            return matcher.group(1) + "s";
+        }
+        return null;
+    }
+    
     private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(statusCode, response.getBytes("UTF-8").length);
@@ -954,7 +994,9 @@ public class Tester {
             // System log directory
             String systemLogDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system";
             new File(systemLogDir).mkdirs();
-            FileHandler fileHandler = new FileHandler(systemLogDir + "/tester.log", true);
+            
+            // Use a simple FileHandler without rotation (limit = 0 means no limit, count = 1 means no rotation)
+            FileHandler fileHandler = new FileHandler(systemLogDir + "/tester.log", 0, 1, true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(fileHandler);

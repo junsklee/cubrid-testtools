@@ -388,7 +388,9 @@ public class Builder {
             // System log directory
             String systemLogDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system";
             new File(systemLogDir).mkdirs();
-            FileHandler fileHandler = new FileHandler(systemLogDir + "/builder.log", true);
+            
+            // Use a simple FileHandler without rotation (limit = 0 means no limit, count = 1 means no rotation)
+            FileHandler fileHandler = new FileHandler(systemLogDir + "/builder.log", 0, 1, true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(fileHandler);

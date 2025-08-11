@@ -398,6 +398,8 @@ public class BuilderTask {
                 .put("testDir", testDir)
                 .put("testScript", testScript)
                 .put("testName", testName)
+                .put("commit", commit)  // Add full commit hash
+                .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))  // Add short commit
                 .put("expectedBuildVersion", commit.substring(0, 7))
                 .put("keepAlive", false);
             

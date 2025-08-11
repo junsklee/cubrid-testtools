@@ -15,7 +15,6 @@ public class RequestLogManager {
     private static RequestLogManager instance;
     private final LogConfig config;
     private final Logger systemLogger;
-    private FileHandler systemFileHandler;
     
     private RequestLogManager(LogConfig config) throws IOException {
         this.config = config;
@@ -80,8 +79,15 @@ public class RequestLogManager {
         Logger logger = Logger.getLogger(requestId + "." + component);
         logger.setUseParentHandlers(false);
         
-        // File handler for request-specific log ONLY
-        FileHandler fileHandler = new FileHandler(logPath, true);
+        // Remove any existing handlers to prevent duplicates
+        Handler[] existingHandlers = logger.getHandlers();
+        for (Handler h : existingHandlers) {
+            logger.removeHandler(h);
+            h.close();
+        }
+        
+        // File handler for request-specific log (no rotation)
+        FileHandler fileHandler = new FileHandler(logPath, 0, 1, true);
         fileHandler.setFormatter(new RequestLogFormatter(requestId));
         logger.addHandler(fileHandler);
         
