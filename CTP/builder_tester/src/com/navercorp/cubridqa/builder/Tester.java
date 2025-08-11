@@ -107,6 +107,8 @@ public class Tester {
     private class TestRequestHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            Logger requestLogger = logger;  // Default to system logger
+            
             logger.info("Received " + exchange.getRequestMethod() + " request");
             
             if (!"POST".equals(exchange.getRequestMethod())) {
@@ -122,23 +124,32 @@ public class Tester {
                 String requestId = request.optString("requestId", null);
                 if (requestId != null) {
                     RequestContext.setRequestId(requestId);
+                    
+                    // Try to get request-specific logger
+                    try {
+                        if (config.isRequestGroupingEnabled()) {
+                            requestLogger = RequestLogManager.getInstance().getRequestLogger(requestId, "tester");
+                        }
+                    } catch (Exception e) {
+                        logger.warning("Failed to create request logger: " + e.getMessage());
+                    }
                 }
                 
-                logger.info("Test request for: " + request.getString("testPath") + 
+                requestLogger.info("Test request for: " + request.getString("testPath") + 
                            (requestId != null ? " [" + requestId + "]" : ""));
-                logger.info("Build package: " + request.getString("buildPackage"));
+                requestLogger.info("Build package: " + request.getString("buildPackage"));
                 
-                // Run test
-                JSONObject result = runTest(request);
+                // Run test with request logger
+                JSONObject result = runTest(request, requestLogger);
                 
                 // Send response
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 // Avoid broken pipe by writing a short JSON and closing promptly
                 sendResponse(exchange, 200, result.toString());
-                logger.info("Sent response: " + result.toString());
+                requestLogger.info("Sent response: " + result.toString());
                 
             } catch (Exception e) {
-                logger.log(Level.SEVERE, "Error processing test request", e);
+                requestLogger.log(Level.SEVERE, "Error processing test request", e);
                 JSONObject error = new JSONObject()
                     .put("status", TestStatus.EXECUTION_ERROR.getValue())
                     .put("message", e.getMessage());
@@ -182,16 +193,20 @@ public class Tester {
     }
     
     private JSONObject runTest(JSONObject request) throws Exception {
+        return runTest(request, logger);  // Use system logger by default
+    }
+    
+    private JSONObject runTest(JSONObject request, Logger testLogger) throws Exception {
         Path workDir = Files.createTempDirectory(Paths.get(config.getWorkDir()), "test_");
-        logger.info("Working directory: " + workDir);
+        testLogger.info("Working directory: " + workDir);
         boolean keepAliveRequested = request.optBoolean("keepAlive", config.getKeepFailedContainers());
         try {
             // Check if we should use Docker for test execution
             if (useDocker && dockerManager != null && DockerUtils.isDockerAvailable()) {
-                return runTestInDocker(request, workDir);
+                return runTestInDocker(request, workDir, testLogger);
             } else {
-                logger.info("Using direct test execution");
-                return runTestDirectly(request, workDir);
+                testLogger.info("Using direct test execution");
+                return runTestDirectly(request, workDir, testLogger);
             }
         } finally {
             // Cleanup unless keep-alive requested or a keep marker is present
@@ -199,7 +214,7 @@ public class Tester {
                 if (!keepAliveRequested && !Files.exists(workDir.resolve("KEEP_WORKSPACE"))) {
                     deleteDirectory(workDir.toFile());
                 } else {
-                    logger.info("Preserving workDir for debugging: " + workDir);
+                    testLogger.info("Preserving workDir for debugging: " + workDir);
                 }
             } catch (Exception ignore) {
                 // best effort
@@ -208,7 +223,11 @@ public class Tester {
     }
     
     private JSONObject runTestInDocker(JSONObject request, Path workDir) throws Exception {
-        logger.info("Running test in Docker container...");
+        return runTestInDocker(request, workDir, logger);
+    }
+    
+    private JSONObject runTestInDocker(JSONObject request, Path workDir, Logger testLogger) throws Exception {
+        testLogger.info("Running test in Docker container...");
         
         String buildPackage = request.getString("buildPackage");
         String testDir = request.getString("testDir");
@@ -231,7 +250,7 @@ public class Tester {
         Path testCasesDir = dockerWorkDir.resolve("testcases");
         Files.createDirectories(testCasesDir);
         copyTestCaseDirectory(Paths.get(testDir), testCasesDir);
-        logger.info("Copied test case directory to isolated workspace: " + testCasesDir);
+        testLogger.info("Copied test case directory to isolated workspace: " + testCasesDir);
         
         // Create test execution script for Docker (now using isolated testcases dir)
         String dockerScript = createDockerTestScript(testScript, testName, 
@@ -246,14 +265,14 @@ public class Tester {
                 String safeTestNameForScript = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
                 Path scriptLogPath = Paths.get(testsDir, "docker_script_" + safeTestNameForScript + ".sh");
                 Files.write(scriptLogPath, dockerScript.getBytes("UTF-8"));
-                logger.info("Saved generated Docker test script to: " + scriptLogPath.toString());
+                testLogger.info("Saved generated Docker test script to: " + scriptLogPath.toString());
             }
         } catch (Exception ignore) { }
         
         // Check for GitHub token
         String githubToken = System.getenv("GITHUB_TOKEN");
         if (githubToken == null || githubToken.trim().isEmpty()) {
-            logger.severe("GITHUB_TOKEN not set");
+            testLogger.severe("GITHUB_TOKEN not set");
             return new JSONObject()
                 .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
                 .put("message", "GITHUB_TOKEN environment variable not configured")
@@ -298,7 +317,7 @@ public class Tester {
             dockerCommand.add("/workspace/run_test.sh");
         }
         
-        logger.info("Executing Docker command: " + String.join(" ", dockerCommand));
+        testLogger.info("Executing Docker command: " + String.join(" ", dockerCommand));
         
         ProcessBuilder pb = new ProcessBuilder(dockerCommand);
         pb.redirectErrorStream(true);
@@ -313,7 +332,7 @@ public class Tester {
                 while ((line = br.readLine()) != null) {
                     out.append(line).append('\n');
                 }
-                logger.info("Started debug container: " + containerName);
+                testLogger.info("Started debug container: " + containerName);
             } catch (Exception ignore) {}
             String execCmd = "docker exec -it " + containerName + " bash";
             return new JSONObject()
@@ -329,7 +348,7 @@ public class Tester {
         boolean completed = process.waitFor(30, TimeUnit.MINUTES);
         if (!completed) {
             process.destroyForcibly();
-            logger.severe("Docker test timeout");
+            testLogger.severe("Docker test timeout");
             return new JSONObject()
                 .put("status", TestStatus.EXECUTION_ERROR.getValue())
                 .put("message", "Docker test timeout after 30 minutes")
@@ -338,7 +357,7 @@ public class Tester {
         int exitCode = process.exitValue();
         outputGobbler.join(2000);
         String dockerOutput = outputGobbler.getOutput();
-        logger.info("Docker test completed with exit code: " + exitCode);
+        testLogger.info("Docker test completed with exit code: " + exitCode);
 
         // Persist full docker output for diagnostics
         try {
@@ -348,7 +367,7 @@ public class Tester {
                 String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
                 Path logFile = Paths.get(testsDir, "docker_" + safeTestName + ".log");
                 Files.write(logFile, dockerOutput.getBytes("UTF-8"));
-                logger.info("Saved full docker test log to: " + logFile.toString());
+                testLogger.info("Saved full docker test log to: " + logFile.toString());
             }
         } catch (Exception ignore) {
             // Swallow logging persistence issues; primary result below still returned
@@ -361,7 +380,7 @@ public class Tester {
          Path namedResult = dockerWorkDir.resolve(resultBaseFromScript + ".result");
          if (Files.exists(namedResult)) {
              String resultContent = new String(Files.readAllBytes(namedResult));
-             logger.info("Test result file (" + namedResult.getFileName() + "): " + resultContent.trim());
+             testLogger.info("Test result file (" + namedResult.getFileName() + "): " + resultContent.trim());
              if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
                  return new JSONObject()
                      .put("status", TestStatus.FAIL.getValue())
@@ -378,7 +397,7 @@ public class Tester {
         // Check for Docker-specific errors
         if (exitCode != 0) {
             if (dockerOutput.contains("docker: command not found")) {
-                logger.warning("Docker not available, falling back to direct execution");
+                testLogger.warning("Docker not available, falling back to direct execution");
                 return runTestDirectly(request, workDir);
             }
             // Keep container on failure if configured: rerun in detached mode for debugging
@@ -397,7 +416,7 @@ public class Tester {
                 keepCmd.add(config.getDockerTestImage());
                 keepCmd.add("-lc"); keepCmd.add("echo READY; tail -f /dev/null");
                 try { new ProcessBuilder(keepCmd).start().waitFor(5, TimeUnit.SECONDS); } catch (Exception ignore) {}
-                logger.info("Failure container kept for debugging: " + containerName);
+                testLogger.info("Failure container kept for debugging: " + containerName);
                 String execCmd = "docker exec -it " + containerName + " bash";
                 return new JSONObject()
                     .put("status", TestStatus.EXECUTION_ERROR.getValue())
@@ -422,22 +441,26 @@ public class Tester {
     }
     
     private JSONObject runTestDirectly(JSONObject request, Path workDir) throws Exception {
+        return runTestDirectly(request, workDir, logger);
+    }
+    
+    private JSONObject runTestDirectly(JSONObject request, Path workDir, Logger testLogger) throws Exception {
         String buildPackage = request.getString("buildPackage");
         String testDir = request.getString("testDir");
         String testScript = request.getString("testScript");
         String testName = request.getString("testName");
         String expectedBuildVersion = request.optString("expectedBuildVersion", null);
         
-        logger.info("Direct test execution");
-        logger.info("  Build package: " + buildPackage);
-        logger.info("  Test: " + testName);
+        testLogger.info("Direct test execution");
+        testLogger.info("  Build package: " + buildPackage);
+        testLogger.info("  Test: " + testName);
         
         // Install CUBRID
         Path installDir = null;
         try {
-            installDir = installCubrid(buildPackage, workDir);
+            installDir = installCubrid(buildPackage, workDir, testLogger);
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to install CUBRID", e);
+            testLogger.log(Level.SEVERE, "Failed to install CUBRID", e);
             return new JSONObject()
                 .put("status", TestStatus.BUILD_ERROR.getValue())
                 .put("message", "Failed to install CUBRID: " + e.getMessage())
@@ -472,7 +495,7 @@ public class Tester {
             ? testScript.substring(0, testScript.length() - 3)
             : (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
         File namedResultFileObj = new File(testDir, resultBaseFromScript + ".result");
-        logger.info("Running test: " + testScript);
+        testLogger.info("Running test: " + testScript);
         if (namedResultFileObj.exists()) namedResultFileObj.delete();
         
         // Create wrapper script
@@ -498,7 +521,7 @@ public class Tester {
         boolean completed = process.waitFor(30, TimeUnit.MINUTES);
         if (!completed) {
             process.destroyForcibly();
-            logger.severe("Test timeout");
+            testLogger.severe("Test timeout");
             return new JSONObject()
                 .put("status", TestStatus.EXECUTION_ERROR.getValue())
                 .put("message", "Test timeout after 30 minutes")
@@ -515,7 +538,7 @@ public class Tester {
         // Check for execution errors
         if (exitCode != 0 && (testError.contains("command not found") || 
                               testError.contains("syntax error"))) {
-            logger.severe("Test execution error: " + testError);
+            testLogger.severe("Test execution error: " + testError);
             return new JSONObject()
                 .put("status", TestStatus.EXECUTION_ERROR.getValue())
                 .put("message", "Test script execution error")
@@ -526,7 +549,7 @@ public class Tester {
         // Check named result first then nok.result
         if (namedResultFileObj.exists()) {
             String resultContent = new String(Files.readAllBytes(namedResultFileObj.toPath()));
-            logger.info("Named Result (" + resultBaseFromScript + ".result): " + resultContent.trim());
+            testLogger.info("Named Result (" + resultBaseFromScript + ".result): " + resultContent.trim());
             if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
                 return new JSONObject().put("status", TestStatus.FAIL.getValue()).put("test", testName);
             } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
@@ -541,15 +564,15 @@ public class Tester {
             .put("exit_code", exitCode);
     }
     
-    private Path installCubrid(String buildPackage, Path workDir) 
+    private Path installCubrid(String buildPackage, Path workDir, Logger testLogger) 
             throws IOException, InterruptedException {
-        logger.info("Installing CUBRID from: " + buildPackage);
+        testLogger.info("Installing CUBRID from: " + buildPackage);
         
         Path cubridInstallDir = Paths.get(System.getProperty("user.home"), "CUBRID");
         
         // Remove existing installation
         if (Files.exists(cubridInstallDir)) {
-            logger.info("Removing existing CUBRID installation");
+            testLogger.info("Removing existing CUBRID installation");
             deleteDirectory(cubridInstallDir.toFile());
         }
         
@@ -557,7 +580,7 @@ public class Tester {
         Files.createDirectories(cubridInstallDir);
         
         // Extract the build package
-        logger.info("Extracting to: " + cubridInstallDir);
+        testLogger.info("Extracting to: " + cubridInstallDir);
         ProcessBuilder pb = new ProcessBuilder("tar", "-xzf", buildPackage, 
                                               "-C", cubridInstallDir.toString());
         pb.redirectErrorStream(true);
@@ -581,7 +604,7 @@ public class Tester {
             throw new IOException("CUBRID extraction failed: " + exitCode);
         }
         
-        logger.info("CUBRID extraction completed");
+        testLogger.info("CUBRID extraction completed");
         
         // Find actual CUBRID directory
         Path actualCubridDir = findCubridBinaries(cubridInstallDir);
@@ -590,7 +613,7 @@ public class Tester {
             throw new IOException("Could not find CUBRID binaries");
         }
         
-        logger.info("CUBRID binaries found at: " + actualCubridDir);
+        testLogger.info("CUBRID binaries found at: " + actualCubridDir);
         
         // Try running setup.sh if available to configure installation
         try {
@@ -599,7 +622,7 @@ public class Tester {
                 setupScript = actualCubridDir.resolve("setup.sh");
             }
             if (Files.exists(setupScript)) {
-                logger.info("Running setup.sh to configure CUBRID installation");
+                testLogger.info("Running setup.sh to configure CUBRID installation");
                 ProcessBuilder setupPb = new ProcessBuilder("sh", setupScript.toString(), actualCubridDir.toString());
                 setupPb.directory(actualCubridDir.toFile());
                 setupPb.redirectErrorStream(true);
@@ -615,18 +638,18 @@ public class Tester {
                 boolean setupCompleted = setupProc.waitFor(2, TimeUnit.MINUTES);
                 if (!setupCompleted) {
                     setupProc.destroyForcibly();
-                    logger.warning("setup.sh timeout after 2 minutes, continuing anyway");
+                    testLogger.warning("setup.sh timeout after 2 minutes, continuing anyway");
                 } else if (setupProc.exitValue() != 0) {
                     setupOutput.join(1000);
-                    logger.warning("setup.sh exited with code: " + setupProc.exitValue());
+                    testLogger.warning("setup.sh exited with code: " + setupProc.exitValue());
                 } else {
-                    logger.info("setup.sh completed successfully");
+                    testLogger.info("setup.sh completed successfully");
                 }
             } else {
-                logger.info("setup.sh not found, skipping setup");
+                testLogger.info("setup.sh not found, skipping setup");
             }
         } catch (Exception e) {
-            logger.warning("setup.sh execution failed: " + e.getMessage());
+            testLogger.warning("setup.sh execution failed: " + e.getMessage());
         }
 
         // Ensure databases directory exists

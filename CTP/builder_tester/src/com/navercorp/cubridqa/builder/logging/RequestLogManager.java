@@ -66,6 +66,7 @@ public class RequestLogManager {
     
     /**
      * Get a logger for a specific component within a request context
+     * This creates a dual logger that writes to both system and request-specific logs
      */
     public Logger getRequestLogger(String requestId, String component) throws IOException {
         if (!config.isRequestGroupingEnabled()) {
@@ -83,6 +84,12 @@ public class RequestLogManager {
         FileHandler fileHandler = new FileHandler(logPath, true);
         fileHandler.setFormatter(new RequestLogFormatter(requestId));
         logger.addHandler(fileHandler);
+        
+        // Also log to system log file
+        String systemLogPath = config.getSystemDir() + "/" + component + ".log";
+        FileHandler systemFileHandler = new FileHandler(systemLogPath, true);
+        systemFileHandler.setFormatter(new RequestLogFormatter(requestId));
+        logger.addHandler(systemFileHandler);
         
         // Also log to console with request ID prefix
         ConsoleHandler consoleHandler = new ConsoleHandler();
