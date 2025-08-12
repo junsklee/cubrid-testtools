@@ -301,20 +301,69 @@ public class BuilderTask {
             boolean isMerge = isMergeCommit(commit, repoRoot);
             ProcessBuilder wtPb = new ProcessBuilder();
             wtPb.directory(wtDir);
+            
+            boolean cherryPickSucceeded = false;
+            Exception cherryPickException = null;
+            
+            // First attempt: try cherry-pick
             if (isMerge) {
                 try {
                     executeCommand(wtPb, "git", "cherry-pick", "-m", "1", "-x", commit);
+                    cherryPickSucceeded = true;
                 } catch (Exception e) {
-                    // Abort and rethrow
+                    cherryPickException = e;
                     try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {}
-                    throw new RuntimeException("Cherry-pick failed for " + commit + ": " + e.getMessage(), e);
                 }
             } else {
                 try {
                     executeCommand(wtPb, "git", "cherry-pick", "-x", commit);
+                    cherryPickSucceeded = true;
                 } catch (Exception e) {
+                    cherryPickException = e;
                     try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {}
-                    throw new RuntimeException("Cherry-pick failed for " + commit + ": " + e.getMessage(), e);
+                }
+            }
+            
+            // Fallback: try format-patch and apply if cherry-pick failed
+            if (!cherryPickSucceeded) {
+                taskLogger.warning("Cherry-pick failed for " + commit + ", attempting format-patch fallback");
+                try {
+                    // Create a patch file from the commit
+                    File patchFile = new File(workDir, commit + ".patch");
+                    ProcessBuilder patchPb = new ProcessBuilder();
+                    patchPb.directory(repoRoot);
+                    
+                    if (isMerge) {
+                        // For merge commits, create a diff against first parent
+                        executeCommand(patchPb, "git", "format-patch", "-1", "--stdout", "-m", "--first-parent", commit);
+                    } else {
+                        executeCommand(patchPb, "git", "format-patch", "-1", "--stdout", commit);
+                    }
+                    
+                    // Redirect output to patch file
+                    patchPb.redirectOutput(patchFile);
+                    Process patchProcess = patchPb.start();
+                    patchProcess.waitFor();
+                    
+                    if (patchFile.exists() && patchFile.length() > 0) {
+                        // Apply the patch
+                        executeCommand(wtPb, "git", "apply", "--3way", patchFile.getAbsolutePath());
+                        
+                        // Commit the changes
+                        executeCommand(wtPb, "git", "add", "-A");
+                        String commitMessage = executeCommandAndGetOutput(repoPb, "git", "log", "--format=%B", "-n", "1", commit).trim();
+                        executeCommand(wtPb, "git", "commit", "-m", commitMessage);
+                        
+                        taskLogger.info("Successfully applied commit " + commit + " using format-patch fallback");
+                    } else {
+                        throw new RuntimeException("Failed to create patch for " + commit);
+                    }
+                } catch (Exception fallbackException) {
+                    // Both methods failed, report build failure
+                    taskLogger.severe("Both cherry-pick and format-patch failed for " + commit);
+                    taskLogger.severe("Cherry-pick error: " + cherryPickException.getMessage());
+                    taskLogger.severe("Format-patch error: " + fallbackException.getMessage());
+                    throw new RuntimeException("Failed to apply commit " + commit + " using both cherry-pick and format-patch methods", fallbackException);
                 }
             }
 

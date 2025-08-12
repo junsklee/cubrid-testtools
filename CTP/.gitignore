@@ -13,3 +13,23 @@ sql/result/
 .project
 .vscode
 
+# External dependencies (downloaded during build)
+lib/json.jar
+
+# Bisect tool build artifacts
+bisect/build/
+bisect/lib/*.jar
+
+# Compiled class files
+*.class
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# Temporary files
+*.tmp
+*.temp
+
+runtime/

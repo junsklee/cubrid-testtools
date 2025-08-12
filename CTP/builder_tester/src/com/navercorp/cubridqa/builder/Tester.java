@@ -1115,8 +1115,20 @@ public class Tester {
             String systemLogDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system";
             new File(systemLogDir).mkdirs();
             
-            // Use a simple FileHandler without rotation (limit = 0 means no limit, count = 1 means no rotation)
-            FileHandler fileHandler = new FileHandler(systemLogDir + "/tester.log", 0, 1, true);
+            // Clean up any existing lock files and numbered log files
+            File logDir = new File(systemLogDir);
+            File[] oldLogFiles = logDir.listFiles((dir, name) -> 
+                name.matches("tester\\.log\\.(\\d+|lck)"));
+            if (oldLogFiles != null) {
+                for (File oldFile : oldLogFiles) {
+                    oldFile.delete();
+                }
+            }
+            
+            // Use FileHandler with a very large limit to prevent rotation
+            // 100MB limit should be sufficient for normal operation without rotation
+            int logSizeLimit = 100 * 1024 * 1024; // 100MB
+            FileHandler fileHandler = new FileHandler(systemLogDir + "/tester.log", logSizeLimit, 1, true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(fileHandler);
@@ -1144,6 +1156,12 @@ public class Tester {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 logger.info("Shutting down...");
                 tester.stop();
+                
+                // Clean up lock file on shutdown
+                File lockFile = new File(systemLogDir + "/tester.log.lck");
+                if (lockFile.exists()) {
+                    lockFile.delete();
+                }
             }));
             
             // Keep running

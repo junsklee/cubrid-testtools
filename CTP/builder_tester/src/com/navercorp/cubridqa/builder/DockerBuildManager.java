@@ -223,10 +223,61 @@ public class DockerBuildManager {
             writer.println("# Checkout baseline on a temporary branch and cherry-pick the commit (no worktree required)");
             writer.println("tmp_branch=isolate_${COMMIT_HASH:0:7}_tmp");
             writer.println("git checkout -B \"$tmp_branch\" \"${BASELINE_COMMIT}\"");
+            writer.println();
+            writer.println("# Store the current repo path for patch creation");
+            writer.println("current_repo=\"$target/repo\"");
+            writer.println();
+            writer.println("# Function to apply commit with fallback");
+            writer.println("apply_commit() {");
+            writer.println("  local commit_hash=$1");
+            writer.println("  local is_merge=$2");
+            writer.println("  ");
+            writer.println("  # First attempt: cherry-pick");
+            writer.println("  if [ \"$is_merge\" = \"true\" ]; then");
+            writer.println("    if git cherry-pick -m 1 -x \"$commit_hash\" 2>/dev/null; then");
+            writer.println("      echo 'Cherry-pick succeeded'");
+            writer.println("      return 0");
+            writer.println("    else");
+            writer.println("      git cherry-pick --abort 2>/dev/null || true");
+            writer.println("    fi");
+            writer.println("  else");
+            writer.println("    if git cherry-pick -x \"$commit_hash\" 2>/dev/null; then");
+            writer.println("      echo 'Cherry-pick succeeded'");
+            writer.println("      return 0");
+            writer.println("    else");
+            writer.println("      git cherry-pick --abort 2>/dev/null || true");
+            writer.println("    fi");
+            writer.println("  fi");
+            writer.println("  ");
+            writer.println("  # Fallback: format-patch and apply");
+            writer.println("  echo 'Cherry-pick failed, attempting format-patch fallback'");
+            writer.println("  ");
+            writer.println("  # Create patch in the current directory");
+            writer.println("  if [ \"$is_merge\" = \"true\" ]; then");
+            writer.println("    git format-patch -1 --stdout -m --first-parent \"$commit_hash\" > /tmp/commit.patch");
+            writer.println("  else");
+            writer.println("    git format-patch -1 --stdout \"$commit_hash\" > /tmp/commit.patch");
+            writer.println("  fi");
+            writer.println("  ");
+            writer.println("  # Apply patch");
+            writer.println("  if git apply --3way /tmp/commit.patch; then");
+            writer.println("    # Get commit message and commit");
+            writer.println("    commit_msg=$(git log --format=%B -n 1 \"$commit_hash\")");
+            writer.println("    git add -A");
+            writer.println("    git commit -m \"$commit_msg\"");
+            writer.println("    echo 'Format-patch fallback succeeded'");
+            writer.println("    return 0");
+            writer.println("  else");
+            writer.println("    echo 'Both cherry-pick and format-patch failed'");
+            writer.println("    return 1");
+            writer.println("  fi");
+            writer.println("}");
+            writer.println();
+            writer.println("# Determine if it's a merge commit and apply");
             writer.println("if git rev-list --parents -n1 \"${COMMIT_HASH}\" | awk '{exit (NF>2)?0:1}'; then");
-            writer.println("  git cherry-pick -m 1 -x \"${COMMIT_HASH}\" || { git cherry-pick --abort; echo 'Cherry-pick failed'; exit 1; }");
+            writer.println("  apply_commit \"${COMMIT_HASH}\" true || { echo '[FATAL] Failed to apply commit'; exit 1; }");
             writer.println("else");
-            writer.println("  git cherry-pick -x \"${COMMIT_HASH}\" || { git cherry-pick --abort; echo 'Cherry-pick failed'; exit 1; }");
+            writer.println("  apply_commit \"${COMMIT_HASH}\" false || { echo '[FATAL] Failed to apply commit'; exit 1; }");
             writer.println("fi");
             writer.println("git submodule sync --recursive");
             writer.println("git submodule update --init --recursive --checkout --force");
@@ -280,12 +331,68 @@ public class DockerBuildManager {
             // detect merge commit
             String parents = executeAndGet(repoPb, "git", "rev-list", "--parents", "-n1", commitHash).trim();
             boolean isMerge = parents.split("\\s+").length > 2;
+            
+            boolean cherryPickSucceeded = false;
+            Exception cherryPickException = null;
+            
+            // First attempt: try cherry-pick
             if (isMerge) {
-                try { executeCommand(wtPb, "git", "cherry-pick", "-m", "1", "-x", commitHash); }
-                catch (Exception e) { try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} throw e; }
+                try { 
+                    executeCommand(wtPb, "git", "cherry-pick", "-m", "1", "-x", commitHash);
+                    cherryPickSucceeded = true;
+                } catch (Exception e) { 
+                    cherryPickException = e;
+                    try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} 
+                }
             } else {
-                try { executeCommand(wtPb, "git", "cherry-pick", "-x", commitHash); }
-                catch (Exception e) { try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} throw e; }
+                try { 
+                    executeCommand(wtPb, "git", "cherry-pick", "-x", commitHash);
+                    cherryPickSucceeded = true;
+                } catch (Exception e) { 
+                    cherryPickException = e;
+                    try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} 
+                }
+            }
+            
+            // Fallback: try format-patch and apply if cherry-pick failed
+            if (!cherryPickSucceeded) {
+                logger.warning("Cherry-pick failed for " + commitHash + ", attempting format-patch fallback");
+                try {
+                    // Create a patch file from the commit
+                    File patchFile = new File(workDir, commitHash + ".patch");
+                    ProcessBuilder patchPb = new ProcessBuilder();
+                    patchPb.directory(repoRoot);
+                    
+                    if (isMerge) {
+                        // For merge commits, create a diff against first parent
+                        patchPb.command("git", "format-patch", "-1", "--stdout", "-m", "--first-parent", commitHash);
+                    } else {
+                        patchPb.command("git", "format-patch", "-1", "--stdout", commitHash);
+                    }
+                    
+                    // Redirect output to patch file
+                    patchPb.redirectOutput(patchFile);
+                    Process patchProcess = patchPb.start();
+                    patchProcess.waitFor();
+                    
+                    if (patchFile.exists() && patchFile.length() > 0) {
+                        // Apply the patch
+                        executeCommand(wtPb, "git", "apply", "--3way", patchFile.getAbsolutePath());
+                        
+                        // Commit the changes
+                        executeCommand(wtPb, "git", "add", "-A");
+                        String commitMessage = executeAndGet(repoPb, "git", "log", "--format=%B", "-n", "1", commitHash);
+                        executeCommand(wtPb, "git", "commit", "-m", commitMessage);
+                        
+                        logger.info("Successfully applied commit " + commitHash + " using format-patch fallback");
+                    } else {
+                        throw new RuntimeException("Failed to create patch for " + commitHash);
+                    }
+                } catch (Exception fallbackException) {
+                    // Both methods failed
+                    logger.severe("Both cherry-pick and format-patch failed for " + commitHash);
+                    throw new RuntimeException("Failed to apply commit " + commitHash + " using both methods", fallbackException);
+                }
             }
             executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
             executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
