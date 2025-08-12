@@ -55,9 +55,12 @@ public class ReportHandler implements HttpHandler {
             String requestBody = readRequestBody(exchange);
             JSONObject data = new JSONObject(requestBody);
             
-            // Generate request ID and create directory
-            String requestId = "req_" + System.currentTimeMillis() + "_" + 
-                               UUID.randomUUID().toString().substring(0, 8);
+            // Prefer incoming request/task ID so reports land in the same request directory
+            String requestId = data.optString("requestId", data.optString("taskId", ""));
+            if (requestId == null || requestId.trim().isEmpty()) {
+                requestId = "req_" + System.currentTimeMillis() + "_" +
+                            UUID.randomUUID().toString().substring(0, 8);
+            }
             Path requestDir = Paths.get(logBaseDir, "requests", requestId);
             Files.createDirectories(requestDir);
             
@@ -177,22 +180,18 @@ public class ReportHandler implements HttpHandler {
     }
     
     private String loadReportTemplate() throws IOException {
-        // Check if template file exists
-        Path templatePath = Paths.get(System.getProperty("user.dir"), 
-                                      "resources", "report-template.html");
-        
-        if (Files.exists(templatePath)) {
-            return new String(Files.readAllBytes(templatePath));
+        // Prefer loading from the classpath (packaged resource)
+        try {
+            return ReportTemplate.loadFromClasspath();
+        } catch (Exception ignore) {
+            // Fallback to external resources directory if present
+            Path templatePath = Paths.get(System.getProperty("user.dir"),
+                                          "resources", "report-template.html");
+            if (Files.exists(templatePath)) {
+                return new String(Files.readAllBytes(templatePath));
+            }
+            throw new IOException("Report template not found in classpath or resources directory");
         }
-        
-        // Return embedded template if file doesn't exist
-        return getEmbeddedTemplate();
-    }
-    
-    private String getEmbeddedTemplate() {
-        // This will be a comprehensive HTML template with embedded CSS and JavaScript
-        // I'll create this as a separate constant for better organization
-        return ReportTemplate.HTML_TEMPLATE;
     }
     
     private String readRequestBody(HttpExchange exchange) throws IOException {

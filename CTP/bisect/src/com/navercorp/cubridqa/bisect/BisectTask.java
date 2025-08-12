@@ -8,6 +8,7 @@ import java.net.*;
 import java.net.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.*;
 import java.util.regex.*;
 import org.json.JSONObject;
@@ -259,16 +260,29 @@ public class BisectTask {
             
             logger.info(String.format("Bisect range: %s (good/parent) -> %s...%s (bad range)", 
                 goodCommit, suspectedStartCommit, suspectedEndCommit));
-            
-            // Run bisect for each test
-            for (int i = 0; i < tests.length(); i++) {
-                String test = tests.getString(i);
-                logger.info("Bisecting test: " + test);
-                
-                JSONObject result = bisectSingleTest(
-                    goodCommit, suspectedEndCommit, buildType, test, workerIp
-                );
-                results.add(result);
+
+            // Fast path: if only two commits in range (adjacent), avoid git bisect
+            // git rev-list --count start..end returns 1 when end is direct descendant of start
+            if (commitCount >= 0 && commitCount <= 1) {
+                logger.info("Using two-commit fast path (no git bisect)");
+                for (int i = 0; i < tests.length(); i++) {
+                    String test = tests.getString(i);
+                    logger.info("Fast-path bisecting test: " + test);
+                    JSONObject result = bisectTwoCommitFastPath(
+                        goodCommit, suspectedStartCommit, suspectedEndCommit, buildType, test, workerIp
+                    );
+                    results.add(result);
+                }
+            } else {
+                // Default: run bisect per test
+                for (int i = 0; i < tests.length(); i++) {
+                    String test = tests.getString(i);
+                    logger.info("Bisecting test: " + test);
+                    JSONObject result = bisectSingleTest(
+                        goodCommit, suspectedEndCommit, buildType, test, workerIp
+                    );
+                    results.add(result);
+                }
             }
             
             }
@@ -469,6 +483,8 @@ public class BisectTask {
         // Change to source directory for git operations
         ProcessBuilder pb = new ProcessBuilder();
         pb.directory(srcDir);
+        // Avoid interactive Git prompts that can hang
+        pb.environment().put("GIT_TERMINAL_PROMPT", "0");
         
         // Check if it's a git repository
         try {
@@ -494,9 +510,15 @@ public class BisectTask {
         logger.info("Pulling latest changes...");
         executeCommand(pb, "git", "pull", "origin", "develop");
         
-        // Update submodules
+        // Update submodules (parallel jobs, non-interactive)
         logger.info("Updating submodules...");
-        executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
+        try {
+            executeCommand(pb, "git", "submodule", "update", "--init", "--recursive", "--jobs", "4", "--depth", "1", "--recommend-shallow", "--progress");
+        } catch (Exception e) {
+            logger.warning("Submodule update encountered an issue: " + e.getMessage());
+            // Fallback without --jobs
+            executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
+        }
         
         logger.info("CUBRID repository setup completed");
     }
@@ -513,44 +535,99 @@ public class BisectTask {
             try {
                 // Create judge script
                 File judgeScript = createJudgeScript(workDir, testPath, buildType, workerIp);
-                
-                // Change to source directory
+
+                // Prep repo
                 ProcessBuilder pb = new ProcessBuilder();
                 pb.directory(new File(config.getCubridSrcDir()));
-                
-                // Reset any previous bisect
                 executeCommand(pb, "git", "bisect", "reset");
-                executeCommand(pb, "git", "submodule", "foreach", "git", "reset", "--hard", "HEAD");
-                executeCommand(pb, "git", "submodule", "update");
-                
-                // Start bisect
-                logger.info(String.format("Starting bisect: %s (good) -> %s (bad)", 
-                    commitFormer, commitLatter));
+                executeCommand(pb, "git", "clean", "-fdx");
+                executeCommand(pb, "git", "submodule", "sync");
+                try {
+                    executeCommand(pb, "git", "submodule", "update", "--init", "--recursive", "--jobs", "4", "--depth", "1", "--recommend-shallow");
+                } catch (Exception e) {
+                    logger.warning("Submodule update encountered an issue: " + e.getMessage());
+                    executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
+                }
+
+                // Start bisect (bad, good)
+                logger.info(String.format("Starting bisect: %s (good) -> %s (bad)", commitFormer, commitLatter));
                 executeCommand(pb, "git", "bisect", "start", commitLatter, commitFormer);
-                
-                // Run bisect with judge script
-                pb.redirectErrorStream(true); // Combine stdout and stderr
-                pb.command("git", "bisect", "run", judgeScript.getAbsolutePath());
-                Process process = pb.start();
-                
-                // Capture output
-                StringBuilder output = new StringBuilder();
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        output.append(line).append("\n");
-                        logger.info("BISECT: " + line);
+
+                int testedCommits = 0;
+                String firstBadCommit = null;
+                while (true) {
+                    // Current commit
+                    String currentCommit = getCurrentCommit(pb);
+                    testedCommits++;
+                    logger.info(String.format("Testing commit %d: %s", testedCommits, currentCommit));
+
+                    // Run judge script
+                    Process js = new ProcessBuilder("bash", "-lc", judgeScript.getAbsolutePath())
+                        .redirectErrorStream(true)
+                        .start();
+                    StringBuilder judgeOut = new StringBuilder();
+                    try (BufferedReader r = new BufferedReader(new InputStreamReader(js.getInputStream()))) {
+                        String line;
+                        while ((line = r.readLine()) != null) {
+                            judgeOut.append(line).append('\n');
+                        }
+                    }
+                    int judgeExit = js.waitFor();
+
+                    String bisectResult;
+                    if (judgeExit == 0) {
+                        bisectResult = executeCommandWithOutput(pb, "git", "bisect", "good");
+                    } else if (judgeExit == 1) {
+                        bisectResult = executeCommandWithOutput(pb, "git", "bisect", "bad");
+                    } else if (judgeExit == 125) {
+                        bisectResult = executeCommandWithOutput(pb, "git", "bisect", "skip");
+                    } else {
+                        // Unknown failure, abort
+                        executeCommand(pb, "git", "bisect", "reset");
+                        return new JSONObject()
+                            .put("name", testPath)
+                            .put("status", "error")
+                            .put("error", "Judge failed with exit code " + judgeExit)
+                            .put("runtimeMs", System.currentTimeMillis() - startTime);
+                    }
+
+                    // Check completion
+                    if (bisectResult.contains("is the first bad commit")) {
+                        firstBadCommit = extractFirstBadCommit(bisectResult);
+                        logger.info("Bisect complete. First bad commit: " + firstBadCommit);
+                        // Build final result output similar to parseBisectOutput
+                        String author = getCommitAuthor(firstBadCommit);
+                        return new JSONObject()
+                            .put("name", testPath)
+                            .put("status", "found")
+                            .put("firstBadCommit", firstBadCommit)
+                            .put("author", author)
+                            .put("runtimeMs", System.currentTimeMillis() - startTime);
+                    }
+                    if (bisectResult.contains("There are only 'skip'ped commits left to test")) {
+                        return new JSONObject()
+                            .put("name", testPath)
+                            .put("status", "environment_issue")
+                            .put("error", "All commits skipped due to environment/execution errors")
+                            .put("runtimeMs", System.currentTimeMillis() - startTime);
+                    }
+                    if (bisectResult.contains("bisect run cannot continue")) {
+                        return new JSONObject()
+                            .put("name", testPath)
+                            .put("status", "incomplete")
+                            .put("error", "Too many untestable commits in range")
+                            .put("runtimeMs", System.currentTimeMillis() - startTime);
+                    }
+
+                    if (testedCommits > 50) {
+                        executeCommand(pb, "git", "bisect", "reset");
+                        return new JSONObject()
+                            .put("name", testPath)
+                            .put("status", "error")
+                            .put("error", "Bisect taking too long, aborted after 50 commits")
+                            .put("runtimeMs", System.currentTimeMillis() - startTime);
                     }
                 }
-                
-                int exitCode = process.waitFor();
-                logger.info("Bisect completed with exit code: " + exitCode);
-                
-                logger.fine("Bisect output:\n" + output.toString());
-                
-                // Parse result
-                return parseBisectOutput(testPath, output.toString(), startTime);
                 
             } finally {
                 // Cleanup
@@ -582,6 +659,174 @@ public class BisectTask {
                 .put("runtimeMs", System.currentTimeMillis() - startTime);
         }
     }
+
+    /**
+     * Fast path for two-commit ranges: directly test start and end commits without invoking git bisect
+     */
+    private JSONObject bisectTwoCommitFastPath(
+        String goodCommit, String suspectedStartCommit, String suspectedEndCommit,
+        String buildType, String testPath, String workerIp
+    ) {
+        long startTime = System.currentTimeMillis();
+        try {
+            // Test suspectedStartCommit first
+            JSONObject startResult = testSingleCommitDirect(suspectedStartCommit, buildType, testPath, workerIp);
+            boolean startPassed = "pass".equals(startResult.optString("status"));
+
+            if (!startPassed) {
+                // Start is bad -> first bad is suspectedStartCommit
+                return new JSONObject()
+                    .put("name", testPath)
+                    .put("status", "found")
+                    .put("firstBadCommit", suspectedStartCommit)
+                    .put("runtimeMs", System.currentTimeMillis() - startTime);
+            }
+
+            // Otherwise test suspectedEndCommit
+            JSONObject endResult = testSingleCommitDirect(suspectedEndCommit, buildType, testPath, workerIp);
+            boolean endPassed = "pass".equals(endResult.optString("status"));
+
+            if (!endPassed) {
+                return new JSONObject()
+                    .put("name", testPath)
+                    .put("status", "found")
+                    .put("firstBadCommit", suspectedEndCommit)
+                    .put("runtimeMs", System.currentTimeMillis() - startTime);
+            }
+
+            // Neither failed
+            return new JSONObject()
+                .put("name", testPath)
+                .put("status", "no_bad_commit")
+                .put("message", "Both commits passed in two-commit fast path")
+                .put("runtimeMs", System.currentTimeMillis() - startTime);
+        } catch (Exception e) {
+            return new JSONObject()
+                .put("name", testPath)
+                .put("status", "error")
+                .put("error", e.getMessage())
+                .put("runtimeMs", System.currentTimeMillis() - startTime);
+        }
+    }
+
+    /**
+     * Build a specific commit and run a single test directly (no git bisect)
+     * Returns consumer-style JSON with status: pass|fail|execution_error|environment_error|build_error
+     */
+    private JSONObject testSingleCommitDirect(
+        String commit, String buildType, String testPath, String workerIp
+    ) throws Exception {
+        // Prepare work dir
+        File workDir = createTempDirectory();
+        try {
+            // Checkout commit
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(new File(config.getCubridSrcDir()));
+            // Avoid interactive prompts that can hang
+            pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+            executeCommand(pb, "git", "checkout", commit);
+            try {
+            executeCommand(pb, "git", "submodule", "update", "--init", "--recursive", "--jobs", "4", "--depth", "1", "--recommend-shallow", "--progress");
+            } catch (Exception e) {
+                logger.warning("Submodule update encountered an issue: " + e.getMessage());
+                executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
+            }
+
+            // Build using Docker or direct
+            String buildPackagePath;
+            if (config.useDocker() && dockerBuildManager.isDockerAvailable()) {
+                // Use docker path: reuse judge's docker build inner script generation
+                // Minimal duplication: call writeDirectBuildCommands when docker not available
+                // Here we mimic docker build path from judge
+                // Create docker build script
+                File dockerScript = new File(workDir, "docker_build_internal.sh");
+                try (PrintWriter writer = new PrintWriter(new FileWriter(dockerScript))) {
+                    writer.println("#!/bin/bash");
+                    writer.println("set -e");
+                    writer.println("cp -r /cubrid-src /tmp/cubrid-build");
+                    writer.println("cd /tmp/cubrid-build");
+                    writer.println("git checkout ${COMMIT_HASH}");
+                    writer.println("git submodule update --init --recursive");
+                    writer.println("rm -rf build_x86_64_*");
+                    writer.println("rm -rf cubridmanager/*");
+                    writer.println("./build.sh " + config.getBuildArg());
+                    writer.println("BUILD_DIR=$(ls -d build_x86_64_* | head -1)");
+                    writer.println("cd $BUILD_DIR");
+                    writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
+                }
+                dockerScript.setExecutable(true);
+
+                // Run docker build
+                ProcessBuilder dpb = new ProcessBuilder(
+                    "bash", "-lc",
+                    String.join(" ", Arrays.asList(
+                        "docker run --rm",
+                        "-v \"" + config.getCubridSrcDir() + ":/cubrid-src:ro\"",
+                        "-v \"" + workDir.getAbsolutePath() + ":/output:rw\"",
+                        "-e COMMIT_HASH=\"" + commit + "\"",
+                        "cubrid-bisect-builder:latest",
+                        "bash /output/docker_build_internal.sh"
+                    ))
+                );
+                dpb.redirectErrorStream(true);
+                Process dp = dpb.start();
+                dp.waitFor();
+                File cached = new File(new File(config.getWorkDir(), "cache"), "cubrid_" + commit.substring(0,7) + "_" + buildType + ".tar.gz");
+                File built = new File(workDir, "cubrid_" + commit.substring(0, 7) + ".tar.gz");
+                if (built.exists()) {
+                    cached.getParentFile().mkdirs();
+                    built.renameTo(cached);
+                }
+                buildPackagePath = cached.getAbsolutePath();
+            } else {
+                // Direct build
+                writeDirectBuildCommands(new PrintWriter(new FileWriter(new File(workDir, "noop"))), workDir);
+                // The above helper writes to script normally; replicate minimal direct build inline
+                executeCommand(pb, "rm", "-rf", config.getBuildDir());
+                executeCommand(pb, "./build.sh", config.getBuildArg());
+                File cacheDir = new File(config.getWorkDir(), "cache");
+                cacheDir.mkdirs();
+                File packageFile = new File(cacheDir, "cubrid_" + commit.substring(0,7) + "_" + buildType + ".tar.gz");
+                pb.directory(new File(config.getCubridSrcDir(), config.getBuildDir()));
+                executeCommand(pb, "tar", "czf", packageFile.getAbsolutePath(), ".");
+                buildPackagePath = packageFile.getAbsolutePath();
+            }
+
+            // Send test to consumer
+            String testDir = config.getShellTcDir() + "/" + testPath.substring(0, testPath.lastIndexOf("/"));
+            String testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
+            String testName = testScript.replace(".sh", "");
+
+            JSONObject testRequest = new JSONObject();
+            testRequest.put("buildPackage", buildPackagePath);
+            testRequest.put("testPath", testPath);
+            testRequest.put("testDir", testDir);
+            testRequest.put("testScript", testScript);
+            testRequest.put("testName", testName);
+
+            URL url = new URL("http://" + request.optString("workerIp", "localhost") + ":" + config.getConsumerPort() + "/test");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(testRequest.toString().getBytes());
+            }
+            StringBuilder response = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    response.append(line);
+                }
+            }
+            return new JSONObject(response.toString());
+        } finally {
+            // Cleanup workspace
+            if (request.optBoolean("autoDeleteBuilds", true)) {
+                deleteDirectory(workDir);
+            }
+        }
+    }
     
     private File createJudgeScript(File workDir, String testPath, String buildType, String workerIp) 
             throws IOException {
@@ -598,6 +843,13 @@ public class BisectTask {
             writer.println("set -e  # exit immediately on error");
             writer.println();
             
+            // Prepare caching variables
+            writer.println("# Build cache configuration");
+            writer.println("CACHE_DIR=\"" + new File(config.getWorkDir(), "cache").getAbsolutePath() + "\"");
+            writer.println("mkdir -p \"$CACHE_DIR\"");
+            writer.println("BUILD_TYPE=\"" + buildType + "\"");
+            writer.println();
+
             // Check if Docker should be used for builds
             if (config.useDocker() && dockerBuildManager.isDockerAvailable()) {
                 writer.println("# Docker build enabled with pre-built images");
@@ -613,7 +865,15 @@ public class BisectTask {
                 writer.println("# Use " + (config.usePrebuiltDockerImages() ? "pre-built" : "built") + " Docker images");
                 writer.println("echo \"Building CUBRID commit $COMMIT_HASH using Docker...\"");
                 writer.println();
-                writer.println("# Create build script for Docker");
+                writer.println("# Cache lookup");
+                writer.println("PKG_NAME=cubrid_${COMMIT_HASH:0:7}_${BUILD_TYPE}.tar.gz");
+                writer.println("CACHED_PKG=\"$CACHE_DIR/$PKG_NAME\"");
+                writer.println("if [ -f \"$CACHED_PKG\" ]; then");
+                writer.println("  echo \"Cache hit: $CACHED_PKG\"");
+                writer.println("  BUILD_PACKAGE=\"$CACHED_PKG\"");
+                writer.println("else");
+                writer.println("  echo \"Cache miss, building...\"");
+                writer.println("  # Create build script for Docker");
                 writer.println("cat > \"" + workDir.getAbsolutePath() + "/docker_build_internal.sh\" << 'EOF'");
                 writer.println("#!/bin/bash");
                 writer.println("set -e");
@@ -654,14 +914,31 @@ public class BisectTask {
                 writer.println("    " + dockerImage + " \\");
                 writer.println("    bash /output/docker_build_internal.sh");
                 writer.println();
-                writer.println("BUILD_PACKAGE=\"" + workDir.getAbsolutePath() + "/cubrid_${COMMIT_HASH:0:7}.tar.gz\"");
-                writer.println("echo \"Docker build completed. Package: $BUILD_PACKAGE\"");
+                writer.println("# Move to cache path");
+                writer.println("TMP_PKG=\"" + workDir.getAbsolutePath() + "/cubrid_${COMMIT_HASH:0:7}.tar.gz\"");
+                writer.println("mkdir -p \"$CACHE_DIR\" ");
+                writer.println("mv -f \"$TMP_PKG\" \"$CACHED_PKG\"");
+                writer.println("BUILD_PACKAGE=\"$CACHED_PKG\"");
+                writer.println("echo \"Docker build completed. Cached as: $BUILD_PACKAGE\"");
+                writer.println("fi");
             } else {
                 writer.println("# Direct build (Docker not enabled or not available)");
                 writer.println("echo \"Building CUBRID at commit $(git rev-parse HEAD)\"");
                 writer.println("cd " + config.getCubridSrcDir());
                 writer.println();
+                // Direct build with cache
+                writer.println("COMMIT_HASH=$(git rev-parse HEAD)");
+                writer.println("PKG_NAME=cubrid_${COMMIT_HASH:0:7}_${BUILD_TYPE}.tar.gz");
+                writer.println("CACHED_PKG=\"$CACHE_DIR/$PKG_NAME\"");
+                writer.println("if [ -f \"$CACHED_PKG\" ]; then");
+                writer.println("  echo \"Cache hit: $CACHED_PKG\" ");
+                writer.println("  BUILD_PACKAGE=\"$CACHED_PKG\" ");
+                writer.println("else");
                 writeDirectBuildCommands(writer, workDir);
+                writer.println("# Move to cache and set BUILD_PACKAGE");
+                writer.println("mv -f \"" + workDir.getAbsolutePath() + "/cubrid_$(git rev-parse --short HEAD).tar.gz\" \"$CACHED_PKG\"");
+                writer.println("BUILD_PACKAGE=\"$CACHED_PKG\" ");
+                writer.println("fi");
             }
             
             writer.println();

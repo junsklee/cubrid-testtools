@@ -38,6 +38,15 @@ echo "Compiling $(echo "$JAVA_FILES" | wc -l) Java files..."
 # Compile
 javac -cp "$CLASSPATH" -d "$BUILD_DIR" $JAVA_FILES
 
+echo "Copying resources (non-Java files) into build..."
+# Copy all non-Java files from src into build, preserving paths (POSIX-compatible)
+find "$SRC_DIR" -type f ! -name "*.java" | while IFS= read -r file; do
+    rel_path="${file#$SRC_DIR/}"
+    dest_dir="$BUILD_DIR/$(dirname "$rel_path")"
+    mkdir -p "$dest_dir"
+    cp "$file" "$dest_dir/"
+done
+
 if [ $? -eq 0 ]; then
     echo "Compilation successful!"
     echo "Build output: $BUILD_DIR"

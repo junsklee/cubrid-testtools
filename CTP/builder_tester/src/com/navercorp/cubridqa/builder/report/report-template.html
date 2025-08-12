@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CUBRID Test Results - {{REQUEST_ID}}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --success-color: #10b981;
+            --error-color: #ef4444;
+            --warning-color: #f59e0b;
+            --info-color: #3b82f6;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--primary-gradient);
+            min-height: 100vh;
+            color: #1f2937;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            color: #111827;
+            margin-bottom: 0.5rem;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+        
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+        }
+        
+        .search-box input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e5e7eb;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+        
+        .search-box input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .filter-buttons {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #f3f4f6;
+            color: #374151;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .btn.active {
+            background: #374151;
+            color: white;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+            color: #6b7280;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .results-table {
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(10px);
+            border-radius: 1rem;
+            overflow: hidden;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        thead {
+            background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+        }
+        
+        th {
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+            color: #374151;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            background: inherit;
+            z-index: 10;
+        }
+        
+        th.commit-col {
+            text-align: center;
+            min-width: 120px;
+        }
+        
+        tbody tr {
+            border-bottom: 1px solid #e5e7eb;
+            transition: all 0.2s ease;
+        }
+        
+        tbody tr:hover {
+            background: #f9fafb;
+        }
+        
+        td {
+            padding: 1rem;
+        }
+        
+        .test-name {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            color: #4b5563;
+        }
+        
+        .result-cell {
+            text-align: center;
+            font-weight: 500;
+        }
+        
+        .result-pass {
+            background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+            color: #065f46;
+            border-radius: 0.375rem;
+            padding: 0.25rem 0.75rem;
+            display: inline-block;
+        }
+        
+        .result-fail {
+            background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+            color: #991b1b;
+            border-radius: 0.375rem;
+            padding: 0.25rem 0.75rem;
+            display: inline-block;
+        }
+        
+        .result-error {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+            border-radius: 0.375rem;
+            padding: 0.25rem 0.75rem;
+            display: inline-block;
+        }
+        
+        .result-skip {
+            background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+            color: #6b7280;
+            border-radius: 0.375rem;
+            padding: 0.25rem 0.75rem;
+            display: inline-block;
+        }
+        
+        .fail-count {
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+        
+        .fail-count-0 {
+            color: #065f46;
+        }
+        
+        .fail-count-partial {
+            color: #92400e;
+        }
+        
+        .fail-count-all {
+            color: #991b1b;
+        }
+        
+        .verdict {
+            font-size: 0.9rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 500;
+        }
+        
+        .verdict-unstable {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+        }
+        
+        .verdict-bug {
+            background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+            color: #991b1b;
+        }
+        
+        .verdict-preexisting {
+            background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+            color: #3730a3;
+        }
+        
+        .verdict-success {
+            background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+            color: #065f46;
+        }
+        
+        .export-buttons {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            display: flex;
+            gap: 1rem;
+            z-index: 100;
+        }
+        
+        .export-btn {
+            background: white;
+            border: 2px solid #e5e7eb;
+            padding: 1rem;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .export-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 200px;
+            font-size: 1.2rem;
+            color: #6b7280;
+        }
+        
+        .no-results {
+            text-align: center;
+            padding: 3rem;
+            color: #6b7280;
+        }
+        
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .header h1 { font-size: 1.8rem; }
+            .controls { flex-direction: column; }
+            .search-box { width: 100%; }
+        }
+    </style>
+    </head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>CUBRID Test Results</h1>
+            <div class="metadata">
+                <div class="metadata-item">
+                    <strong>Request ID:</strong>
+                    <span>{{REQUEST_ID}}</span>
+                </div>
+                <div class="metadata-item">
+                    <strong>Generated:</strong>
+                    <span>{{TIMESTAMP}}</span>
+                </div>
+                <div class="metadata-item">
+                    <strong>Total Tests:</strong>
+                    <span id="totalTests">-</span>
+                </div>
+                <div class="metadata-item">
+                    <strong>Commits:</strong>
+                    <span id="totalCommits">-</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="🔍 Search test names..." />
+            </div>
+            <div class="filter-buttons">
+                <button class="btn btn-secondary active" onclick="filterResults('all')">All</button>
+                <button class="btn btn-secondary" onclick="filterResults('passed')">Passed</button>
+                <button class="btn btn-secondary" onclick="filterResults('failed')">Failed</button>
+                <button class="btn btn-secondary" onclick="filterResults('unstable')">Unstable</button>
+            </div>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" style="color: var(--success-color);" id="passedCount">0</div>
+                <div class="stat-label">Tests Passed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="color: var(--error-color);" id="failedCount">0</div>
+                <div class="stat-label">Tests Failed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="color: var(--warning-color);" id="unstableCount">0</div>
+                <div class="stat-label">Unstable Tests</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="color: var(--info-color);" id="passRate">0%</div>
+                <div class="stat-label">Pass Rate</div>
+            </div>
+        </div>
+        
+        <div class="results-table">
+            <div class="table-container">
+                <table id="resultsTable">
+                    <thead>
+                        <tr id="tableHeader">
+                            <th>Test Case</th>
+                            <th>Fail Num</th>
+                            <th>Verdict</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody">
+                        <tr>
+                            <td colspan="4" class="loading">Loading results...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <div class="export-buttons">
+        <button class="export-btn" onclick="exportJSON()" title="Export as JSON">JSON</button>
+        <button class="export-btn" onclick="exportCSV()" title="Export as CSV">CSV</button>
+    </div>
+    
+    <script>
+        // Parse the embedded JSON data
+        const rawData = {{RESULTS_JSON}};
+        let processedData = {};
+        let commits = [];
+        let currentFilter = 'all';
+        
+        window.addEventListener('DOMContentLoaded', () => {
+            processData();
+            renderTable();
+            setupEventListeners();
+        });
+        
+        function processData() {
+            const commitSet = new Set();
+            const testGroups = {};
+            const results = rawData.results || rawData;
+            if (Array.isArray(results)) {
+                results.forEach(result => {
+                    const commit = result.commit || 'unknown';
+                    const test = result.test || 'unknown';
+                    const status = result.status || 'error';
+                    commitSet.add(commit);
+                    if (!testGroups[test]) {
+                        testGroups[test] = {};
+                    }
+                    testGroups[test][commit] = status;
+                });
+            }
+            commits = Array.from(commitSet).sort();
+            processedData = testGroups;
+            document.getElementById('totalTests').textContent = Object.keys(testGroups).length;
+            document.getElementById('totalCommits').textContent = commits.length;
+            updateStatistics();
+        }
+        
+        function updateStatistics() {
+            let totalTests = 0, passedTests = 0, failedTests = 0, unstableTests = 0;
+            Object.keys(processedData).forEach(test => {
+                const failCount = calculateFailCount(test);
+                totalTests++;
+                if (failCount === 0) passedTests++;
+                else if (failCount === commits.length) failedTests++;
+                else unstableTests++;
+            });
+            document.getElementById('passedCount').textContent = passedTests;
+            document.getElementById('failedCount').textContent = failedTests;
+            document.getElementById('unstableCount').textContent = unstableTests;
+            const passRate = totalTests > 0 ? Math.round((passedTests / totalTests) * 100) : 0;
+            document.getElementById('passRate').textContent = passRate + '%';
+        }
+        
+        function calculateFailCount(testName) {
+            let failCount = 0;
+            commits.forEach(commit => {
+                const status = processedData[testName][commit] || 'error';
+                if (status !== 'pass') failCount++;
+            });
+            return failCount;
+        }
+        
+        function getVerdict(testName, failCount) {
+            const numCommits = commits.length;
+            // Prioritize build/infra errors in verdict
+            const buildErrs = [];
+            const infraErrs = [];
+            commits.forEach(commit => {
+                const s = (processedData[testName][commit] || '').toLowerCase();
+                if (s === 'build_failed') buildErrs.push(commit.substring(0,7));
+                else if (s === 'execution_error' || s === 'error') infraErrs.push(commit.substring(0,7));
+            });
+            if (buildErrs.length > 0) {
+                return { text: 'Build errors in: ' + buildErrs.join(', '), class: 'verdict-bug' };
+            }
+            if (infraErrs.length > 0) {
+                return { text: 'Test errors in: ' + infraErrs.join(', '), class: 'verdict-unstable' };
+            }
+            if (failCount === 0) {
+                return { text: 'Unstable: Not reproduced across listed commits', class: 'verdict-success' };
+            } else if (failCount === 1) {
+                let failedCommit = null;
+                for (let i=0;i<commits.length;i++) {
+                    const c = commits[i];
+                    if ((processedData[testName][c] || 'error') !== 'pass') { failedCommit = c.substring(0,7); break; }
+                }
+                return { text: 'Bug or Revise: Caused by ' + failedCommit, class: 'verdict-bug' };
+            } else if (failCount === numCommits) {
+                return { text: 'Pre-existing Failure: Likely not caused by listed commits', class: 'verdict-preexisting' };
+            } else {
+                return { text: 'Unstable: Fails intermittently across commits', class: 'verdict-unstable' };
+            }
+        }
+        
+        function renderTable() {
+            const headerRow = document.getElementById('tableHeader');
+            const tbody = document.getElementById('tableBody');
+            // Rebuild header explicitly to ensure correct order and column visibility
+            headerRow.innerHTML = '';
+            const thTest = document.createElement('th'); thTest.textContent = 'Test Case'; headerRow.appendChild(thTest);
+            commits.forEach(commit => {
+                const th = document.createElement('th');
+                th.className = 'commit-col';
+                th.textContent = commit.substring(0, 7);
+                th.title = commit;
+                headerRow.appendChild(th);
+            });
+            const thFail = document.createElement('th'); thFail.textContent = 'Fail Num'; headerRow.appendChild(thFail);
+            const thVerdict = document.createElement('th'); thVerdict.textContent = 'Verdict'; headerRow.appendChild(thVerdict);
+            tbody.innerHTML = '';
+            const tests = Object.keys(processedData).sort();
+            if (tests.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="' + (commits.length + 3) + '" class="no-results">No test results found</td></tr>';
+                return;
+            }
+            tests.forEach(test => {
+                const row = createTestRow(test);
+                if (row) tbody.appendChild(row);
+            });
+        }
+        
+        function createTestRow(testName) {
+            const failCount = calculateFailCount(testName);
+            const verdict = getVerdict(testName, failCount);
+            if (currentFilter !== 'all') {
+                if (currentFilter === 'passed' && failCount !== 0) return null;
+                if (currentFilter === 'failed' && failCount !== commits.length) return null;
+                if (currentFilter === 'unstable' && (failCount === 0 || failCount === commits.length)) return null;
+            }
+            const row = document.createElement('tr');
+            const testCell = document.createElement('td');
+            testCell.className = 'test-name';
+            testCell.textContent = testName;
+            row.appendChild(testCell);
+            commits.forEach(commit => {
+                const cell = document.createElement('td');
+                cell.className = 'result-cell';
+                const status = processedData[testName][commit] || 'error';
+                let statusClass = 'result-skip';
+                let statusText = 'N/A';
+                switch(status) {
+                    case 'pass': statusClass = 'result-pass'; statusText = 'PASS'; break;
+                    case 'fail': statusClass = 'result-fail'; statusText = 'FAIL'; break;
+                    case 'build_failed': statusClass = 'result-error'; statusText = 'BUILD'; break;
+                    case 'execution_error':
+                    case 'error': statusClass = 'result-error'; statusText = 'ERROR'; break;
+                }
+                cell.innerHTML = "<span class=\"" + statusClass + "\">" + statusText + "</span>";
+                row.appendChild(cell);
+            });
+            const failCountCell = document.createElement('td');
+            let failCountClass = 'fail-count';
+            if (failCount === 0) failCountClass += ' fail-count-0';
+            else if (failCount === commits.length) failCountClass += ' fail-count-all';
+            else failCountClass += ' fail-count-partial';
+            failCountCell.className = failCountClass;
+            failCountCell.textContent = failCount;
+            row.appendChild(failCountCell);
+            const verdictCell = document.createElement('td');
+            verdictCell.innerHTML = "<span class=\"verdict " + verdict.class + "\">" + verdict.text + "</span>";
+            row.appendChild(verdictCell);
+            return row;
+        }
+        
+        function filterResults(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-buttons .btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            renderTable();
+        }
+        
+        function setupEventListeners() {
+            const searchInput = document.getElementById('searchInput');
+            searchInput.addEventListener('input', function() {
+                const searchTerm = this.value.toLowerCase();
+                const rows = document.querySelectorAll('#tableBody tr');
+                rows.forEach(row => {
+                    const testName = row.querySelector('.test-name');
+                    if (testName) {
+                        const text = testName.textContent.toLowerCase();
+                        row.style.display = text.includes(searchTerm) ? '' : 'none';
+                    }
+                });
+            });
+        }
+        
+        function exportJSON() {
+            const exportData = { requestId: "{{REQUEST_ID}}", timestamp: "{{TIMESTAMP}}", commits, results: processedData };
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = "test-results-{{REQUEST_ID}}.json"; document.body.appendChild(a);
+            a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        }
+        
+        function exportCSV() {
+            let csv = 'Test Case,';
+            commits.forEach(commit => { csv += commit.substring(0, 7) + ','; });
+            csv += 'Fail Num,Verdict\n';
+            Object.keys(processedData).sort().forEach(test => {
+                csv += '"' + test + '",';
+                commits.forEach(commit => { const status = processedData[test][commit] || 'error'; csv += status.toUpperCase() + ','; });
+                const failCount = calculateFailCount(test);
+                const verdict = getVerdict(test, failCount);
+                csv += failCount + ',"' + verdict.text + '"\n';
+            });
+            const blob = new Blob([csv], {type: 'text/csv'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = "test-results-{{REQUEST_ID}}.csv"; document.body.appendChild(a);
+            a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
+

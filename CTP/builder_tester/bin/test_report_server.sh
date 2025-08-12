@@ -6,7 +6,8 @@ echo "Testing CUBRID Report Server..."
 echo "================================"
 
 # Sample test data
-cat > /tmp/test_results.json <<'EOF'
+TS=$(date +%s)000
+cat > /tmp/test_results.json <<EOF
 {
   "taskId": "test_123456",
   "results": [
@@ -20,7 +21,7 @@ cat > /tmp/test_results.json <<'EOF'
     {"commit": "ghi789jkl", "test": "shell/_01_utility/test2.sh", "status": "fail"},
     {"commit": "ghi789jkl", "test": "shell/_01_utility/test3.sh", "status": "pass"}
   ],
-  "timestamp": $(date +%s)000
+  "timestamp": $TS
 }
 EOF
 

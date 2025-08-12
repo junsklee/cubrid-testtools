@@ -4,7 +4,7 @@
 
 # Configuration
 BUILDER_URL="http://192.168.1.5:8089"
-CALLBACK_URL="http://192.168.1.5:8888/callback"  # Your callback endpoint
+CALLBACK_URL="http://192.168.1.5:8089/callback"  # Your callback endpoint
 WORKER_IP="192.168.1.5"  # Where tester is running
 
 # Test data
