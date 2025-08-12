@@ -243,6 +243,13 @@ public class Tester {
         }
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
+
+        // Ensure shell testcases repository is on the requested branch from preferred remote
+        try {
+            syncShellTestcasesRepo(testLogger);
+        } catch (Exception e) {
+            testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
+        }
         
         // Copy build package to Docker work directory
         Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
@@ -480,6 +487,13 @@ public class Tester {
         testLogger.info("Direct test execution");
         testLogger.info("  Build package: " + buildPackage);
         testLogger.info("  Test: " + testName);
+
+        // Ensure shell testcases repository is on the requested branch from preferred remote
+        try {
+            syncShellTestcasesRepo(testLogger);
+        } catch (Exception e) {
+            testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
+        }
         
         // Install CUBRID
         Path installDir = null;
@@ -492,7 +506,7 @@ public class Tester {
                 .put("message", "Failed to install CUBRID: " + e.getMessage())
                 .put("test", testName);
         }
-        
+
         // Set environment for CUBRID
         Map<String, String> env = new HashMap<>(System.getenv());
         env.put("CUBRID", installDir.toString());
@@ -978,6 +992,112 @@ public class Tester {
             }
             dir.delete();
         }
+    }
+
+    /**
+     * Ensure the shell testcases repository at shell_tc_dir is checked out to the configured
+     * branch using the preferred remote (upstream), falling back to origin when needed.
+     * This only applies to the shell testcases repo and does not affect other repositories.
+     */
+    private void syncShellTestcasesRepo(Logger log) throws IOException, InterruptedException {
+        String repoPath = config.getShellTcDir();
+        String targetBranch = config.getShellTcBranch();
+        File repoDir = new File(repoPath);
+        if (!repoDir.exists() || !repoDir.isDirectory()) {
+            log.warning("shell_tc_dir does not exist: " + repoPath + "; skipping sync");
+            return;
+        }
+
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(repoDir);
+
+        // Verify git repo
+        if (runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
+            log.warning("shell_tc_dir is not a git repository: " + repoPath + "; skipping sync");
+            return;
+        }
+
+        // Determine preferred remote: upstream, fallback to origin
+        String preferred = "upstream";
+        String chosenRemote = preferred;
+        if (runAndExitCode(pb, new String[]{"git", "remote", "get-url", preferred}) != 0) {
+            chosenRemote = "origin";
+            if (runAndExitCode(pb, new String[]{"git", "remote", "get-url", chosenRemote}) != 0) {
+                log.warning("Neither 'upstream' nor 'origin' remotes are configured in " + repoPath + "; skipping sync");
+                return;
+            }
+        }
+
+        // Prefer upstream if it has the branch; otherwise use origin if available
+        if (!remoteBranchExists(pb, chosenRemote, targetBranch)) {
+            if (!"origin".equals(chosenRemote)
+                && runAndExitCode(pb, new String[]{"git", "remote", "get-url", "origin"}) == 0
+                && remoteBranchExists(pb, "origin", targetBranch)) {
+                chosenRemote = "origin";
+            } else {
+                log.warning("Branch '" + targetBranch + "' not found on remote '" + chosenRemote + "'. Skipping sync.");
+                return;
+            }
+        }
+
+        log.info("Syncing shell testcases repo: branch='" + targetBranch + "' via remote='" + chosenRemote + "'");
+
+        // Fetch just the target branch to reduce traffic
+        runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
+        // Create/reset local branch to remote branch
+        runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
+        // Ensure clean state (avoid untracked noise)
+        runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+        // Hard reset to remote branch to avoid local drift
+        runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+    }
+
+    private boolean remoteBranchExists(ProcessBuilder pb, String remote, String branch) throws IOException, InterruptedException {
+        // Use ls-remote to test if the branch exists on the remote
+        ProcessBuilder lp = new ProcessBuilder("bash", "-lc",
+            "git ls-remote --heads " + escapeShell(remote) + " " + escapeShell(branch) + " | wc -l");
+        lp.directory(pb.directory());
+        lp.redirectErrorStream(true);
+        Process p = lp.start();
+        StringBuilder out = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            String line; while ((line = r.readLine()) != null) { out.append(line); }
+        }
+        p.waitFor();
+        String s = out.toString().trim();
+        try {
+            return Integer.parseInt(s.isEmpty() ? "0" : s) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private int runAndExitCode(ProcessBuilder basePb, String[] cmd) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.directory(basePb.directory());
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+        drain(p.getInputStream());
+        p.waitFor();
+        return p.exitValue();
+    }
+
+    private void runOrThrow(ProcessBuilder basePb, String[] cmd) throws IOException, InterruptedException {
+        int ec = runAndExitCode(basePb, cmd);
+        if (ec != 0) {
+            throw new IOException("Command failed (" + ec + "): " + String.join(" ", cmd));
+        }
+    }
+
+    private void drain(InputStream is) {
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(is))) {
+            while (r.readLine() != null) { /* discard */ }
+        } catch (IOException ignore) {}
+    }
+
+    private String escapeShell(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "'\\''");
     }
     
     public static void main(String[] args) {

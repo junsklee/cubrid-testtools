@@ -16,6 +16,7 @@ public class BuilderConfig {
     private static final String LISTEN_PORT = "listen_port";
     private static final String CUBRID_SRC_DIR = "cubrid_src_dir";
     private static final String SHELL_TC_DIR = "shell_tc_dir";
+    private static final String SHELL_TC_BRANCH = "shell_tc_branch";
     private static final String BUILD_ARG = "build_arg";
     private static final String BUILD_DIR = "build_dir";
     private static final String WORK_DIR = "work_dir";
@@ -117,6 +118,10 @@ public class BuilderConfig {
     
     public String getShellTcDir() {
         return properties.getProperty(SHELL_TC_DIR);
+    }
+
+    public String getShellTcBranch() {
+        return properties.getProperty(SHELL_TC_BRANCH, "develop");
     }
     
     public String getBuildArg() {
