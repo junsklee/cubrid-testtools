@@ -1,0 +1,99 @@
+# RBAC Configuration for Builder and Tester
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cubrid-builder
+  namespace: cubrid-testing
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cubrid-tester
+  namespace: cubrid-testing
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cubrid-builder-role
+  namespace: cubrid-testing
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cubrid-builder-binding
+  namespace: cubrid-testing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cubrid-builder-role
+subjects:
+- kind: ServiceAccount
+  name: cubrid-builder
+  namespace: cubrid-testing
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cubrid-tester-role
+  namespace: cubrid-testing
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cubrid-tester-binding
+  namespace: cubrid-testing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cubrid-tester-role
+subjects:
+- kind: ServiceAccount
+  name: cubrid-tester
+  namespace: cubrid-testing
+---
+# ClusterRole for accessing nodes (needed for node selection)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cubrid-node-reader
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cubrid-builder-node-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cubrid-node-reader
+subjects:
+- kind: ServiceAccount
+  name: cubrid-builder
+  namespace: cubrid-testing

@@ -1,6 +1,6 @@
 # Builder-Tester System
 
-A concurrent build-and-test system for CUBRID. It builds multiple commits in parallel and runs shell tests in isolated Docker containers, returning pass/fail/error results and optional callbacks.
+A concurrent build-and-test system for CUBRID with **Kubernetes support for workload management and horizontal scaling**. It builds multiple commits in parallel and runs shell tests in isolated containers (Docker or Kubernetes pods), returning pass/fail/error results and optional callbacks.
 
 This README is a high-level overview. Detailed docs are in the docs/ directory:
 
@@ -8,19 +8,32 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
 - docs/architecture/README.md – Components and flow
 - docs/usage/README.md – Setup and usage, CLI and APIs
 - docs/configuration/README.md – All configuration options and defaults
- - log/LOG_MANAGEMENT.md – Request-based logging design and operations
+- log/LOG_MANAGEMENT.md – Request-based logging design and operations
+- **k8s/README.md – Kubernetes deployment and scaling guide**
+
+## Key Features
+
+- **Kubernetes Integration**: Deploy and manage workloads as Kubernetes Jobs
+- **Horizontal Scaling**: Scale across multiple machines with different IPs
+- **Workload Distribution**: Automatic load balancing across nodes
+- **Resource Management**: CPU/memory limits and node selection
+- **High Availability**: Pod anti-affinity and failover support
+- **Backward Compatible**: Falls back to Docker when Kubernetes unavailable
 
 ## Isolated per-commit builds
 
 - Each target commit is built in isolation against a common baseline using a hermetic flow:
   - Baseline is computed as the parent of the earliest commit in your `commits[]` list
   - For each commit, one of the following is used:
+    - **Kubernetes Jobs** (when enabled): Creates isolated Job pods with resource limits
     - Docker build (default): clone into a writable work dir inside the container, checkout a temporary branch at the baseline, cherry-pick only that one commit, sync submodules to gitlinks, clean, build, and package
     - Direct host fallback: create a temporary branch + `git worktree add` at the baseline, cherry-pick only that commit, sync submodules to gitlinks, clean, build, package, then remove the worktree and delete the temp branch
   - Merge commits are cherry-picked with `-m 1` (mainline 1) by default
   - This avoids cumulative history and keeps builds hermetic
 
 ## Quick start
+
+### Traditional Mode (Docker/Direct)
 
 Prerequisites:
 - Java 8+
@@ -40,6 +53,49 @@ export GITHUB_TOKEN=your_github_token
 
 # In a shell where Builder runs
 export GITHUB_TOKEN=your_github_token
+./bin/start_builder.sh
+```
+
+### Kubernetes Mode (Scalable)
+
+Prerequisites:
+- Kubernetes cluster (1.19+)
+- kubectl configured
+- StorageClass supporting ReadWriteMany
+
+Deploy to Kubernetes:
+```bash
+cd CTP/builder_tester
+
+# Download Kubernetes client libraries
+./bin/download-k8s-libs.sh
+
+# Compile with Kubernetes support
+./bin/compile.sh
+
+# Deploy to cluster
+export GITHUB_TOKEN=your_github_token
+cd k8s
+./setup.sh
+
+# Scale horizontally
+kubectl scale deployment/cubrid-tester --replicas=10 -n cubrid-testing
+```
+
+Configure `conf/builder.conf` and `conf/tester.conf`:
+```properties
+# Enable Kubernetes
+kubernetes.enabled=true
+kubernetes.namespace=cubrid-testing
+
+# Resource limits
+kubernetes.build.cpu.limit=4
+kubernetes.build.memory.limit=8Gi
+```
+
+## Usage
+
+Send a build request:
 ./bin/start_builder.sh
 ```
 

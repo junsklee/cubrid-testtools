@@ -27,6 +27,38 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `max_tar_files` (int): Keep last N tar archives in work dir (default 10)
 - `enable_request_grouping` (bool): Group logs by request ID (default true)
 
+### Kubernetes configuration
+- `kubernetes.enabled` (bool): Enable Kubernetes mode (default false)
+- `kubernetes.namespace` (string): K8s namespace (default `cubrid-testing`)
+- `kubernetes.context` (string): K8s context to use (optional)
+- `kubernetes.kubeconfig` (path): Kubeconfig file (default `~/.kube/config`)
+- `kubernetes.build.cpu.request` (string): CPU request for builds (default `2`)
+- `kubernetes.build.cpu.limit` (string): CPU limit for builds (default `4`)
+- `kubernetes.build.memory.request` (string): Memory request for builds (default `4Gi`)
+- `kubernetes.build.memory.limit` (string): Memory limit for builds (default `8Gi`)
+- `kubernetes.test.cpu.request` (string): CPU request for tests (default `1`)
+- `kubernetes.test.cpu.limit` (string): CPU limit for tests (default `2`)
+- `kubernetes.test.memory.request` (string): Memory request for tests (default `2Gi`)
+- `kubernetes.test.memory.limit` (string): Memory limit for tests (default `4Gi`)
+- `kubernetes.job.backoffLimit` (int): Job retry limit (default 3)
+- `kubernetes.job.ttlSecondsAfterFinished` (int): Cleanup delay (default 3600)
+- `kubernetes.job.activeDeadlineSeconds` (int): Build job timeout (default 7200)
+- `kubernetes.test.job.activeDeadlineSeconds` (int): Test job timeout (default 1800)
+- `kubernetes.nodeSelector.*` (string): Node selector labels
+- `kubernetes.build.nodeSelector.*` (string): Build-specific node selectors
+- `kubernetes.test.nodeSelector.*` (string): Test-specific node selectors
+- `kubernetes.loadBalancing` (string): Strategy - RoundRobin/Random/LeastConnection (default `RoundRobin`)
+- `kubernetes.preferLocalNode` (bool): Prefer local node execution (default true)
+- `kubernetes.enableAntiAffinity` (bool): Enable pod anti-affinity (default true)
+- `kubernetes.maxJobsPerNode` (int): Max concurrent jobs per node (default 4)
+- `kubernetes.build.pvc` (string): Build PVC name (default `cubrid-build-pvc`)
+- `kubernetes.test.pvc` (string): Test PVC name (default `cubrid-test-pvc`)
+- `kubernetes.storageClass` (string): Storage class name (default `standard`)
+- `kubernetes.build.image` (string): Build image (default `cubridci/cubridci:develop`)
+- `kubernetes.test.image` (string): Test image (default `cubridci/cubridci:test_shell`)
+- `kubernetes.imagePullPolicy` (string): Pull policy (default `IfNotPresent`)
+- `kubernetes.imagePullSecret` (string): Secret for private registries (optional)
+
 ## Tester (`conf/tester.conf`)
 - `tester_port` (int): Tester HTTP port (default 8090)
 - `cubrid_src_dir` (path): Unused for Docker mode; kept for parity

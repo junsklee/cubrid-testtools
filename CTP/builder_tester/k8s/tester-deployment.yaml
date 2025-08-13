@@ -1,0 +1,84 @@
+# Tester Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cubrid-tester
+  namespace: cubrid-testing
+  labels:
+    app: cubrid-tester
+    component: tester
+spec:
+  replicas: 3  # Can scale horizontally across nodes
+  selector:
+    matchLabels:
+      app: cubrid-tester
+  template:
+    metadata:
+      labels:
+        app: cubrid-tester
+        component: tester
+    spec:
+      serviceAccountName: cubrid-tester
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - cubrid-tester
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: tester
+        image: openjdk:11-jre-slim
+        ports:
+        - containerPort: 8090
+          name: http
+        env:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+        - name: JAVA_OPTS
+          value: "-Xmx1g -Xms256m"
+        volumeMounts:
+        - name: tester-config
+          mountPath: /config
+        - name: test-workspace
+          mountPath: /workspace
+        - name: test-cases
+          mountPath: /testcases
+        command: ["java"]
+        args: ["-cp", "/app/lib/*", "com.navercorp.cubridqa.builder.Tester", "/config/tester.conf"]
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8090
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: tester-config
+        configMap:
+          name: tester-config
+      - name: test-workspace
+        emptyDir: {}
+      - name: test-cases
+        persistentVolumeClaim:
+          claimName: test-cases-pvc

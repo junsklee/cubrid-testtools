@@ -33,10 +33,21 @@ public class BuilderConfig {
     private static final String ENABLE_REQUEST_GROUPING = "enable_request_grouping";
     private static final String RETRY_COUNT = "retry_count"; // Tester: number of times to retry a failed test
     
+    // Kubernetes configuration keys
+    private static final String KUBERNETES_ENABLED = "kubernetes.enabled";
+    private static final String KUBERNETES_CONFIG_PREFIX = "kubernetes.";
+    
+    // Kubernetes configuration object
+    private com.navercorp.cubridqa.builder.kubernetes.KubernetesConfig kubernetesConfig;
+    
     public BuilderConfig(String configFile) throws IOException {
         this.properties = new Properties();
         loadConfiguration(configFile);
         validateConfiguration();
+        
+        // Initialize Kubernetes configuration
+        this.kubernetesConfig = new com.navercorp.cubridqa.builder.kubernetes.KubernetesConfig();
+        this.kubernetesConfig.loadFromProperties(properties);
     }
     
     private void loadConfiguration(String configFile) throws IOException {
@@ -210,6 +221,20 @@ public class BuilderConfig {
             value = 2;
         }
         return Math.max(0, value);
+    }
+    
+    /**
+     * Get Kubernetes configuration
+     */
+    public com.navercorp.cubridqa.builder.kubernetes.KubernetesConfig getKubernetesConfig() {
+        return kubernetesConfig;
+    }
+    
+    /**
+     * Check if Kubernetes is enabled
+     */
+    public boolean isKubernetesEnabled() {
+        return kubernetesConfig != null && kubernetesConfig.isEnabled();
     }
     
     @Override

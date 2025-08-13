@@ -1,0 +1,8 @@
+# Kubernetes Namespace for CUBRID Testing
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cubrid-testing
+  labels:
+    app: cubrid-testing
+    environment: testing

@@ -1,4 +1,5 @@
-# Tester Service Configuration
+# Example Kubernetes-enabled Tester Configuration
+# This configuration enables Kubernetes mode for the tester service
 
 # Server configuration
 tester_port=8090
@@ -7,8 +8,6 @@ max_concurrent_tests=6
 # Source directories
 cubrid_src_dir=~/cubrid
 shell_tc_dir=~/cubrid-testcases-private-ex
-# Optional: branch of shell testcases repo to use (if not available, fallback to origin)
-# Applies only to the repo at shell_tc_dir. Default is 'develop'.
 shell_tc_branch=develop
 
 # Build configuration (for extraction)
@@ -17,31 +16,30 @@ build_dir=build_x86_64_debug
 # Working directory
 work_dir=/tmp/tester_work
 
-# Docker configuration
+# Docker configuration (fallback)
 use_docker_tester=true
 use_prebuilt_docker_images=true
 docker_test_image=cubridci/cubridci:test_shell
 keep_failed_containers=false
 
 # Log management configuration  
-# Maximum number of request log directories to keep
 max_request_logs=5
-
-# Enable request-based log grouping (true/false)
 enable_request_grouping=true
 
 # Retry configuration
-# Number of times to retry a failed test case before giving up (minimum 0)
-# Total attempts = 1 + retry_count. Set 0 to disable retries. Defaults to 2 if omitted.
 retry_count=2
 
-# Kubernetes configuration (same as builder.conf)
-kubernetes.enabled=false
+# ===== KUBERNETES CONFIGURATION =====
+
+# Enable Kubernetes mode
+kubernetes.enabled=true
+
+# Kubernetes cluster configuration
 kubernetes.namespace=cubrid-testing
-# kubernetes.context=my-k8s-context
+# kubernetes.context=production-cluster
 # kubernetes.kubeconfig=~/.kube/config
 
-# Kubernetes test job specific settings
+# Resource limits for test jobs
 kubernetes.test.cpu.request=1
 kubernetes.test.cpu.limit=2
 kubernetes.test.memory.request=2Gi
@@ -49,6 +47,19 @@ kubernetes.test.memory.limit=4Gi
 kubernetes.test.job.activeDeadlineSeconds=1800
 
 # Node selection for test workloads
-# kubernetes.test.nodeSelector.workload=test
+kubernetes.nodeSelector.cubrid-testing=enabled
+kubernetes.test.nodeSelector.workload=test
+
+# Scaling configuration
 kubernetes.enableAntiAffinity=true
 kubernetes.maxJobsPerNode=6
+kubernetes.loadBalancing=LeastConnection
+kubernetes.preferLocalNode=true
+
+# Storage
+kubernetes.test.pvc=cubrid-test-pvc
+kubernetes.storageClass=standard
+
+# Container image
+kubernetes.test.image=cubridci/cubridci:test_shell
+kubernetes.imagePullPolicy=IfNotPresent

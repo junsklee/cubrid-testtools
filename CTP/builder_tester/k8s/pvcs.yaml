@@ -1,0 +1,79 @@
+# Persistent Volume Claims for storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: builder-workspace-pvc
+  namespace: cubrid-testing
+spec:
+  accessModes:
+  - ReadWriteMany  # Required for multi-node access
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: builder-logs-pvc
+  namespace: cubrid-testing
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cubrid-build-pvc
+  namespace: cubrid-testing
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 200Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cubrid-test-pvc
+  namespace: cubrid-testing
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-cases-pvc
+  namespace: cubrid-testing
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cubrid-testtools-pvc
+  namespace: cubrid-testing
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard

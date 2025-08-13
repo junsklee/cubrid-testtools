@@ -7,22 +7,56 @@
 - DockerBuildManager: initializes/pulls build image and runs builds
 - DockerTesterManager: initializes/pulls test image
 - DockerUtils: Docker helpers (availability checks, image pull, run helpers)
+- **KubernetesManager**: Main orchestration for Kubernetes operations
+- **KubernetesBuildManager**: Manages build Jobs in Kubernetes
+- **KubernetesTesterManager**: Manages test Jobs in Kubernetes
+- **KubernetesConfig**: Configuration for Kubernetes deployment
 
 ## Flow
 
 1. Client POSTs to Builder `/build` with `commits[]`, `tests[]`, `callbackUrl`, `workerIp`, `buildType`.
-2. Builder task builds each commit (Docker or direct) in isolation onto a common baseline (parent of earliest commit). For each built artifact, it calls Tester `/test` on `workerIp` with the test details.
-3. Tester extracts the build, configures CUBRID, runs the shell test in Docker (or direct fallback). The testcases mount is read-write. Result is read from `<scriptBase>.result` (e.g., `foo.sh` → `foo.result`).
+2. Builder task builds each commit (Kubernetes Job, Docker, or direct) in isolation onto a common baseline (parent of earliest commit). For each built artifact, it calls Tester `/test` on `workerIp` with the test details.
+3. Tester extracts the build, configures CUBRID, runs the shell test in Kubernetes Job, Docker, or direct fallback. The testcases mount is read-write. Result is read from `<scriptBase>.result` (e.g., `foo.sh` → `foo.result`).
 4. Builder aggregates results and POSTs them to `callbackUrl`.
 
 ## Execution modes
 
+- **Kubernetes** (when enabled):
+  - Build/Test Jobs run as pods with resource limits
+  - Automatic workload distribution across nodes
+  - Horizontal scaling via deployment replicas
+  - Pod anti-affinity for spreading workload
 - Docker (default):
   - Build image: `cubridci/cubridci:develop`
   - Test image: `cubridci/cubridci:test_shell`
   - Images are pulled automatically when Docker is available
 - Direct fallback:
-  - Used when Docker is unavailable; builds/tests execute on the host
+  - Used when neither Kubernetes nor Docker is available; builds/tests execute on the host
+
+## Kubernetes Architecture
+
+When Kubernetes is enabled:
+
+### Deployments
+- **Builder Deployment**: Single replica, exposed via LoadBalancer service
+- **Tester Deployment**: Multiple replicas (scalable), internal ClusterIP service
+
+### Jobs
+- Each build request creates a Kubernetes Job
+- Each test execution creates a separate Job
+- Jobs have resource limits and node selectors
+- Automatic cleanup after TTL expiration
+
+### Storage
+- PersistentVolumeClaims for shared data (builds, test cases, logs)
+- ConfigMaps for configuration
+- Secrets for sensitive data (GitHub token)
+
+### Scaling
+- Horizontal scaling: `kubectl scale deployment/cubrid-tester --replicas=N`
+- Node selection: Labels and selectors for workload placement
+- Anti-affinity: Spreads pods across different nodes
+- Load balancing: Round-robin, random, or least-loaded strategies
 
 ## Tester keep-alive (debug) mode
 

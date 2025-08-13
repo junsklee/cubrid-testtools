@@ -12,6 +12,7 @@ import com.sun.net.httpserver.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
+import com.navercorp.cubridqa.builder.kubernetes.*;
 
 /**
  * Builder - Receives build requests and builds CUBRID at specified commits
@@ -29,6 +30,8 @@ public class Builder {
     private final Map<String, BuilderTask> activeTasks;
     private final DockerBuildManager dockerManager;
     private final LogRotationManager logRotationManager;
+    private KubernetesManager kubernetesManager;
+    private KubernetesBuildManager kubernetesBuildManager;
     
     public Builder(BuilderConfig config) throws IOException {
         this.config = config;
@@ -45,6 +48,12 @@ public class Builder {
         );
         RequestLogManager.initialize(logConfig);
         this.logRotationManager = new LogRotationManager(logConfig);
+        
+        // Initialize Kubernetes if enabled
+        if (config.isKubernetesEnabled()) {
+            this.kubernetesManager = new KubernetesManager(config.getKubernetesConfig());
+            this.kubernetesBuildManager = new KubernetesBuildManager(kubernetesManager);
+        }
         
         // Create HTTP server
         this.server = HttpServer.create(new InetSocketAddress(config.getListenPort()), 0);
@@ -79,6 +88,19 @@ public class Builder {
             } catch (Exception e) {
                 logger.warning("Failed to initialize Docker: " + e.getMessage());
                 logger.warning("Will use direct build method");
+            }
+        }
+        
+        // Initialize Kubernetes environment if enabled
+        if (config.isKubernetesEnabled() && kubernetesManager != null) {
+            try {
+                kubernetesManager.initialize();
+                logger.info("Kubernetes environment initialized");
+            } catch (Exception e) {
+                logger.warning("Failed to initialize Kubernetes: " + e.getMessage());
+                if (!config.useDocker()) {
+                    logger.warning("Neither Kubernetes nor Docker available, will use direct build method");
+                }
             }
         }
         

@@ -1,0 +1,35 @@
+# Services for Builder and Tester
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cubrid-builder
+  namespace: cubrid-testing
+  labels:
+    app: cubrid-builder
+spec:
+  type: LoadBalancer
+  selector:
+    app: cubrid-builder
+  ports:
+  - port: 8089
+    targetPort: 8089
+    protocol: TCP
+    name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cubrid-tester
+  namespace: cubrid-testing
+  labels:
+    app: cubrid-tester
+spec:
+  type: ClusterIP  # Internal only, builder communicates with testers
+  selector:
+    app: cubrid-tester
+  ports:
+  - port: 8090
+    targetPort: 8090
+    protocol: TCP
+    name: http

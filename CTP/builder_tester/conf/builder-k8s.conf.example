@@ -1,4 +1,5 @@
-# Builder Service Configuration
+# Example Kubernetes-enabled Builder Configuration
+# This configuration enables Kubernetes mode for the builder service
 
 # Server configuration
 listen_port=8089
@@ -7,8 +8,6 @@ max_concurrent_builds=4
 # Source directories
 cubrid_src_dir=~/cubrid
 shell_tc_dir=~/cubrid-testcases-private-ex
-# Optional: branch of shell testcases repo to use (if not available, fallback to origin)
-# Applies only to the repo at shell_tc_dir. Default is 'develop'.
 shell_tc_branch=develop
 
 # Build configuration
@@ -21,13 +20,11 @@ work_dir=/tmp/builder_work
 # Tester service configuration
 tester_port=8090
 
-# Docker configuration
+# Docker configuration (fallback when K8s unavailable)
 use_docker=true
 use_prebuilt_docker_images=true
 docker_build_image=cubridci/cubridci:develop
 docker_test_image=cubridci/cubridci:test_shell
-
-# Keep failed test containers alive for debugging (true/false)
 keep_failed_containers=false
 
 # Build timeout (minutes)
@@ -37,59 +34,56 @@ build_timeout_minutes=180
 build_cache_size=20
 
 # Log management configuration
-# Maximum number of request log directories to keep
 max_request_logs=5
-
-# Maximum number of tar build files to keep in work directory
 max_tar_files=10
-
-# Enable request-based log grouping (true/false)
 enable_request_grouping=true
 
-# Kubernetes configuration
-# Enable Kubernetes mode (true/false)
-kubernetes.enabled=false
+# ===== KUBERNETES CONFIGURATION =====
+
+# Enable Kubernetes mode
+kubernetes.enabled=true
 
 # Kubernetes cluster configuration
 kubernetes.namespace=cubrid-testing
-# kubernetes.context=my-k8s-context
+# kubernetes.context=production-cluster
 # kubernetes.kubeconfig=~/.kube/config
 
-# Kubernetes resource limits for build jobs
+# Resource limits for build jobs
 kubernetes.build.cpu.request=2
 kubernetes.build.cpu.limit=4
 kubernetes.build.memory.request=4Gi
 kubernetes.build.memory.limit=8Gi
 
-# Kubernetes resource limits for test jobs
+# Resource limits for test jobs  
 kubernetes.test.cpu.request=1
 kubernetes.test.cpu.limit=2
 kubernetes.test.memory.request=2Gi
 kubernetes.test.memory.limit=4Gi
 
-# Kubernetes node selection
-# kubernetes.nodeSelector.cubrid-testing=enabled
+# Node selection - label nodes with these to control placement
+kubernetes.nodeSelector.cubrid-testing=enabled
 # kubernetes.build.nodeSelector.workload=build
 # kubernetes.test.nodeSelector.workload=test
 
-# Kubernetes job configuration
+# Job configuration
 kubernetes.job.backoffLimit=3
 kubernetes.job.ttlSecondsAfterFinished=3600
 kubernetes.job.activeDeadlineSeconds=7200
 kubernetes.test.job.activeDeadlineSeconds=1800
 
-# Kubernetes scaling configuration
+# Scaling and load balancing
 kubernetes.loadBalancing=RoundRobin
-kubernetes.preferLocalNode=true
+kubernetes.preferLocalNode=false
 kubernetes.enableAntiAffinity=true
 kubernetes.maxJobsPerNode=4
 
-# Kubernetes storage
+# Storage configuration
 kubernetes.build.pvc=cubrid-build-pvc
 kubernetes.test.pvc=cubrid-test-pvc
 kubernetes.storageClass=standard
 
-# Kubernetes images (uses same as Docker by default)
+# Container images
 kubernetes.build.image=cubridci/cubridci:develop
 kubernetes.test.image=cubridci/cubridci:test_shell
 kubernetes.imagePullPolicy=IfNotPresent
+# kubernetes.imagePullSecret=my-registry-secret

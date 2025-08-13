@@ -1,0 +1,73 @@
+# Builder Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cubrid-builder
+  namespace: cubrid-testing
+  labels:
+    app: cubrid-builder
+    component: builder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cubrid-builder
+  template:
+    metadata:
+      labels:
+        app: cubrid-builder
+        component: builder
+    spec:
+      serviceAccountName: cubrid-builder
+      containers:
+      - name: builder
+        image: openjdk:11-jre-slim
+        ports:
+        - containerPort: 8089
+          name: http
+        env:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+        - name: JAVA_OPTS
+          value: "-Xmx2g -Xms512m"
+        volumeMounts:
+        - name: builder-config
+          mountPath: /config
+        - name: builder-workspace
+          mountPath: /workspace
+        - name: builder-logs
+          mountPath: /logs
+        command: ["java"]
+        args: ["-cp", "/app/lib/*", "com.navercorp.cubridqa.builder.Builder", "/config/builder.conf"]
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8089
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8089
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: builder-config
+        configMap:
+          name: builder-config
+      - name: builder-workspace
+        persistentVolumeClaim:
+          claimName: builder-workspace-pvc
+      - name: builder-logs
+        persistentVolumeClaim:
+          claimName: builder-logs-pvc
