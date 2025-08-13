@@ -71,3 +71,4 @@ spec:
       - name: builder-logs
         persistentVolumeClaim:
           claimName: builder-logs-pvc
+      # PVCs used by external cluster

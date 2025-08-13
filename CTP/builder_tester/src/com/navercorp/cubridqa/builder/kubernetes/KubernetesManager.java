@@ -89,12 +89,12 @@ public class KubernetesManager {
         }
         
         try {
-            JobList jobs = client.batch().v1().jobs()
+            io.fabric8.kubernetes.api.model.batch.v1.JobList jobs = client.batch().v1().jobs()
                 .inNamespace(config.getNamespace())
                 .withLabel("app", "cubrid-testing")
                 .list();
             
-            for (Job job : jobs.getItems()) {
+            for (io.fabric8.kubernetes.api.model.batch.v1.Job job : jobs.getItems()) {
                 String jobName = job.getMetadata().getName();
                 if (KubernetesUtils.isJobComplete(job) || KubernetesUtils.isJobFailed(job)) {
                     // Check if job is old enough to clean up

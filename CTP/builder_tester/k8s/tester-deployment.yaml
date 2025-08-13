@@ -51,7 +51,7 @@ spec:
         - name: test-workspace
           mountPath: /workspace
         - name: test-cases
-          mountPath: /testcases
+          mountPath: /home/cubrid-testcases-private-ex
         command: ["java"]
         args: ["-cp", "/app/lib/*", "com.navercorp.cubridqa.builder.Tester", "/config/tester.conf"]
         resources:
@@ -82,3 +82,4 @@ spec:
       - name: test-cases
         persistentVolumeClaim:
           claimName: test-cases-pvc
+      # PVC used by external cluster

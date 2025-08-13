@@ -72,18 +72,16 @@ public class KubernetesBuildManager {
             }
         }
         
-        // Add GitHub token from secret if configured
-        if (config.getImagePullSecret() != null) {
-            env.add(new EnvVarBuilder()
-                .withName("GITHUB_TOKEN")
-                .withNewValueFrom()
-                    .withNewSecretKeyRef()
-                        .withName("github-token")
-                        .withKey("token")
-                    .endSecretKeyRef()
-                .endValueFrom()
-                .build());
-        }        
+        // Add GitHub token from secret
+        env.add(new EnvVarBuilder()
+            .withName("GITHUB_TOKEN")
+            .withNewValueFrom()
+                .withNewSecretKeyRef()
+                    .withName("github-token")
+                    .withKey("token")
+                .endSecretKeyRef()
+            .endValueFrom()
+            .build());
         // Select node for job
         String selectedNode = manager.selectNodeForJob("build");
         
@@ -98,7 +96,7 @@ public class KubernetesBuildManager {
             .withMountPath("/cache")
             .build());
         
-        // Create volumes
+        // Create volumes (hostPath fallback to avoid PVC requirements)
         List<Volume> volumes = new ArrayList<>();
         volumes.add(new VolumeBuilder()
             .withName("build-workspace")
@@ -107,9 +105,10 @@ public class KubernetesBuildManager {
             .build());
         volumes.add(new VolumeBuilder()
             .withName("build-cache")
-            .withNewPersistentVolumeClaim()
-                .withClaimName(config.getBuildPvcName())
-            .endPersistentVolumeClaim()
+            .withNewHostPath()
+                .withPath("/tmp/k3s-build-cache")
+                .withType("DirectoryOrCreate")
+            .endHostPath()
             .build());
         
         // Build command
@@ -139,6 +138,13 @@ public class KubernetesBuildManager {
                 .build())
             .withVolumes(volumes)
             .build();
+
+        // Set imagePullSecrets if configured
+        if (config.getImagePullSecret() != null && !config.getImagePullSecret().trim().isEmpty()) {
+            List<LocalObjectReference> pulls = new ArrayList<>();
+            pulls.add(new LocalObjectReferenceBuilder().withName(config.getImagePullSecret()).build());
+            podSpec.setImagePullSecrets(pulls);
+        }
         
         if (selectedNode != null) {
             podSpec.setNodeName(selectedNode);
@@ -170,13 +176,17 @@ public class KubernetesBuildManager {
         script.append("set -e\n");
         script.append("cd /workspace\n");
         script.append("echo 'Starting build for commit: ").append(commitHash).append("'\n");
+        script.append("mkdir -p /cache/builds\n");
         script.append("git clone https://github.com/CUBRID/cubrid.git\n");
         script.append("cd cubrid\n");
         script.append("git checkout ").append(baselineCommit).append("\n");
         script.append("git cherry-pick -m 1 ").append(commitHash).append("\n");
         script.append("git submodule update --init --recursive\n");
         script.append("./build.sh -g ninja -m ").append(buildType).append(" build\n");
-        script.append("tar czf /workspace/cubrid-").append(commitHash).append(".tar.gz build\n");
+        // artifact naming based on commit short
+        String shortCommit = commitHash.length() > 7 ? commitHash.substring(0, 7) : commitHash;
+        script.append("tar czf /cache/builds/cubrid_").append(shortCommit).append(".tar.gz ")
+              .append(" ").append("build\n");
         script.append("echo 'Build completed successfully'\n");
         return script.toString();
     }
@@ -184,7 +194,7 @@ public class KubernetesBuildManager {
     /**
      * Monitor build job status
      */
-    public BuildResult monitorBuildJob(String jobName, long timeoutSeconds) {
+    public BuildResult monitorBuildJob(String jobName, long timeoutSeconds, String commitHash) {
         if (!manager.isAvailable()) {
             return new BuildResult(false, "Kubernetes manager not available", null);
         }
@@ -199,9 +209,10 @@ public class KubernetesBuildManager {
         );
         
         if (result.success) {
-            // Get build artifact location
-            String artifactPath = "/cache/builds/" + jobName + ".tar.gz";
-            return new BuildResult(true, "Build completed successfully", artifactPath);
+            // Our script writes to /cache/builds/cubrid_<short>.tar.gz
+            String shortCommit = commitHash != null && commitHash.length() > 7 ? commitHash.substring(0, 7) : commitHash;
+            String fileName = shortCommit != null ? ("cubrid_" + shortCommit + ".tar.gz") : null;
+            return new BuildResult(true, "Build completed successfully", fileName);
         } else if (result.failed) {
             return new BuildResult(false, "Build failed: " + result.logs, null);
         } else {

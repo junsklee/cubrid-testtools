@@ -65,8 +65,8 @@ public class KubernetesTesterManager {
         env.add(new EnvVar("TEST_PATH", testPath, null));
         env.add(new EnvVar("BUILD_PACKAGE", buildPackage, null));
         env.add(new EnvVar("TASK_ID", taskId, null));
-        env.add(new EnvVar("CTP_HOME", "/home/CTP", null));
-        env.add(new EnvVar("init_path", "/home/CTP/shell/init_path", null));
+        env.add(new EnvVar("CTP_HOME", "/home/cubrid-testtools/CTP", null));
+        env.add(new EnvVar("init_path", "/home/cubrid-testtools/CTP/shell/init_path", null));
         
         // Add custom environment variables
         if (envVars != null) {
@@ -83,7 +83,8 @@ public class KubernetesTesterManager {
         volumeMounts.add(new VolumeMountBuilder()
             .withName("test-workspace")
             .withMountPath("/workspace")
-            .build());        volumeMounts.add(new VolumeMountBuilder()
+            .build());
+        volumeMounts.add(new VolumeMountBuilder()
             .withName("test-cases")
             .withMountPath("/home/cubrid-testcases-private-ex")
             .build());
@@ -101,15 +102,28 @@ public class KubernetesTesterManager {
             .build());
         volumes.add(new VolumeBuilder()
             .withName("test-cases")
-            .withNewPersistentVolumeClaim()
-                .withClaimName(config.getTestPvcName())
-            .endPersistentVolumeClaim()
+            .withNewHostPath()
+                .withPath(System.getProperty("user.home") + "/cubrid-testcases-private-ex")
+                .withType("Directory")
+            .endHostPath()
             .build());
         volumes.add(new VolumeBuilder()
             .withName("cubrid-testtools")
             .withNewPersistentVolumeClaim()
                 .withClaimName("cubrid-testtools-pvc")
             .endPersistentVolumeClaim()
+            .build());
+        // Mount build cache directory at /cache to access packaged builds
+        volumes.add(new VolumeBuilder()
+            .withName("build-cache")
+            .withNewHostPath()
+                .withPath("/tmp/k3s-build-cache")
+                .withType("DirectoryOrCreate")
+            .endHostPath()
+            .build());
+        volumeMounts.add(new VolumeMountBuilder()
+            .withName("build-cache")
+            .withMountPath("/cache")
             .build());
         
         // Build command
@@ -139,6 +153,13 @@ public class KubernetesTesterManager {
                 .build())
             .withVolumes(volumes)
             .build();
+
+        // Set imagePullSecrets if configured
+        if (config.getImagePullSecret() != null && !config.getImagePullSecret().trim().isEmpty()) {
+            List<LocalObjectReference> pulls = new ArrayList<>();
+            pulls.add(new LocalObjectReferenceBuilder().withName(config.getImagePullSecret()).build());
+            podSpec.setImagePullSecrets(pulls);
+        }
         
         if (selectedNode != null) {
             podSpec.setNodeName(selectedNode);
@@ -170,12 +191,28 @@ public class KubernetesTesterManager {
         script.append("set -e\n");
         script.append("cd /workspace\n");
         script.append("echo 'Extracting build package: ").append(buildPackage).append("'\n");
-        script.append("tar xzf /cache/builds/").append(buildPackage).append("\n");
-        script.append("export CUBRID=/workspace/CUBRID\n");
-        script.append("export CUBRID_DATABASES=/workspace/databases\n");
-        script.append("mkdir -p $CUBRID_DATABASES\n");
+        // buildPackage can be a file name; search in /cache/builds
+        script.append("PKG=\"/cache/builds/").append(buildPackage).append("\"\n");
+        script.append("if [ ! -f \"$PKG\" ]; then echo 'Build package not found: '$PKG; exit 1; fi\n");
+        script.append("tar xzf \"$PKG\"\n");
+        // Detect CUBRID root
+        script.append("if [ -d /workspace/_install/CUBRID ]; then\n");
+        script.append("  CUBRID_ROOT=/workspace/_install/CUBRID\n");
+        script.append("else\n");
+        script.append("  CUBRID_ROOT=$(find /workspace -type d -name bin -print -quit | xargs dirname)\n");
+        script.append("fi\n");
+        script.append("if [ -z \"$CUBRID_ROOT\" ]; then echo 'Could not detect CUBRID root'; exit 1; fi\n");
+        // Optional setup
+        script.append("if [ -f \"$CUBRID_ROOT/share/scripts/setup.sh\" ]; then yes | sh \"$CUBRID_ROOT/share/scripts/setup.sh\" \"$CUBRID_ROOT\" || true; fi\n");
+        script.append("if [ -f \"$CUBRID_ROOT/setup.sh\" ]; then yes | sh \"$CUBRID_ROOT/setup.sh\" \"$CUBRID_ROOT\" || true; fi\n");
+        // Environment
+        script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
+        script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
+        script.append("mkdir -p \"$CUBRID_DATABASES\"\n");
+        script.append("export PATH=\"$CUBRID_ROOT/bin:/home/cubrid-testtools/CTP/shell/init_path:$PATH\"\n");
+        script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:$LD_LIBRARY_PATH\"\n");
         script.append("echo 'Running test: ").append(testName).append("'\n");
-        script.append("cd ").append(testPath).append("\n");
+        script.append("cd /home/cubrid-testcases-private-ex/").append(testPath).append("\n");
         script.append("bash ").append(testName).append("\n");
         script.append("echo 'Test completed'\n");
         return script.toString();

@@ -22,18 +22,16 @@ public class KubernetesUtils {
      * Create a Kubernetes client with the given configuration
      */
     public static KubernetesClient createClient(KubernetesConfig config) throws IOException {
-        ConfigBuilder builder = new ConfigBuilder();
+        io.fabric8.kubernetes.client.ConfigBuilder builder = new io.fabric8.kubernetes.client.ConfigBuilder();
         
         if (config.getKubeconfigPath() != null && Files.exists(Paths.get(config.getKubeconfigPath()))) {
-            Config kubeConfig = Config.fromKubeconfig(
+            io.fabric8.kubernetes.client.Config kubeConfig = io.fabric8.kubernetes.client.Config.fromKubeconfig(
                 new String(Files.readAllBytes(Paths.get(config.getKubeconfigPath())))
             );
-            builder = new ConfigBuilder(kubeConfig);
+            builder = new io.fabric8.kubernetes.client.ConfigBuilder(kubeConfig);
         }
         
-        if (config.getContext() != null) {
-            builder.withCurrentContext(config.getContext());
-        }
+        // Context selection not supported via string in client builder for this version; relying on kubeconfig current-context
         
         if (config.getNamespace() != null) {
             builder.withNamespace(config.getNamespace());
@@ -126,7 +124,7 @@ public class KubernetesUtils {
     /**
      * Check if a job is complete
      */
-    public static boolean isJobComplete(Job job) {
+    public static boolean isJobComplete(io.fabric8.kubernetes.api.model.batch.v1.Job job) {
         if (job == null || job.getStatus() == null) {
             return false;
         }
@@ -137,7 +135,7 @@ public class KubernetesUtils {
     /**
      * Check if a job has failed
      */
-    public static boolean isJobFailed(Job job) {
+    public static boolean isJobFailed(io.fabric8.kubernetes.api.model.batch.v1.Job job) {
         if (job == null || job.getStatus() == null) {
             return false;
         }
@@ -166,7 +164,7 @@ public class KubernetesUtils {
      */
     public static String getJobLogs(KubernetesClient client, String namespace, String jobName) {
         try {
-            PodList pods = client.pods()
+            io.fabric8.kubernetes.api.model.PodList pods = client.pods()
                 .inNamespace(namespace)
                 .withLabel("job-name", jobName)
                 .list();
@@ -175,7 +173,7 @@ public class KubernetesUtils {
                 return "No pods found for job: " + jobName;
             }
             
-            Pod pod = pods.getItems().get(0);
+            io.fabric8.kubernetes.api.model.Pod pod = pods.getItems().get(0);
             return client.pods()
                 .inNamespace(namespace)
                 .withName(pod.getMetadata().getName())

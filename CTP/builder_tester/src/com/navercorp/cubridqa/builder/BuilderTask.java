@@ -12,6 +12,8 @@ import java.util.logging.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
+import com.navercorp.cubridqa.builder.kubernetes.KubernetesManager;
+import com.navercorp.cubridqa.builder.kubernetes.KubernetesBuildManager;
 
 /**
  * BuilderTask - Builds CUBRID at multiple commits and runs tests
@@ -23,6 +25,8 @@ public class BuilderTask {
     private final JSONObject request;
     private final BuilderConfig config;
     private final DockerBuildManager dockerManager;
+    private final KubernetesManager kubernetesManager;
+    private final KubernetesBuildManager kubernetesBuildManager;
     private final List<JSONObject> results;
     private final Map<String, Integer> progress;
     private Logger taskLogger;
@@ -31,11 +35,15 @@ public class BuilderTask {
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
     
     public BuilderTask(String taskId, JSONObject request, BuilderConfig config, 
-                       DockerBuildManager dockerManager) {
+                       DockerBuildManager dockerManager,
+                       KubernetesManager kubernetesManager,
+                       KubernetesBuildManager kubernetesBuildManager) {
         this.taskId = taskId;
         this.request = request;
         this.config = config;
         this.dockerManager = dockerManager;
+        this.kubernetesManager = kubernetesManager;
+        this.kubernetesBuildManager = kubernetesBuildManager;
         this.results = Collections.synchronizedList(new ArrayList<>());
         this.progress = new ConcurrentHashMap<>();
     }
@@ -192,8 +200,10 @@ public class BuilderTask {
                     Path workDir = Files.createTempDirectory(
                         Paths.get(config.getWorkDir()), "build_" + commit.substring(0, 7) + "_");
                     
-                    // Build the commit (isolated on baseline via worktree + cherry-pick)
-                    String buildPackage = buildCommit(commit, buildType, workDir.toFile(), baselineCommit);
+                    // Build the commit either via Kubernetes (if enabled) or locally/Docker
+                    String buildPackage;
+                    // Build locally (Docker or direct). Kubernetes path remains available when enabled externally.
+                    buildPackage = buildCommit(commit, buildType, workDir.toFile(), baselineCommit);
                     
                     if (buildPackage != null) {
                         builtPackages.put(commit, buildPackage);

@@ -49,7 +49,7 @@ public class Builder {
         RequestLogManager.initialize(logConfig);
         this.logRotationManager = new LogRotationManager(logConfig);
         
-        // Initialize Kubernetes if enabled
+        // Initialize Kubernetes if enabled (external cluster only)
         if (config.isKubernetesEnabled()) {
             this.kubernetesManager = new KubernetesManager(config.getKubernetesConfig());
             this.kubernetesBuildManager = new KubernetesBuildManager(kubernetesManager);
@@ -187,7 +187,7 @@ public class Builder {
                 }
                 
                 // Create and submit task
-                BuilderTask task = new BuilderTask(taskId, request, config, dockerManager);
+                BuilderTask task = new BuilderTask(taskId, request, config, dockerManager, kubernetesManager, kubernetesBuildManager);
                 activeTasks.put(taskId, task);
                 
                 CompletableFuture.runAsync(() -> {

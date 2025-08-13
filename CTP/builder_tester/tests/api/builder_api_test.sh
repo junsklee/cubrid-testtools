@@ -14,6 +14,9 @@ echo "Testing Builder API..."
 # Setup
 setup() {
     setup_mock_environment
+    # Start tester first so builder can validate reachability
+    start_test_tester
+    sleep 1
     start_test_builder
     sleep 2
 }

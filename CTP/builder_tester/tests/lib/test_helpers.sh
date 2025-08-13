@@ -137,8 +137,8 @@ start_test_builder() {
     fi
     
     # Start builder with test config
-    BUILDER_CONFIG="$config" java -cp "$PROJECT_ROOT/build/*:$PROJECT_ROOT/lib/*" \
-        com.navercorp.cubridqa.builder.Builder &> /tmp/test_builder_$$.log &
+    java -cp "$PROJECT_ROOT/build/*:$PROJECT_ROOT/lib/*" \
+        com.navercorp.cubridqa.builder.Builder "$config" &> /tmp/test_builder_$$.log &
     
     echo $! > "$TEST_BUILDER_PID"
     
@@ -165,8 +165,8 @@ start_test_tester() {
     fi
     
     # Start tester with test config
-    TESTER_CONFIG="$config" java -cp "$PROJECT_ROOT/build/*:$PROJECT_ROOT/lib/*" \
-        com.navercorp.cubridqa.builder.Tester &> /tmp/test_tester_$$.log &
+    java -cp "$PROJECT_ROOT/build/*:$PROJECT_ROOT/lib/*" \
+        com.navercorp.cubridqa.builder.Tester "$config" &> /tmp/test_tester_$$.log &
     
     echo $! > "$TEST_TESTER_PID"    
     # Wait for service to start

@@ -13,6 +13,8 @@ import java.util.concurrent.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
 import com.navercorp.cubridqa.builder.logging.*;
+import com.navercorp.cubridqa.builder.kubernetes.KubernetesManager;
+import com.navercorp.cubridqa.builder.kubernetes.KubernetesTesterManager;
 
 /**
  * Tester - Receives test requests from Builder and executes tests
@@ -31,6 +33,8 @@ public class Tester {
     private final BuilderConfig config;
     private final HttpServer server;
     private final DockerTesterManager dockerManager;
+    private final KubernetesManager kubernetesManager;
+    private final KubernetesTesterManager kubernetesTesterManager;
     private final boolean useDocker;
     
     // Test execution status types
@@ -63,6 +67,22 @@ public class Tester {
         }
         this.useDocker = config.useDockerForTester();
         this.dockerManager = useDocker ? new DockerTesterManager(config) : null;
+        // Initialize Kubernetes if enabled (external cluster only)
+        if (config.isKubernetesEnabled()) {
+            KubernetesManager km = null;
+            try {
+                km = new KubernetesManager(config.getKubernetesConfig());
+                km.initialize();
+                logger.info("Kubernetes manager initialized for Tester");
+            } catch (Exception e) {
+                logger.warning("Failed to initialize Kubernetes for Tester: " + e.getMessage());
+            }
+            this.kubernetesManager = km;
+            this.kubernetesTesterManager = (km != null && km.isAvailable()) ? new KubernetesTesterManager(km) : null;
+        } else {
+            this.kubernetesManager = null;
+            this.kubernetesTesterManager = null;
+        }
         
         // Create work directory if it doesn't exist
         File workDir = new File(config.getWorkDir());
@@ -242,12 +262,14 @@ public class Tester {
         boolean keepAliveRequested = request.optBoolean("keepAlive", config.getKeepFailedContainers());
         try {
             // Check if we should use Docker for test execution
+            if (config.isKubernetesEnabled() && kubernetesTesterManager != null && kubernetesManager != null && kubernetesManager.isAvailable()) {
+                return runTestInKubernetes(request, testLogger);
+            }
             if (useDocker && dockerManager != null && DockerUtils.isDockerAvailable()) {
                 return runTestInDocker(request, workDir, testLogger);
-            } else {
-                testLogger.info("Using direct test execution");
-                return runTestDirectly(request, workDir, testLogger);
             }
+            testLogger.info("Using direct test execution");
+            return runTestDirectly(request, workDir, testLogger);
         } finally {
             // Cleanup unless keep-alive requested or a keep marker is present
             try {
@@ -260,6 +282,35 @@ public class Tester {
                 // best effort
             }
         }
+    }
+
+    private JSONObject runTestInKubernetes(JSONObject request, Logger testLogger) throws Exception {
+        if (kubernetesTesterManager == null || kubernetesManager == null || !kubernetesManager.isAvailable()) {
+            return new JSONObject()
+                .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                .put("message", "Kubernetes not available");
+        }
+        String testPath = request.getString("testPath");
+        String testDir = request.getString("testDir");
+        String testScript = request.getString("testScript");
+        String testName = request.getString("testName");
+        String buildPackage = new java.io.File(request.getString("buildPackage")).getName();
+
+        String requestId = RequestContext.getRequestId();
+        Map<String, String> env = new HashMap<>();
+        if (requestId != null) env.put("REQUEST_ID", requestId);
+        env.put("TEST_DIR", testDir);
+        env.put("TEST_SCRIPT", testScript);
+
+        String job = kubernetesTesterManager.submitTestJob(testName, testPath, buildPackage, requestId != null ? requestId : "task", env);
+        KubernetesTesterManager.TestResult r = kubernetesTesterManager.monitorTestJob(job, config.getKubernetesConfig().getTestJobActiveDeadlineSeconds());
+        JSONObject result = new JSONObject()
+            .put("test", testName)
+            .put("execution_mode", "kubernetes")
+            .put("status", r.status)
+            .put("message", r.message);
+        if (r.logs != null) result.put("logs", r.logs.substring(0, Math.min(r.logs.length(), 10000)));
+        return result;
     }
     
     private JSONObject runTestInDocker(JSONObject request, Path workDir) throws Exception {
@@ -301,9 +352,18 @@ public class Tester {
         copyTestCaseDirectory(Paths.get(testDir), testCasesDir);
         testLogger.info("Copied test case directory to isolated workspace: " + testCasesDir);
         
-        // Create test execution script for Docker (now using isolated testcases dir)
+        // Compute test directory relative to repo root for fixed mount path
+        String relativeTestDir;
+        try {
+            java.nio.file.Path repoRoot = java.nio.file.Paths.get(config.getShellTcDir());
+            java.nio.file.Path td = java.nio.file.Paths.get(testDir);
+            relativeTestDir = repoRoot.relativize(td).toString();
+        } catch (Exception e) {
+            relativeTestDir = ""; // fallback
+        }
+        // Create test execution script for Docker (use fixed testcases path)
         String dockerScript = createDockerTestScript(testScript, testName, 
-                                                     expectedBuildVersion, "");
+                                                     expectedBuildVersion, relativeTestDir);
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());
         dockerScriptPath.toFile().setExecutable(true);
@@ -344,6 +404,9 @@ public class Tester {
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
         dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:ro");
+        // Mount testcases repo at fixed path in container
+        dockerCommand.add("-v");
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testcases-private-ex:/home/cubrid-testcases-private-ex");
         // No longer mounting the entire testcases directory - using isolated copy instead
         dockerCommand.add("-e");
         dockerCommand.add("GITHUB_TOKEN=" + githubToken);
@@ -916,7 +979,11 @@ public class Tester {
          script.append("fi\n\n");
          
          script.append("# Run test\n");
-         script.append("cd /workspace/testcases\n");
+         if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
+             script.append("cd /home/cubrid-testcases-private-ex/").append(relativeTestDir).append("\n");
+         } else {
+             script.append("cd /home/cubrid-testcases-private-ex\n");
+         }
          script.append("bash ").append(testScript).append("\n");
          script.append("TEST_EXIT=$?\n\n");
          

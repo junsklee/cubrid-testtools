@@ -11,7 +11,7 @@ spec:
   resources:
     requests:
       storage: 100Gi
-  storageClassName: standard
+  storageClassName: local-path
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -24,7 +24,7 @@ spec:
   resources:
     requests:
       storage: 20Gi
-  storageClassName: standard
+  storageClassName: local-path
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -37,7 +37,7 @@ spec:
   resources:
     requests:
       storage: 200Gi
-  storageClassName: standard
+  storageClassName: local-path
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -50,7 +50,7 @@ spec:
   resources:
     requests:
       storage: 50Gi
-  storageClassName: standard
+  storageClassName: local-path
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -63,7 +63,7 @@ spec:
   resources:
     requests:
       storage: 50Gi
-  storageClassName: standard
+  storageClassName: local-path
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -76,4 +76,4 @@ spec:
   resources:
     requests:
       storage: 10Gi
-  storageClassName: standard
+  storageClassName: local-path
