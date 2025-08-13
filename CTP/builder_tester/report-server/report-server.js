@@ -411,7 +411,7 @@ async function handleRequest(req, res) {
                 listHtml += 'a { color: white; text-decoration: none; font-weight: 500; }';
                 listHtml += '.timestamp { opacity: 0.8; font-size: 0.9rem; }';                listHtml += '</style></head><body>';
                 listHtml += '<div class="container">';
-                listHtml += '<h1>📊 Test Report Viewer</h1>';
+                listHtml += '<h1>Test Report Viewer</h1>';
                 listHtml += '<div class="report-list">';
                 
                 if (reports.length === 0) {
@@ -419,7 +419,7 @@ async function handleRequest(req, res) {
                 } else {
                     reports.forEach(r => {
                         listHtml += '<div class="report-item">';
-                        listHtml += '<a href="/report?id=' + r.id + '">📁 ' + r.id + '</a>';
+                        listHtml += '<a href="/report?id=' + r.id + '">' + r.id + '</a>';
                         listHtml += '<span class="timestamp">' + r.modified.toISOString() + '</span>';
                         listHtml += '</div>';
                     });

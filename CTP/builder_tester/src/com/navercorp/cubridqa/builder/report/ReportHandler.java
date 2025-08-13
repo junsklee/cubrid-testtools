@@ -133,7 +133,7 @@ public class ReportHandler implements HttpHandler {
         html.append(".timestamp { opacity: 0.8; font-size: 0.9rem; }");
         html.append("</style></head><body>");
         html.append("<div class='container'>");
-        html.append("<h1>📊 Test Report Viewer</h1>");
+        html.append("<h1>Test Report Viewer</h1>");
         html.append("<div class='report-list'>");
         
         // List all report directories

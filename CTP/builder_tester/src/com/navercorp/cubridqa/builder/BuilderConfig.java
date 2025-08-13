@@ -31,6 +31,7 @@ public class BuilderConfig {
     private static final String MAX_REQUEST_LOGS = "max_request_logs";
     private static final String MAX_TAR_FILES = "max_tar_files";
     private static final String ENABLE_REQUEST_GROUPING = "enable_request_grouping";
+    private static final String RETRY_COUNT = "retry_count"; // Tester: number of times to retry a failed test
     
     public BuilderConfig(String configFile) throws IOException {
         this.properties = new Properties();
@@ -195,6 +196,20 @@ public class BuilderConfig {
     
     public boolean isRequestGroupingEnabled() {
         return Boolean.parseBoolean(properties.getProperty(ENABLE_REQUEST_GROUPING, "true"));
+    }
+    
+    /**
+     * Number of retries for a failed test (minimum 0). Total attempts = 1 + retry_count.
+     * Only used by Tester; default is 2 when not specified in tester.conf.
+     */
+    public int getTestRetryCount() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(RETRY_COUNT, "2"));
+        } catch (NumberFormatException e) {
+            value = 2;
+        }
+        return Math.max(0, value);
     }
     
     @Override

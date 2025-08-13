@@ -139,8 +139,8 @@ public class Tester {
                            (requestId != null ? " [" + requestId + "]" : ""));
                 requestLogger.info("Build package: " + request.getString("buildPackage"));
                 
-                // Run test with request logger
-                JSONObject result = runTest(request, requestLogger);
+                // Run test with retry using request logger
+                JSONObject result = runTestWithRetry(request, requestLogger);
                 
                 // Send response
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -161,6 +161,46 @@ public class Tester {
         }
     }
     
+    /**
+     * Run a test with retry logic. Retries only when the test status is FAIL.
+     * Returns immediately for PASS or STARTED (keepAlive mode) or for execution/environment/build errors.
+     */
+    private JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
+        // retry_count is number of retries; total attempts = 1 + retries. If 0, run once with no retries.
+        int totalAttempts = 1 + Math.max(0, config.getTestRetryCount());
+        JSONObject lastResult = null;
+        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
+            if (totalAttempts > 1) {
+                testLogger.info("Running test attempt " + attempt + "/" + totalAttempts);
+            }
+            lastResult = runTest(request, testLogger);
+            String status = lastResult.optString("status", "");
+            // For keepAlive=true Docker runs, we get 'started' — no further retries
+            if ("started".equalsIgnoreCase(status)) {
+                lastResult.put("attempts", attempt);
+                return lastResult;
+            }
+            if (TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
+                lastResult.put("attempts", attempt);
+                return lastResult;
+            }
+            // Retry only on FAIL status
+            if (!TestStatus.FAIL.getValue().equalsIgnoreCase(status)) {
+                lastResult.put("attempts", attempt);
+                return lastResult;
+            }
+            if (attempt < totalAttempts) {
+                testLogger.info("Test failed on attempt " + attempt + ", retrying...");
+                continue;
+            }
+            // Last attempt, return as is with attempts
+            lastResult.put("attempts", attempt);
+            return lastResult;
+        }
+        // Safety fallback
+        return lastResult != null ? lastResult : new JSONObject().put("status", TestStatus.EXECUTION_ERROR.getValue()).put("message", "No result");
+    }
+
     private class HealthCheckHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
