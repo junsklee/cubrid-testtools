@@ -1125,13 +1125,13 @@ public class Tester {
                 }
             }
             
-            // Use FileHandler with a very large limit to prevent rotation
-            // 100MB limit should be sufficient for normal operation without rotation
-            int logSizeLimit = 100 * 1024 * 1024; // 100MB
-            FileHandler fileHandler = new FileHandler(systemLogDir + "/tester.log", logSizeLimit, 1, true);
-            fileHandler.setLevel(Level.ALL);
-            fileHandler.setFormatter(new SimpleFormatter());
-            rootLogger.addHandler(fileHandler);
+            // Use StreamHandler with FileOutputStream for direct control over file append
+            // This avoids FileHandler's automatic rotation behavior
+            String logFilePath = systemLogDir + "/tester.log";
+            FileOutputStream fos = new FileOutputStream(logFilePath, true); // true = append mode
+            StreamHandler streamHandler = new StreamHandler(fos, new SimpleFormatter());
+            streamHandler.setLevel(Level.ALL);
+            rootLogger.addHandler(streamHandler);
             
             rootLogger.setLevel(Level.INFO);
             
@@ -1157,7 +1157,11 @@ public class Tester {
                 logger.info("Shutting down...");
                 tester.stop();
                 
-                // Clean up lock file on shutdown
+                // Flush and close the stream handler
+                streamHandler.flush();
+                streamHandler.close();
+                
+                // Clean up any lock files that might have been created
                 File lockFile = new File(systemLogDir + "/tester.log.lck");
                 if (lockFile.exists()) {
                     lockFile.delete();

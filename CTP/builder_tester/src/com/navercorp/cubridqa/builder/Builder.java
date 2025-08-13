@@ -399,11 +399,23 @@ public class Builder {
             String systemLogDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system";
             new File(systemLogDir).mkdirs();
             
-            // Use a simple FileHandler without rotation (limit = 0 means no limit, count = 1 means no rotation)
-            FileHandler fileHandler = new FileHandler(systemLogDir + "/builder.log", 0, 1, true);
-            fileHandler.setLevel(Level.ALL);
-            fileHandler.setFormatter(new SimpleFormatter());
-            rootLogger.addHandler(fileHandler);
+            // Clean up any existing lock files and numbered log files
+            File logDir = new File(systemLogDir);
+            File[] oldLogFiles = logDir.listFiles((dir, name) -> 
+                name.matches("builder\\.log\\.(\\d+|lck)"));
+            if (oldLogFiles != null) {
+                for (File oldFile : oldLogFiles) {
+                    oldFile.delete();
+                }
+            }
+            
+            // Use StreamHandler with FileOutputStream for direct control over file append
+            // This avoids FileHandler's automatic rotation behavior
+            String logFilePath = systemLogDir + "/builder.log";
+            FileOutputStream fos = new FileOutputStream(logFilePath, true); // true = append mode
+            StreamHandler streamHandler = new StreamHandler(fos, new SimpleFormatter());
+            streamHandler.setLevel(Level.ALL);
+            rootLogger.addHandler(streamHandler);
 
             rootLogger.setLevel(Level.INFO);
             
@@ -423,6 +435,16 @@ public class Builder {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 logger.info("Shutting down...");
                 builder.stop();
+                
+                // Flush and close the stream handler
+                streamHandler.flush();
+                streamHandler.close();
+                
+                // Clean up any lock files that might have been created
+                File lockFile = new File(systemLogDir + "/builder.log.lck");
+                if (lockFile.exists()) {
+                    lockFile.delete();
+                }
             }));
             
             // Keep running
