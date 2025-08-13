@@ -486,7 +486,7 @@
                 return { text: 'Test errors in: ' + infraErrs.join(', '), class: 'verdict-unstable' };
             }
             if (failCount === 0) {
-                return { text: 'Unstable: Not reproduced across listed commits', class: 'verdict-success' };
+                return { text: 'Pass: Not reproduced across listed commits', class: 'verdict-success' };
             } else if (failCount === 1) {
                 let failedCommit = null;
                 for (let i=0;i<commits.length;i++) {

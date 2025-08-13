@@ -219,7 +219,7 @@ function generateReportHTML(data, requestId) {
             const numCommits = commits.length;
             
             if (failCount === 0) {
-                return { text: "Unstable: Not reproduced", class: "verdict-success" };
+                return { text: "Pass: Not reproduced", class: "verdict-success" };
             } else if (failCount === 1) {
                 let failedCommit = null;
                 commits.forEach(commit => {

@@ -98,7 +98,7 @@ The Builder-Tester system includes an interactive web-based report viewer for an
 ### Features
 - **Interactive Reports**: View test results grouped by test case with pass/fail status for each commit
 - **Automated Verdict Analysis**: Automatically determines failure patterns:
-  - `Unstable: Not reproduced` - No failures across commits
+  - `Pass: Not reproduced` - No failures across commits
   - `Bug or Revise: Caused by <commit>` - Single commit failure
   - `Pre-existing Failure` - Failures across all commits
   - `Unstable: Fails intermittently` - Partial failures

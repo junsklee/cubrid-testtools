@@ -7,7 +7,7 @@ An interactive web-based report viewer for CUBRID Builder-Tester test results.
 - **Callback Handler**: Receives test results via POST requests and automatically generates reports
 - **Interactive Visualization**: Groups test results by test case with pass/fail status per commit
 - **Verdict Analysis**: Automatically determines test failure patterns:
-  - Unstable: Not reproduced (0 failures)
+  - Pass: Not reproduced (0 failures)
   - Bug or Revise: Caused by specific commit (1 failure)
   - Pre-existing Failure: Likely not caused by listed commits (all failures)
   - Unstable: Fails intermittently across commits (partial failures)
@@ -76,7 +76,7 @@ The web interface provides:
 
 | Fail Num | Verdict |
 |----------|---------|
-| 0 | Unstable: Not reproduced |
+| 0 | Pass: Not reproduced |
 | 1 | Bug or Revise: Caused by [commit_id] |
 | All commits | Pre-existing Failure: Likely not caused by listed commits |
 | Between 1 and all | Unstable: Fails intermittently across commits |
