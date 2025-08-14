@@ -91,6 +91,129 @@ Notes:
 - Test result is detected from the test script base name: for `csql_hist.sh`, the tester expects `csql_hist.result`.
 - Tester mounts the testcase repository into the container read-write so tests can produce result artifacts.
 
+### Health endpoints
+
+#### Builder `/health` (default port 8089)
+
+```bash
+curl http://localhost:8089/health
+```
+
+Example response:
+
+```json
+{
+  "status": "healthy",
+  "service": "Builder",
+  "timestamp": 1755143569000,
+  "activeTasks": 0,
+  "workDir": "/tmp/builder_work",
+  "dockerEnabled": true,
+  "maxConcurrentBuilds": 4
+}
+```
+
+- **status**: health state of the service
+- **service**: service identifier
+- **timestamp**: server time in milliseconds
+- **activeTasks**: number of running build tasks
+- **workDir**: Builder working directory
+- **dockerEnabled**: whether Docker is used for builds
+- **maxConcurrentBuilds**: concurrency limit for builds
+
+#### Tester `/health` (default port 8090)
+
+```bash
+curl http://localhost:8090/health
+```
+
+Example response:
+
+```json
+{
+  "service": "Tester",
+  "dockerEnabled": true,
+  "workDir": "/tmp/tester_work",
+  "testReadTimeoutMinutes": 60,
+  "maxConcurrentTests": 6,
+  "status": "healthy",
+  "timestamp": 1755143569766
+}
+```
+
+- **status**: health state of the service
+- **service**: service identifier
+- **timestamp**: server time in milliseconds
+- **workDir**: Tester working directory
+- **dockerEnabled**: whether Docker is used for test execution
+- **maxConcurrentTests**: concurrency limit for tests (from `tester.conf`)
+- **testReadTimeoutMinutes**: Builder→Tester HTTP read timeout (minutes)
+
+#### Report Server `/health` (default port 8091)
+
+If using the standalone Node.js report server:
+
+```bash
+curl http://localhost:8091/health
+```
+
+Example response:
+
+```json
+{ "status": "healthy", "service": "report-server" }
+```
+
+- **status**: health state of the service
+- **service**: service identifier
+
+### Status endpoint (Builder)
+
+The Builder exposes `/status` to query running tasks and per-commit progress. The `taskId` equals the generated request ID (e.g., `req_YYYYMMDD_HHMMSS_XXXX`).
+
+List all active tasks:
+
+```bash
+curl "http://localhost:8089/status"
+```
+
+Example response:
+
+```json
+{
+  "activeTasks": [
+    {
+      "taskId": "req_20250814_123034_6077",
+      "progress": {
+        "1609a3a41c5b73492cf5b716ced19196bd428494": 100,
+        "8dae125ebffa6cd333cd55406e0a0439b6f2b82d": 100,
+        "dd64b39dbf6914a739636e80c66a5c25cb2daa46": 100
+      }
+    }
+  ]
+}
+```
+
+Query a specific task:
+
+```bash
+curl "http://localhost:8089/status?taskId=req_20250814_123034_6077"
+```
+
+Possible responses:
+
+```json
+{ "status": "running", "taskId": "req_...", "progress": { "<commit_sha>": 0|20|100|-1 } }
+{ "status": "not_found", "taskId": "req_..." }
+```
+
+Progress map semantics:
+- Keys: full commit SHA
+- Values: integer progress per commit
+  - `0`: queued/starting
+  - `20`: building
+  - `100`: built and packaged
+  - `-1`: error for that commit
+
 ## Test Result Visualization
 
 The Builder-Tester system includes an interactive web-based report viewer for analyzing test results:

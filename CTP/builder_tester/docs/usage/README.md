@@ -59,6 +59,61 @@ curl http://localhost:8089/status
 curl http://localhost:8090/health
 ```
 
+### Health endpoints
+
+#### Builder `/health` (default 8089)
+
+```bash
+curl http://localhost:8089/health
+```
+
+Response fields:
+- `status`: service health
+- `service`: "Builder"
+- `timestamp`: milliseconds
+- `activeTasks`: current running build tasks
+- `workDir`: Builder working directory
+- `dockerEnabled`: whether Docker builds are enabled
+- `maxConcurrentBuilds`: concurrency limit for builds
+
+#### Tester `/health` (default 8090)
+
+```bash
+curl http://localhost:8090/health
+```
+
+Response fields:
+- `status`: service health
+- `service`: "Tester"
+- `timestamp`: milliseconds
+- `workDir`: Tester working directory
+- `dockerEnabled`: whether Docker is used for tests
+- `maxConcurrentTests`: concurrency limit for tests
+- `testReadTimeoutMinutes`: Builder→Tester read timeout in minutes
+
+### Status endpoint (Builder)
+
+List all active tasks:
+
+```bash
+curl "http://localhost:8089/status"
+```
+
+Fields:
+- `activeTasks[]`: array of running tasks
+  - `taskId`: request ID (e.g., `req_YYYYMMDD_HHMMSS_XXXX`)
+  - `progress`: map of `<commit_sha>` to integer progress (0, 20, 100, -1)
+
+Query a specific task:
+
+```bash
+curl "http://localhost:8089/status?taskId=req_20250814_123034_6077"
+```
+
+Possible responses:
+- `{ "status": "running", "taskId": "...", "progress": { ... } }`
+- `{ "status": "not_found", "taskId": "..." }`
+
 ## Direct Tester invocation
 
 Synchronous run (returns PASS/FAIL):

@@ -53,6 +53,23 @@ Configure your Builder to use the callback URL:
 2. **View specific report**: http://localhost:8091/report?id=req_xxxxx
 3. **Health check**: http://localhost:8091/health
 
+### Health endpoint
+
+The standalone server exposes `/health`:
+
+```bash
+curl http://localhost:8091/health
+```
+
+Example response:
+
+```json
+{ "status": "healthy", "service": "report-server" }
+```
+
+- `status`: health state
+- `service`: service identifier
+
 ## Report Structure
 
 Reports are saved in `~/cubrid-testtools/CTP/builder_tester/log/requests/` with:
