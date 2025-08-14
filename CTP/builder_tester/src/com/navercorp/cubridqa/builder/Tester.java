@@ -32,6 +32,8 @@ public class Tester {
     private final HttpServer server;
     private final DockerTesterManager dockerManager;
     private final boolean useDocker;
+    // Prevent concurrent git operations on the shared shell testcases repo
+    private static final Object SHELL_TC_SYNC_LOCK = new Object();
     
     // Test execution status types
     public enum TestStatus {
@@ -166,7 +168,7 @@ public class Tester {
      * Returns immediately for PASS or STARTED (keepAlive mode) or for execution/environment/build errors.
      */
     private JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
-        // retry_count is number of retries; total attempts = 1 + retries. If 0, run once with no retries.
+        // retry_count is number of retries; total attempts = 1 + retries. If 0 (default), run once with no retries.
         int totalAttempts = 1 + Math.max(0, config.getTestRetryCount());
         JSONObject lastResult = null;
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
@@ -216,7 +218,8 @@ public class Tester {
                     .put("timestamp", System.currentTimeMillis())
                     .put("workDir", config.getWorkDir())
                     .put("dockerEnabled", useDocker)
-                    .put("maxConcurrentTests", Math.max(1, config.getMaxConcurrentTests()));
+                    .put("maxConcurrentTests", Math.max(1, config.getMaxConcurrentTests()))
+                    .put("testReadTimeoutMinutes", config.getTestReadTimeoutMinutes());
                 
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 200, healthResponse.toString());
@@ -1040,56 +1043,58 @@ public class Tester {
      * This only applies to the shell testcases repo and does not affect other repositories.
      */
     private void syncShellTestcasesRepo(Logger log) throws IOException, InterruptedException {
-        String repoPath = config.getShellTcDir();
-        String targetBranch = config.getShellTcBranch();
-        File repoDir = new File(repoPath);
-        if (!repoDir.exists() || !repoDir.isDirectory()) {
-            log.warning("shell_tc_dir does not exist: " + repoPath + "; skipping sync");
-            return;
-        }
-
-        ProcessBuilder pb = new ProcessBuilder();
-        pb.directory(repoDir);
-
-        // Verify git repo
-        if (runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
-            log.warning("shell_tc_dir is not a git repository: " + repoPath + "; skipping sync");
-            return;
-        }
-
-        // Determine preferred remote: upstream, fallback to origin
-        String preferred = "upstream";
-        String chosenRemote = preferred;
-        if (runAndExitCode(pb, new String[]{"git", "remote", "get-url", preferred}) != 0) {
-            chosenRemote = "origin";
-            if (runAndExitCode(pb, new String[]{"git", "remote", "get-url", chosenRemote}) != 0) {
-                log.warning("Neither 'upstream' nor 'origin' remotes are configured in " + repoPath + "; skipping sync");
+        synchronized (SHELL_TC_SYNC_LOCK) {
+            String repoPath = config.getShellTcDir();
+            String targetBranch = config.getShellTcBranch();
+            File repoDir = new File(repoPath);
+            if (!repoDir.exists() || !repoDir.isDirectory()) {
+                log.warning("shell_tc_dir does not exist: " + repoPath + "; skipping sync");
                 return;
             }
-        }
 
-        // Prefer upstream if it has the branch; otherwise use origin if available
-        if (!remoteBranchExists(pb, chosenRemote, targetBranch)) {
-            if (!"origin".equals(chosenRemote)
-                && runAndExitCode(pb, new String[]{"git", "remote", "get-url", "origin"}) == 0
-                && remoteBranchExists(pb, "origin", targetBranch)) {
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(repoDir);
+
+            // Verify git repo
+            if (runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
+                log.warning("shell_tc_dir is not a git repository: " + repoPath + "; skipping sync");
+                return;
+            }
+
+            // Determine preferred remote: upstream, fallback to origin
+            String preferred = "upstream";
+            String chosenRemote = preferred;
+            if (runAndExitCode(pb, new String[]{"git", "remote", "get-url", preferred}) != 0) {
                 chosenRemote = "origin";
-            } else {
-                log.warning("Branch '" + targetBranch + "' not found on remote '" + chosenRemote + "'. Skipping sync.");
-                return;
+                if (runAndExitCode(pb, new String[]{"git", "remote", "get-url", chosenRemote}) != 0) {
+                    log.warning("Neither 'upstream' nor 'origin' remotes are configured in " + repoPath + "; skipping sync");
+                    return;
+                }
             }
+
+            // Prefer upstream if it has the branch; otherwise use origin if available
+            if (!remoteBranchExists(pb, chosenRemote, targetBranch)) {
+                if (!"origin".equals(chosenRemote)
+                    && runAndExitCode(pb, new String[]{"git", "remote", "get-url", "origin"}) == 0
+                    && remoteBranchExists(pb, "origin", targetBranch)) {
+                    chosenRemote = "origin";
+                } else {
+                    log.warning("Branch '" + targetBranch + "' not found on remote '" + chosenRemote + "'. Skipping sync.");
+                    return;
+                }
+            }
+
+            log.info("Syncing shell testcases repo: branch='" + targetBranch + "' via remote='" + chosenRemote + "'");
+
+            // Fetch just the target branch to reduce traffic
+            runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
+            // Create/reset local branch to remote branch
+            runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
+            // Ensure clean state (avoid untracked noise)
+            runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+            // Hard reset to remote branch to avoid local drift
+            runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
         }
-
-        log.info("Syncing shell testcases repo: branch='" + targetBranch + "' via remote='" + chosenRemote + "'");
-
-        // Fetch just the target branch to reduce traffic
-        runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
-        // Create/reset local branch to remote branch
-        runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
-        // Ensure clean state (avoid untracked noise)
-        runAndExitCode(pb, new String[]{"git", "clean", "-df"});
-        // Hard reset to remote branch to avoid local drift
-        runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
     }
 
     private boolean remoteBranchExists(ProcessBuilder pb, String remote, String branch) throws IOException, InterruptedException {

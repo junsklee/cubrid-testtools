@@ -32,6 +32,7 @@ public class BuilderConfig {
     private static final String MAX_TAR_FILES = "max_tar_files";
     private static final String ENABLE_REQUEST_GROUPING = "enable_request_grouping";
     private static final String RETRY_COUNT = "retry_count"; // Tester: number of times to retry a failed test
+    private static final String TEST_READ_TIMEOUT_MINUTES = "test_read_timeout_minutes"; // Tester: HTTP read timeout for /test
     
     public BuilderConfig(String configFile) throws IOException {
         this.properties = new Properties();
@@ -200,16 +201,30 @@ public class BuilderConfig {
     
     /**
      * Number of retries for a failed test (minimum 0). Total attempts = 1 + retry_count.
-     * Only used by Tester; default is 2 when not specified in tester.conf.
+     * Only used by Tester; default is 0 when not specified in tester.conf.
      */
     public int getTestRetryCount() {
         int value;
         try {
-            value = Integer.parseInt(properties.getProperty(RETRY_COUNT, "2"));
+            value = Integer.parseInt(properties.getProperty(RETRY_COUNT, "0"));
         } catch (NumberFormatException e) {
-            value = 2;
+            value = 0;
         }
         return Math.max(0, value);
+    }
+
+    /**
+     * Tester-side preferred HTTP read timeout, in minutes, for Builder -> Tester /test calls.
+     * Default is 60 minutes when not specified in tester.conf.
+     */
+    public int getTestReadTimeoutMinutes() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(TEST_READ_TIMEOUT_MINUTES, "60"));
+        } catch (NumberFormatException e) {
+            value = 60;
+        }
+        return Math.max(1, value);
     }
     
     @Override

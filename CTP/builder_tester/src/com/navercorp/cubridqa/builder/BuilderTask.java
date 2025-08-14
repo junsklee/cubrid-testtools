@@ -476,7 +476,9 @@ public class BuilderTask {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setDoOutput(true);
             conn.setConnectTimeout(5000);
-            conn.setReadTimeout(1800000); // 30 min timeout to accommodate longer tests
+            // Read timeout is configurable via tester.conf (reported by Tester and used by BuilderConfig)
+            int testTimeoutMin = config.getTestReadTimeoutMinutes();
+            conn.setReadTimeout(testTimeoutMin * 60 * 1000);
             
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(testRequest.toString().getBytes());

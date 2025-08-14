@@ -59,6 +59,7 @@
 
 - Builder pulls/uses `cubridci/cubridci:develop` and runs builds inside containers
 - Host bind mounts used to improve performance and persistence:
+
 ### Commit isolation details
 
 - Compute baseline as the parent of the earliest requested commit
