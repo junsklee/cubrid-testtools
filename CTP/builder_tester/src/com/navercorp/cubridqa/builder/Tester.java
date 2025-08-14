@@ -219,7 +219,8 @@ public class Tester {
                     .put("workDir", config.getWorkDir())
                     .put("dockerEnabled", useDocker)
                     .put("maxConcurrentTests", Math.max(1, config.getMaxConcurrentTests()))
-                    .put("testReadTimeoutMinutes", config.getTestReadTimeoutMinutes());
+                    .put("testReadTimeoutMinutes", config.getTestReadTimeoutMinutes())
+                    .put("retryCount", config.getTestRetryCount());
                 
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 200, healthResponse.toString());
