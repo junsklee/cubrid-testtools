@@ -320,9 +320,9 @@ public class Builder {
                     return;
                 }
                 
-                // Look for file in work directory
-                File buildFile = new File(config.getWorkDir(), filename);
-                if (!buildFile.exists() || !buildFile.isFile()) {
+                // Look for file in work directory build subdirectories
+                File buildFile = findBuildFile(config.getWorkDir(), filename);
+                if (buildFile == null || !buildFile.exists() || !buildFile.isFile()) {
                     sendResponse(exchange, 404, "Build package not found");
                     return;
                 }
@@ -348,6 +348,34 @@ public class Builder {
                 sendResponse(exchange, 500, "Internal server error");
             }
         }
+    }
+    
+    /**
+     * Find build file in work directory subdirectories.
+     * Build files are stored in directories like build_<commit>_<id>/cubrid_<commit>.tar.gz
+     */
+    private File findBuildFile(String workDir, String filename) {
+        File workDirectory = new File(workDir);
+        if (!workDirectory.exists() || !workDirectory.isDirectory()) {
+            return null;
+        }
+        
+        // Look through all build_* subdirectories
+        File[] buildDirs = workDirectory.listFiles(file -> 
+            file.isDirectory() && file.getName().startsWith("build_"));
+            
+        if (buildDirs == null) {
+            return null;
+        }
+        
+        for (File buildDir : buildDirs) {
+            File candidate = new File(buildDir, filename);
+            if (candidate.exists() && candidate.isFile()) {
+                return candidate;
+            }
+        }
+        
+        return null;
     }
     
     private void validateRequest(JSONObject request) throws IllegalArgumentException {
