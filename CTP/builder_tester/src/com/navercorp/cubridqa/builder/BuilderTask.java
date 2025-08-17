@@ -76,8 +76,10 @@ public class BuilderTask {
             
             String callbackUrl = request.getString("callbackUrl");
             
-            taskLogger.info(String.format("Building %d commits for %d tests across %d tester node(s)", 
-                commits.length(), tests.length(), workerIps.size()));
+            taskLogger.info(String.format("Building %d commits, each will run %d tests", 
+                commits.length(), tests.length()));
+            taskLogger.info(String.format("Total test executions: %d (across %d worker nodes)", 
+                commits.length() * tests.length(), workerIps.size()));
             
             // Ensure CUBRID source repository is set up
             setupCubridRepository();
@@ -89,18 +91,30 @@ public class BuilderTask {
             // Build all commits concurrently (each in isolation via worktree + cherry-pick)
             Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, baselineCommit);
             
-            // Distribute tests across multiple tester nodes
-            Map<String, List<Callable<JSONObject>>> workerTestQueues = new HashMap<>();
+            // Sort workers to prioritize localhost
+            List<String> sortedWorkers = new ArrayList<>();
+            List<String> remoteWorkers = new ArrayList<>();
             for (String worker : workerIps) {
-                workerTestQueues.put(worker, new ArrayList<>());
+                if (isLocalTester(worker)) {
+                    sortedWorkers.add(worker); // Add localhost first
+                } else {
+                    remoteWorkers.add(worker);
+                }
             }
+            sortedWorkers.addAll(remoteWorkers); // Append remote workers after localhost
             
-            // Build a global queue of tests across all commits, distributing round-robin
-            int testIndex = 0;
+            taskLogger.info(String.format("Worker priority order: %s", sortedWorkers));
+            
+            // Create batches: each batch = one commit + ALL tests
+            List<Callable<List<JSONObject>>> batchCallables = new ArrayList<>();
+            int workerIndex = 0;
+            
             for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
                 final String commit = entry.getKey();
                 final String buildPackage = entry.getValue();
+                
                 if (buildPackage == null || buildPackage.isEmpty()) {
+                    // Build failed - add failure results for all tests
                     for (int i = 0; i < tests.length(); i++) {
                         results.add(new JSONObject()
                             .put("commit", commit)
@@ -110,62 +124,61 @@ public class BuilderTask {
                     }
                     continue;
                 }
+                
+                // Convert test paths to proper format
+                List<String> testPaths = new ArrayList<>();
                 for (int i = 0; i < tests.length(); i++) {
-                    final String raw = tests.getString(i);
-                    final String testPath = raw.startsWith("shell/") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
-                    
-                    // Distribute test to worker using round-robin
-                    final String assignedWorker = workerIps.get(testIndex % workerIps.size());
-                    testIndex++;
-                    
-                    // Log test distribution
-                    taskLogger.info(String.format("Assigning test %s (commit %s) to tester node %s", 
-                        testPath, commit.substring(0, Math.min(7, commit.length())), assignedWorker));
-                    
-                    // Create test callable with appropriate build package reference
-                    workerTestQueues.get(assignedWorker).add(() -> 
-                        runTest(commit, buildPackage, testPath, assignedWorker));
+                    String raw = tests.getString(i);
+                    String testPath = raw.startsWith("shell/") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+                    testPaths.add(testPath);
                 }
+                
+                // Assign this entire batch (commit + all tests) to a worker
+                final String assignedWorker = sortedWorkers.get(workerIndex % sortedWorkers.size());
+                workerIndex++;
+                
+                taskLogger.info(String.format("Assigning batch: commit %s (%d tests) to worker %s", 
+                    commit.substring(0, Math.min(7, commit.length())), testPaths.size(), assignedWorker));
+                
+                // Create batch callable
+                batchCallables.add(() -> runBatchTests(commit, buildPackage, testPaths, assignedWorker));
             }
             
-            // Fetch max concurrency from first tester (they should all have same config)
-            int maxTestsPerWorker = Math.max(1, fetchTesterConcurrency(workerIps.get(0)));
+            // Fetch max concurrency from first tester
+            int maxConcurrentBatches = Math.max(1, fetchTesterConcurrency(workerIps.get(0)));
             
-            // Run tests for each worker with bounded concurrency
-            ExecutorService testPool = Executors.newFixedThreadPool(workerIps.size() * maxTestsPerWorker);
+            // Run batch tests - each batch is one complete build with all tests
+            ExecutorService testPool = Executors.newFixedThreadPool(
+                Math.min(batchCallables.size(), maxConcurrentBatches));
             
             // Capture request ID for test threads
             final String testRequestId = RequestContext.getRequestId();
             
-            List<Future<JSONObject>> futuresTests = new ArrayList<>();
-            for (Map.Entry<String, List<Callable<JSONObject>>> entry : workerTestQueues.entrySet()) {
-                String worker = entry.getKey();
-                List<Callable<JSONObject>> workerTests = entry.getValue();
-                
-                taskLogger.info(String.format("Worker %s assigned %d tests", worker, workerTests.size()));
-                
-                for (Callable<JSONObject> ct : workerTests) {
-                    futuresTests.add(testPool.submit(() -> {
-                        // Set request context for this test thread
-                        if (testRequestId != null) {
-                            RequestContext.setRequestId(testRequestId);
-                        }
-                        try {
-                            return ct.call();
-                        } finally {
-                            RequestContext.clear();
-                        }
-                    }));
-                }
+            List<Future<List<JSONObject>>> futuresBatchTests = new ArrayList<>();
+            for (Callable<List<JSONObject>> batchCallable : batchCallables) {
+                futuresBatchTests.add(testPool.submit(() -> {
+                    // Set request context for this test thread
+                    if (testRequestId != null) {
+                        RequestContext.setRequestId(testRequestId);
+                    }
+                    try {
+                        return batchCallable.call();
+                    } finally {
+                        RequestContext.clear();
+                    }
+                }));
             }
-            for (Future<JSONObject> f : futuresTests) {
+            
+            // Collect all results
+            for (Future<List<JSONObject>> f : futuresBatchTests) {
                 try {
-                    results.add(f.get());
+                    List<JSONObject> batchResults = f.get();
+                    results.addAll(batchResults);
                 } catch (Exception e) {
-                    taskLogger.log(Level.WARNING, "Test execution threw", e);
+                    taskLogger.log(Level.WARNING, "Batch test execution threw", e);
                     results.add(new JSONObject()
                         .put("commit", "unknown")
-                        .put("test", "unknown")
+                        .put("test", "batch")
                         .put("status", "error")
                         .put("message", e.getMessage()));
                 }
@@ -470,10 +483,16 @@ public class BuilderTask {
         return parts.length > 2;
     }
     
-    private JSONObject runTest(String commit, String buildPackage, String testPath, 
-                               String workerIp) {
+    /**
+     * Run a batch of tests for a single build/commit on a specific worker.
+     * Each batch contains one build and ALL test cases.
+     */
+    private List<JSONObject> runBatchTests(String commit, String buildPackage, List<String> testPaths, 
+                                           String workerIp) {
+        List<JSONObject> results = new ArrayList<>();
+        
         try {
-            // Parse host and port from workerIp (supports "host:port" format)
+            // Parse host and port from workerIp
             String host = workerIp;
             int port = config.getTesterPort();
             
@@ -487,68 +506,54 @@ public class BuilderTask {
                 }
             }
             
-            // Prepare test request
-            String testDir = config.getShellTcDir() + "/" + 
-                           testPath.substring(0, testPath.lastIndexOf("/"));
-            String testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
-            String testName = testScript.replace(".sh", "");
-            
             // Determine if this is a local or remote tester
             String buildPackageRef;
             if (isLocalTester(host)) {
-                // Local tester - use direct file path
                 buildPackageRef = buildPackage;
-                taskLogger.info("Using local file path for tester " + workerIp + ": " + buildPackage);
+                taskLogger.info(String.format("Batch for commit %s using local build file on %s", 
+                    commit.substring(0, Math.min(7, commit.length())), workerIp));
             } else {
-                // Remote tester - provide HTTP URL for download
                 File packageFile = new File(buildPackage);
                 String builderHost = InetAddress.getLocalHost().getHostAddress();
                 buildPackageRef = String.format("http://%s:%d/download/build/%s", 
                     builderHost, config.getListenPort(), packageFile.getName());
-                taskLogger.info("Using HTTP URL for remote tester " + workerIp + ": " + buildPackageRef);
+                taskLogger.info(String.format("Batch for commit %s will download build from %s", 
+                    commit.substring(0, Math.min(7, commit.length())), buildPackageRef));
             }
             
-            JSONObject testRequest = new JSONObject()
+            // Create batch test request - one build, all tests
+            JSONObject batchRequest = new JSONObject()
                 .put("buildPackage", buildPackageRef)
-                .put("testPath", testPath)
-                .put("testDir", testDir)
-                .put("testScript", testScript)
-                .put("testName", testName)
-                .put("commit", commit)  // Add full commit hash
-                .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))  // Add short commit
+                .put("tests", new JSONArray(testPaths))
+                .put("commit", commit)
+                .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))
                 .put("expectedBuildVersion", commit.substring(0, 7))
+                .put("batchMode", true)
                 .put("keepAlive", false);
             
             // Add request ID if available
             String requestId = RequestContext.getRequestId();
             if (requestId != null) {
-                testRequest.put("requestId", requestId);
+                batchRequest.put("requestId", requestId);
             }
             
-            // Persist test request for diagnostics
-            try {
-                if (requestId != null && config.isRequestGroupingEnabled()) {
-                    String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
-                    String safeTest = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                    String safeCommit = commit.substring(0, Math.min(commit.length(), 7));
-                    java.nio.file.Path reqFile = Paths.get(testsDir, String.format("test_%s_%s.json", safeCommit, safeTest));
-                    java.nio.file.Files.write(reqFile, testRequest.toString(2).getBytes("UTF-8"));
-                }
-            } catch (Exception ignore) { }
-
-            // Send HTTP request to tester
-            URL url = new URL("http://" + host + ":" + port + "/test");
+            taskLogger.info(String.format("Sending batch to %s: commit %s with %d tests", 
+                workerIp, commit.substring(0, Math.min(7, commit.length())), testPaths.size()));
+            
+            // Send batch request to tester
+            URL url = new URL("http://" + host + ":" + port + "/batch-test");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setDoOutput(true);
-            conn.setConnectTimeout(5000);
-            // Read timeout is configurable via tester.conf (reported by Tester and used by BuilderConfig)
-            int testTimeoutMin = config.getTestReadTimeoutMinutes();
-            conn.setReadTimeout(testTimeoutMin * 60 * 1000);
+            conn.setConnectTimeout(10000);
+            
+            // Timeout based on number of tests
+            int batchTimeoutMin = Math.max(60, testPaths.size() * 5);
+            conn.setReadTimeout(batchTimeoutMin * 60 * 1000);
             
             try (OutputStream os = conn.getOutputStream()) {
-                os.write(testRequest.toString().getBytes());
+                os.write(batchRequest.toString().getBytes());
             }
             
             // Read response
@@ -563,21 +568,44 @@ public class BuilderTask {
             
             JSONObject responseJson = new JSONObject(response.toString());
             
-            return new JSONObject()
-                .put("commit", commit)
-                .put("test", testPath)
-                .put("status", responseJson.getString("status"))
-                .put("message", responseJson.optString("message", ""));
-                
+            // Parse batch results
+            if (responseJson.has("results")) {
+                JSONArray batchResults = responseJson.getJSONArray("results");
+                for (int i = 0; i < batchResults.length(); i++) {
+                    JSONObject testResult = batchResults.getJSONObject(i);
+                    results.add(new JSONObject()
+                        .put("commit", commit)
+                        .put("test", testResult.getString("test"))
+                        .put("status", testResult.getString("status"))
+                        .put("message", testResult.optString("message", "")));
+                }
+                taskLogger.info(String.format("Batch completed for commit %s on %s: %d test results", 
+                    commit.substring(0, Math.min(7, commit.length())), workerIp, results.size()));
+            } else {
+                // Fallback for non-batch response
+                for (String testPath : testPaths) {
+                    results.add(new JSONObject()
+                        .put("commit", commit)
+                        .put("test", testPath)
+                        .put("status", responseJson.optString("status", "error"))
+                        .put("message", responseJson.optString("message", "Batch test failed")));
+                }
+            }
+            
         } catch (Exception e) {
-            taskLogger.log(Level.SEVERE, "Failed to test commit " + commit + 
-                      " with test " + testPath + " on " + workerIp, e);
-            return new JSONObject()
-                .put("commit", commit)
-                .put("test", testPath)
-                .put("status", "error")
-                .put("message", e.getMessage());
+            taskLogger.log(Level.SEVERE, String.format("Failed batch for commit %s on %s", 
+                commit.substring(0, Math.min(7, commit.length())), workerIp), e);
+            // Add error result for each test in the batch
+            for (String testPath : testPaths) {
+                results.add(new JSONObject()
+                    .put("commit", commit)
+                    .put("test", testPath)
+                    .put("status", "error")
+                    .put("message", "Batch execution failed: " + e.getMessage()));
+            }
         }
+        
+        return results;
     }
     
     private boolean isLocalTester(String ip) {

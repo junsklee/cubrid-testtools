@@ -12,6 +12,7 @@ import java.util.logging.*;
 import java.util.concurrent.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
+import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
 
 /**
@@ -90,6 +91,7 @@ public class Tester {
         // Create HTTP server
         this.server = HttpServer.create(new InetSocketAddress(config.getTesterPort()), 0);
         this.server.createContext("/test", new TestRequestHandler());
+        this.server.createContext("/batch-test", new BatchTestRequestHandler());
         this.server.createContext("/health", new HealthCheckHandler());
         int maxThreads = Math.max(1, config.getMaxConcurrentTests());
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
@@ -159,6 +161,62 @@ public class Tester {
                 JSONObject error = new JSONObject()
                     .put("status", TestStatus.EXECUTION_ERROR.getValue())
                     .put("message", e.getMessage());
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                sendResponse(exchange, 500, error.toString());
+            } finally {
+                RequestContext.clear();
+            }
+        }
+    }
+    
+    private class BatchTestRequestHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            Logger requestLogger = logger;
+            
+            logger.info("Received batch test request");
+            
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "Method not allowed");
+                return;
+            }
+            
+            try {
+                String requestBody = readRequestBody(exchange);
+                JSONObject request = new JSONObject(requestBody);
+                
+                // Extract request ID if provided
+                String requestId = request.optString("requestId", null);
+                if (requestId != null) {
+                    RequestContext.setRequestId(requestId);
+                    try {
+                        if (config.isRequestGroupingEnabled()) {
+                            requestLogger = RequestLogManager.getInstance().getRequestLogger(requestId, "tester");
+                        }
+                    } catch (Exception e) {
+                        logger.warning("Failed to create request logger: " + e.getMessage());
+                    }
+                }
+                
+                JSONArray tests = request.getJSONArray("tests");
+                String commit = request.getString("commit");
+                requestLogger.info(String.format("Batch test request: %d tests for commit %s", 
+                    tests.length(), commit.substring(0, Math.min(7, commit.length()))));
+                
+                // Run all tests in a single container
+                JSONObject batchResult = runBatchTestsInContainer(request, requestLogger);
+                
+                // Send response
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                sendResponse(exchange, 200, batchResult.toString());
+                requestLogger.info("Batch test completed");
+                
+            } catch (Exception e) {
+                requestLogger.log(Level.SEVERE, "Error processing batch test request", e);
+                JSONObject error = new JSONObject()
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", e.getMessage())
+                    .put("results", new JSONArray());
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 500, error.toString());
             } finally {
@@ -238,6 +296,226 @@ public class Tester {
                 sendResponse(exchange, 500, error.toString());
             }
         }
+    }
+    
+    /**
+     * Run multiple tests in a single container for efficiency
+     */
+    private JSONObject runBatchTestsInContainer(JSONObject request, Logger testLogger) throws Exception {
+        JSONArray tests = request.getJSONArray("tests");
+        String buildPackage = request.getString("buildPackage");
+        String commit = request.optString("commit", "unknown");
+        String commitShort = request.optString("commitShort", commit.substring(0, Math.min(commit.length(), 7)));
+        
+        JSONArray results = new JSONArray();
+        Path workDir = Files.createTempDirectory(Paths.get(config.getWorkDir()), "batch_test_");
+        
+        try {
+            // Download build package if needed
+            Path localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, workDir, testLogger);
+            
+            // Sync shell testcases repo
+            try {
+                syncShellTestcasesRepo(testLogger);
+            } catch (Exception e) {
+                testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
+            }
+            
+            if (useDocker && dockerManager != null && DockerUtils.isDockerAvailable()) {
+                testLogger.info("Running batch tests in Docker container");
+                results = runBatchTestsInDocker(request, workDir, localBuildPackage, testLogger);
+            } else {
+                testLogger.info("Running batch tests directly");
+                results = runBatchTestsDirectly(request, workDir, localBuildPackage, testLogger);
+            }
+            
+        } finally {
+            // Cleanup
+            try {
+                if (!request.optBoolean("keepAlive", false)) {
+                    deleteDirectory(workDir.toFile());
+                }
+            } catch (Exception ignore) {}
+        }
+        
+        return new JSONObject()
+            .put("status", "completed")
+            .put("commit", commit)
+            .put("results", results);
+    }
+    
+    private JSONArray runBatchTestsInDocker(JSONObject request, Path workDir, Path buildPackage, 
+                                            Logger testLogger) throws Exception {
+        JSONArray tests = request.getJSONArray("tests");
+        String commit = request.optString("commit", "unknown");
+        String commitShort = request.optString("commitShort", commit.substring(0, Math.min(commit.length(), 7)));
+        String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+        
+        JSONArray results = new JSONArray();
+        Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
+        
+        // Copy build package
+        Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
+        Files.copy(buildPackage, dockerBuildPackage);
+        
+        // Copy all test directories to isolated workspace
+        Path testCasesDir = dockerWorkDir.resolve("testcases");
+        Files.createDirectories(testCasesDir);
+        
+        // Create batch test script
+        String batchScript = createDockerBatchTestScript(tests, expectedBuildVersion);
+        Path batchScriptPath = dockerWorkDir.resolve("run_batch_tests.sh");
+        Files.write(batchScriptPath, batchScript.getBytes());
+        batchScriptPath.toFile().setExecutable(true);
+        
+        // Run Docker container with all tests
+        String containerName = "batch_test_" + commitShort + "_" + System.currentTimeMillis();
+        List<String> dockerCommand = new ArrayList<>();
+        dockerCommand.add("docker");
+        dockerCommand.add("run");
+        dockerCommand.add("--rm");
+        dockerCommand.add("--name");
+        dockerCommand.add(containerName);
+        dockerCommand.add("-v");
+        dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
+        dockerCommand.add("-v");
+        dockerCommand.add(config.getShellTcDir() + ":/testcases:ro");
+        dockerCommand.add("-v");
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:ro");
+        dockerCommand.add("-e");
+        dockerCommand.add("GITHUB_TOKEN=" + System.getenv("GITHUB_TOKEN"));
+        dockerCommand.add("-e");
+        dockerCommand.add("CTP_HOME=/home/cubrid-testtools/CTP");
+        dockerCommand.add("-e");
+        dockerCommand.add("init_path=/home/cubrid-testtools/CTP/shell/init_path");
+        dockerCommand.add("-w");
+        dockerCommand.add("/workspace");
+        dockerCommand.add("--entrypoint");
+        dockerCommand.add("bash");
+        dockerCommand.add(config.getDockerTestImage());
+        dockerCommand.add("-lc");
+        dockerCommand.add("/workspace/run_batch_tests.sh");
+        
+        testLogger.info("Executing batch Docker command for " + tests.length() + " tests");
+        
+        ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        
+        StreamReader outputGobbler = new StreamReader(process.getInputStream(), "DOCKER");
+        outputGobbler.start();
+        
+        // Longer timeout for batch tests
+        int timeoutMinutes = Math.max(30, tests.length() * 5);
+        boolean completed = process.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+        
+        if (!completed) {
+            process.destroyForcibly();
+            testLogger.severe("Docker batch test timeout");
+            for (int i = 0; i < tests.length(); i++) {
+                results.put(new JSONObject()
+                    .put("test", tests.getString(i))
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", "Batch test timeout"));
+            }
+            return results;
+        }
+        
+        int exitCode = process.exitValue();
+        outputGobbler.join(2000);
+        String dockerOutput = outputGobbler.getOutput();
+        
+        // Parse results from output files
+        for (int i = 0; i < tests.length(); i++) {
+            String testPath = tests.getString(i);
+            String testName = testPath.substring(testPath.lastIndexOf("/") + 1).replace(".sh", "");
+            
+            // Check for result file
+            Path resultFile = dockerWorkDir.resolve(testName + ".result");
+            String status = TestStatus.EXECUTION_ERROR.getValue();
+            String message = "";
+            
+            if (Files.exists(resultFile)) {
+                String resultContent = new String(Files.readAllBytes(resultFile));
+                testLogger.info("Test result for " + testName + ": " + resultContent.trim());
+                
+                if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
+                    status = TestStatus.FAIL.getValue();
+                } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
+                    status = TestStatus.PASS.getValue();
+                } else {
+                    status = TestStatus.EXECUTION_ERROR.getValue();
+                    message = "Could not determine test result";
+                }
+            } else {
+                // No result file generated
+                status = TestStatus.EXECUTION_ERROR.getValue();
+                message = "No result file generated";
+            }
+            
+            results.put(new JSONObject()
+                .put("test", testPath)
+                .put("status", status)
+                .put("message", message));
+        }
+        
+        return results;
+    }
+    
+    private JSONArray runBatchTestsDirectly(JSONObject request, Path workDir, Path buildPackage,
+                                           Logger testLogger) throws Exception {
+        // Similar implementation for direct (non-Docker) batch testing
+        // This would install CUBRID once and run all tests sequentially
+        JSONArray tests = request.getJSONArray("tests");
+        JSONArray results = new JSONArray();
+        
+        // For now, just run tests individually as fallback
+        for (int i = 0; i < tests.length(); i++) {
+            String testPath = tests.getString(i);
+            results.put(new JSONObject()
+                .put("test", testPath)
+                .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                .put("message", "Direct batch testing not fully implemented"));
+        }
+        
+        return results;
+    }
+    
+    private String createDockerBatchTestScript(JSONArray tests, String expectedBuildVersion) {
+        StringBuilder script = new StringBuilder();
+        script.append("#!/bin/bash\n");
+        script.append("set -e\n\n");
+        
+        // Extract and setup CUBRID
+        script.append("echo \"Extracting CUBRID build...\"\n");
+        script.append("mkdir -p /tmp/cubrid_install\n");
+        script.append("tar -xzf /workspace/build.tar.gz -C /tmp/cubrid_install\n");
+        script.append("CUBRID_ROOT=$(find /tmp/cubrid_install -name \"bin\" -type d | head -1 | xargs dirname)\n");
+        script.append("export CUBRID=$CUBRID_ROOT\n");
+        script.append("export CUBRID_DATABASES=$CUBRID_ROOT/databases\n");
+        script.append("export PATH=$CUBRID_ROOT/bin:$PATH\n");
+        script.append("export LD_LIBRARY_PATH=$CUBRID_ROOT/lib:$LD_LIBRARY_PATH\n\n");
+        
+        // Run all tests
+        script.append("echo \"Running ").append(tests.length()).append(" tests...\"\n");
+        for (int i = 0; i < tests.length(); i++) {
+            try {
+                String testPath = tests.getString(i);
+                String testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
+                String testName = testScript.replace(".sh", "");
+                
+                script.append("\necho \"[Test ").append(i+1).append("/").append(tests.length());
+                script.append("] Running ").append(testName).append("...\"\n");
+                script.append("cd /testcases/").append(testPath.substring(0, testPath.lastIndexOf("/"))).append("\n");
+                script.append("bash ").append(testScript).append(" || true\n");
+                script.append("cp ").append(testName).append(".result /workspace/ 2>/dev/null || true\n");
+            } catch (Exception e) {
+                // Skip malformed test
+            }
+        }
+        
+        script.append("\necho \"All tests completed\"\n");
+        return script.toString();
     }
     
     private JSONObject runTest(JSONObject request) throws Exception {
