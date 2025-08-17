@@ -61,11 +61,23 @@ public class BuilderTask {
             JSONArray commits = request.getJSONArray("commits");
             JSONArray tests = request.getJSONArray("tests");
             String buildType = request.optString("buildType", "debug");
-            String workerIp = request.optString("workerIp", "localhost");
+            
+            // Extract worker IPs (supporting both singular and plural forms)
+            List<String> workerIps = new ArrayList<>();
+            if (request.has("workerIps")) {
+                JSONArray ips = request.getJSONArray("workerIps");
+                for (int i = 0; i < ips.length(); i++) {
+                    workerIps.add(ips.getString(i));
+                }
+            } else {
+                // Backward compatibility
+                workerIps.add(request.optString("workerIp", "localhost"));
+            }
+            
             String callbackUrl = request.getString("callbackUrl");
             
-            taskLogger.info(String.format("Building %d commits for %d tests", 
-                commits.length(), tests.length()));
+            taskLogger.info(String.format("Building %d commits for %d tests across %d tester node(s)", 
+                commits.length(), tests.length(), workerIps.size()));
             
             // Ensure CUBRID source repository is set up
             setupCubridRepository();
@@ -77,8 +89,14 @@ public class BuilderTask {
             // Build all commits concurrently (each in isolation via worktree + cherry-pick)
             Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, baselineCommit);
             
-            // Build a global queue of tests across all commits
-            List<Callable<JSONObject>> pendingTests = new ArrayList<>();
+            // Distribute tests across multiple tester nodes
+            Map<String, List<Callable<JSONObject>>> workerTestQueues = new HashMap<>();
+            for (String worker : workerIps) {
+                workerTestQueues.put(worker, new ArrayList<>());
+            }
+            
+            // Build a global queue of tests across all commits, distributing round-robin
+            int testIndex = 0;
             for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
                 final String commit = entry.getKey();
                 final String buildPackage = entry.getValue();
@@ -95,30 +113,50 @@ public class BuilderTask {
                 for (int i = 0; i < tests.length(); i++) {
                     final String raw = tests.getString(i);
                     final String testPath = raw.startsWith("shell/") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
-                    pendingTests.add(() -> runTest(commit, buildPackage, testPath, workerIp));
+                    
+                    // Distribute test to worker using round-robin
+                    final String assignedWorker = workerIps.get(testIndex % workerIps.size());
+                    testIndex++;
+                    
+                    // Log test distribution
+                    taskLogger.info(String.format("Assigning test %s (commit %s) to tester node %s", 
+                        testPath, commit.substring(0, Math.min(7, commit.length())), assignedWorker));
+                    
+                    // Create test callable with appropriate build package reference
+                    workerTestQueues.get(assignedWorker).add(() -> 
+                        runTest(commit, buildPackage, testPath, assignedWorker));
                 }
             }
-
-            // Run tests with global bounded concurrency fetched from Tester service
-            int maxTests = Math.max(1, fetchTesterConcurrency(workerIp));
-            ExecutorService testPool = Executors.newFixedThreadPool(maxTests);
+            
+            // Fetch max concurrency from first tester (they should all have same config)
+            int maxTestsPerWorker = Math.max(1, fetchTesterConcurrency(workerIps.get(0)));
+            
+            // Run tests for each worker with bounded concurrency
+            ExecutorService testPool = Executors.newFixedThreadPool(workerIps.size() * maxTestsPerWorker);
             
             // Capture request ID for test threads
             final String testRequestId = RequestContext.getRequestId();
             
             List<Future<JSONObject>> futuresTests = new ArrayList<>();
-            for (Callable<JSONObject> ct : pendingTests) {
-                futuresTests.add(testPool.submit(() -> {
-                    // Set request context for this test thread
-                    if (testRequestId != null) {
-                        RequestContext.setRequestId(testRequestId);
-                    }
-                    try {
-                        return ct.call();
-                    } finally {
-                        RequestContext.clear();
-                    }
-                }));
+            for (Map.Entry<String, List<Callable<JSONObject>>> entry : workerTestQueues.entrySet()) {
+                String worker = entry.getKey();
+                List<Callable<JSONObject>> workerTests = entry.getValue();
+                
+                taskLogger.info(String.format("Worker %s assigned %d tests", worker, workerTests.size()));
+                
+                for (Callable<JSONObject> ct : workerTests) {
+                    futuresTests.add(testPool.submit(() -> {
+                        // Set request context for this test thread
+                        if (testRequestId != null) {
+                            RequestContext.setRequestId(testRequestId);
+                        }
+                        try {
+                            return ct.call();
+                        } finally {
+                            RequestContext.clear();
+                        }
+                    }));
+                }
             }
             for (Future<JSONObject> f : futuresTests) {
                 try {
@@ -435,14 +473,43 @@ public class BuilderTask {
     private JSONObject runTest(String commit, String buildPackage, String testPath, 
                                String workerIp) {
         try {
+            // Parse host and port from workerIp (supports "host:port" format)
+            String host = workerIp;
+            int port = config.getTesterPort();
+            
+            if (workerIp.contains(":")) {
+                String[] parts = workerIp.split(":");
+                host = parts[0];
+                try {
+                    port = Integer.parseInt(parts[1]);
+                } catch (NumberFormatException e) {
+                    taskLogger.warning("Invalid port in workerIp: " + workerIp);
+                }
+            }
+            
             // Prepare test request
             String testDir = config.getShellTcDir() + "/" + 
                            testPath.substring(0, testPath.lastIndexOf("/"));
             String testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
             String testName = testScript.replace(".sh", "");
             
+            // Determine if this is a local or remote tester
+            String buildPackageRef;
+            if (isLocalTester(host)) {
+                // Local tester - use direct file path
+                buildPackageRef = buildPackage;
+                taskLogger.info("Using local file path for tester " + workerIp + ": " + buildPackage);
+            } else {
+                // Remote tester - provide HTTP URL for download
+                File packageFile = new File(buildPackage);
+                String builderHost = InetAddress.getLocalHost().getHostAddress();
+                buildPackageRef = String.format("http://%s:%d/download/build/%s", 
+                    builderHost, config.getListenPort(), packageFile.getName());
+                taskLogger.info("Using HTTP URL for remote tester " + workerIp + ": " + buildPackageRef);
+            }
+            
             JSONObject testRequest = new JSONObject()
-                .put("buildPackage", buildPackage)
+                .put("buildPackage", buildPackageRef)
                 .put("testPath", testPath)
                 .put("testDir", testDir)
                 .put("testScript", testScript)
@@ -470,7 +537,7 @@ public class BuilderTask {
             } catch (Exception ignore) { }
 
             // Send HTTP request to tester
-            URL url = new URL("http://" + workerIp + ":" + config.getTesterPort() + "/test");
+            URL url = new URL("http://" + host + ":" + port + "/test");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
@@ -504,12 +571,24 @@ public class BuilderTask {
                 
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Failed to test commit " + commit + 
-                      " with test " + testPath, e);
+                      " with test " + testPath + " on " + workerIp, e);
             return new JSONObject()
                 .put("commit", commit)
                 .put("test", testPath)
                 .put("status", "error")
                 .put("message", e.getMessage());
+        }
+    }
+    
+    private boolean isLocalTester(String ip) {
+        if ("localhost".equalsIgnoreCase(ip) || "127.0.0.1".equals(ip)) {
+            return true;
+        }
+        try {
+            String localHost = InetAddress.getLocalHost().getHostAddress();
+            return ip.equals(localHost);
+        } catch (Exception e) {
+            return false;
         }
     }
     

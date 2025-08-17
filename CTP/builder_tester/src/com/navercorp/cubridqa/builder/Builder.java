@@ -51,6 +51,7 @@ public class Builder {
         this.server.createContext("/build", new BuildRequestHandler());
         this.server.createContext("/status", new StatusHandler());
         this.server.createContext("/health", new HealthCheckHandler());
+        this.server.createContext("/download/build/", new BuildDownloadHandler());
         
         // Add report handler for viewing test results
         try {
@@ -142,11 +143,26 @@ public class Builder {
                 JSONArray commits = request.getJSONArray("commits");
                 JSONArray tests = request.getJSONArray("tests");
                 String callbackUrl = request.getString("callbackUrl");
-                String workerIp = request.optString("workerIp", "localhost");
+                
+                // Support both workerIp (singular) and workerIps (array) for backward compatibility
+                JSONArray workerIps;
+                if (request.has("workerIps")) {
+                    workerIps = request.getJSONArray("workerIps");
+                    if (workerIps.length() == 0) {
+                        throw new IllegalArgumentException("workerIps array cannot be empty");
+                    }
+                } else {
+                    // Backward compatibility: convert single workerIp to array
+                    String workerIp = request.optString("workerIp", "localhost");
+                    workerIps = new JSONArray().put(workerIp);
+                }
+                
                 String buildType = request.optString("buildType", "debug");
                 
-                // Check tester reachability
-                validateTesterReachability(workerIp);
+                // Check tester reachability for all worker IPs
+                for (int i = 0; i < workerIps.length(); i++) {
+                    validateTesterReachability(workerIps.getString(i));
+                }
                 
                 // Log request with request ID
                 logger.info(String.format("[%s] Received build request for %d commits and %d tests",
@@ -281,6 +297,59 @@ public class Builder {
         }
     }
     
+    private class BuildDownloadHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "Method not allowed");
+                return;
+            }
+            
+            try {
+                // Extract filename from path: /download/build/{filename}
+                String path = exchange.getRequestURI().getPath();
+                String prefix = "/download/build/";
+                if (!path.startsWith(prefix)) {
+                    sendResponse(exchange, 404, "Not found");
+                    return;
+                }
+                
+                String filename = path.substring(prefix.length());
+                if (filename.isEmpty() || filename.contains("..")) {
+                    sendResponse(exchange, 400, "Invalid filename");
+                    return;
+                }
+                
+                // Look for file in work directory
+                File buildFile = new File(config.getWorkDir(), filename);
+                if (!buildFile.exists() || !buildFile.isFile()) {
+                    sendResponse(exchange, 404, "Build package not found");
+                    return;
+                }
+                
+                // Send file
+                exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
+                exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+                exchange.sendResponseHeaders(200, buildFile.length());
+                
+                try (OutputStream os = exchange.getResponseBody();
+                     FileInputStream fis = new FileInputStream(buildFile)) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = fis.read(buffer)) != -1) {
+                        os.write(buffer, 0, bytesRead);
+                    }
+                }
+                
+                logger.info("Served build package: " + filename);
+                
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Error serving build package", e);
+                sendResponse(exchange, 500, "Internal server error");
+            }
+        }
+    }
+    
     private void validateRequest(JSONObject request) throws IllegalArgumentException {
         if (!request.has("commits") || request.getJSONArray("commits").length() == 0) {
             throw new IllegalArgumentException("Request must contain non-empty 'commits' array");
@@ -294,16 +363,30 @@ public class Builder {
     }
     
     private void validateTesterReachability(String workerIp) throws Exception {
-        logger.info("Checking tester reachability at " + workerIp + ":" + config.getTesterPort());
+        // Parse host and port from workerIp (supports "host:port" format)
+        String host = workerIp;
+        int port = config.getTesterPort();
+        
+        if (workerIp.contains(":")) {
+            String[] parts = workerIp.split(":");
+            host = parts[0];
+            try {
+                port = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid port in workerIp: " + workerIp);
+            }
+        }
+        
+        logger.info("Checking tester reachability at " + host + ":" + port);
         
         try {
             try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(workerIp, config.getTesterPort()), 5000);
+                socket.connect(new InetSocketAddress(host, port), 5000);
                 logger.info("Tester connectivity test passed");
                 return;
             }
         } catch (Exception e) {
-            String errorMsg = "Tester at " + workerIp + ":" + config.getTesterPort() + 
+            String errorMsg = "Tester at " + host + ":" + port + 
                             " is not reachable: " + e.getMessage();
             logger.severe(errorMsg);
             throw new IllegalArgumentException(errorMsg, e);

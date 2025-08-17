@@ -35,6 +35,10 @@ public class Tester {
     // Prevent concurrent git operations on the shared shell testcases repo
     private static final Object SHELL_TC_SYNC_LOCK = new Object();
     
+    // Cache for downloaded build packages to avoid re-downloading
+    private static final Map<String, Path> buildPackageCache = new ConcurrentHashMap<>();
+    private static final Object DOWNLOAD_LOCK = new Object();
+    
     // Test execution status types
     public enum TestStatus {
         PASS("pass"),
@@ -287,6 +291,9 @@ public class Tester {
         }
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
+        
+        // Download build package if it's a URL
+        Path localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, dockerWorkDir, testLogger);
 
         // Ensure shell testcases repository is on the requested branch from preferred remote
         try {
@@ -297,7 +304,9 @@ public class Tester {
         
         // Copy build package to Docker work directory
         Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
-        Files.copy(Paths.get(buildPackage), dockerBuildPackage);
+        if (!localBuildPackage.equals(dockerBuildPackage)) {
+            Files.copy(localBuildPackage, dockerBuildPackage);
+        }
         
         // Copy test case directory to isolated workspace
         Path testCasesDir = dockerWorkDir.resolve("testcases");
@@ -531,6 +540,9 @@ public class Tester {
         testLogger.info("Direct test execution");
         testLogger.info("  Build package: " + buildPackage);
         testLogger.info("  Test: " + testName);
+        
+        // Download build package if it's a URL
+        Path localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, workDir, testLogger);
 
         // Ensure shell testcases repository is on the requested branch from preferred remote
         try {
@@ -542,7 +554,7 @@ public class Tester {
         // Install CUBRID
         Path installDir = null;
         try {
-            installDir = installCubrid(buildPackage, workDir, testLogger);
+            installDir = installCubrid(localBuildPackage.toString(), workDir, testLogger);
         } catch (Exception e) {
             testLogger.log(Level.SEVERE, "Failed to install CUBRID", e);
             return new JSONObject()
@@ -1020,6 +1032,139 @@ public class Tester {
                     logger.warning("Failed to copy: " + sourcePath + " - " + e.getMessage());
                 }
             });
+    }
+    
+    /**
+     * Download build package if it's a URL, otherwise return the local path.
+     * Caches downloaded packages to avoid re-downloading.
+     */
+    private Path downloadBuildPackageIfNeeded(String buildPackage, Path workDir, Logger testLogger) 
+            throws IOException {
+        // Check if it's a URL
+        if (buildPackage.startsWith("http://") || buildPackage.startsWith("https://")) {
+            testLogger.info("Build package is a URL: " + buildPackage);
+            
+            // Check cache first
+            Path cached = buildPackageCache.get(buildPackage);
+            if (cached != null && Files.exists(cached)) {
+                testLogger.info("Using cached build package: " + cached);
+                return cached;
+            }
+            
+            synchronized (DOWNLOAD_LOCK) {
+                // Double-check cache after acquiring lock
+                cached = buildPackageCache.get(buildPackage);
+                if (cached != null && Files.exists(cached)) {
+                    return cached;
+                }
+                
+                // Download the package
+                testLogger.info("Downloading build package from: " + buildPackage);
+                URL url = new URL(buildPackage);
+                String fileName = "build_" + System.currentTimeMillis() + ".tar.gz";
+                
+                // Try to extract filename from URL
+                String urlPath = url.getPath();
+                if (urlPath != null && !urlPath.isEmpty()) {
+                    int lastSlash = urlPath.lastIndexOf('/');
+                    if (lastSlash >= 0 && lastSlash < urlPath.length() - 1) {
+                        fileName = urlPath.substring(lastSlash + 1);
+                    }
+                }
+                
+                Path downloadPath = workDir.resolve(fileName);
+                
+                try {
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(300000); // 5 minutes for large files
+                    
+                    int responseCode = conn.getResponseCode();
+                    if (responseCode != 200) {
+                        throw new IOException("Failed to download build package. HTTP response: " + responseCode);
+                    }
+                    
+                    long contentLength = conn.getContentLengthLong();
+                    testLogger.info("Downloading " + (contentLength > 0 ? contentLength / (1024*1024) + " MB" : "unknown size"));
+                    
+                    try (InputStream in = conn.getInputStream();
+                         OutputStream out = Files.newOutputStream(downloadPath)) {
+                        byte[] buffer = new byte[8192];
+                        int bytesRead;
+                        long totalBytes = 0;
+                        long lastLogTime = System.currentTimeMillis();
+                        
+                        while ((bytesRead = in.read(buffer)) != -1) {
+                            out.write(buffer, 0, bytesRead);
+                            totalBytes += bytesRead;
+                            
+                            // Log progress every 5 seconds
+                            long now = System.currentTimeMillis();
+                            if (now - lastLogTime > 5000) {
+                                if (contentLength > 0) {
+                                    int percent = (int) ((totalBytes * 100) / contentLength);
+                                    testLogger.info("Download progress: " + percent + "%");
+                                } else {
+                                    testLogger.info("Downloaded " + (totalBytes / (1024*1024)) + " MB");
+                                }
+                                lastLogTime = now;
+                            }
+                        }
+                    }
+                    
+                    testLogger.info("Build package downloaded successfully: " + downloadPath);
+                    
+                    // Cache the downloaded package
+                    buildPackageCache.put(buildPackage, downloadPath);
+                    
+                    // Clean old cached packages if cache is too large
+                    if (buildPackageCache.size() > 10) {
+                        cleanOldCachedPackages();
+                    }
+                    
+                    return downloadPath;
+                    
+                } catch (Exception e) {
+                    // Clean up partial download
+                    try {
+                        Files.deleteIfExists(downloadPath);
+                    } catch (Exception ignore) {}
+                    throw new IOException("Failed to download build package: " + e.getMessage(), e);
+                }
+            }
+        } else {
+            // It's a local path
+            return Paths.get(buildPackage);
+        }
+    }
+    
+    private void cleanOldCachedPackages() {
+        // Keep only the 5 most recently used packages
+        if (buildPackageCache.size() <= 5) return;
+        
+        List<Map.Entry<String, Path>> entries = new ArrayList<>(buildPackageCache.entrySet());
+        entries.sort((a, b) -> {
+            try {
+                BasicFileAttributes attrA = Files.readAttributes(a.getValue(), BasicFileAttributes.class);
+                BasicFileAttributes attrB = Files.readAttributes(b.getValue(), BasicFileAttributes.class);
+                return attrB.lastAccessTime().compareTo(attrA.lastAccessTime());
+            } catch (IOException e) {
+                return 0;
+            }
+        });
+        
+        // Remove oldest entries
+        for (int i = 5; i < entries.size(); i++) {
+            Map.Entry<String, Path> entry = entries.get(i);
+            try {
+                Files.deleteIfExists(entry.getValue());
+                buildPackageCache.remove(entry.getKey());
+                logger.info("Removed old cached package: " + entry.getValue());
+            } catch (IOException e) {
+                logger.warning("Failed to delete cached package: " + e.getMessage());
+            }
+        }
     }
     
     private void deleteDirectory(File dir) {
