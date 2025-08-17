@@ -357,8 +357,13 @@ public class Builder {
         if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
             throw new IllegalArgumentException("Request must contain non-empty 'tests' array");
         }
-        if (!request.has("workerIp") || request.getString("workerIp").trim().isEmpty()) {
-            throw new IllegalArgumentException("Request must contain non-empty 'workerIp'");
+        
+        // Support both workerIp (singular) and workerIps (array) for backward compatibility
+        boolean hasWorkerIp = request.has("workerIp") && !request.getString("workerIp").trim().isEmpty();
+        boolean hasWorkerIps = request.has("workerIps") && request.getJSONArray("workerIps").length() > 0;
+        
+        if (!hasWorkerIp && !hasWorkerIps) {
+            throw new IllegalArgumentException("Request must contain either non-empty 'workerIp' or non-empty 'workerIps' array");
         }
     }
     
