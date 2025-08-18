@@ -572,6 +572,11 @@ public class BuilderTask {
                     }
                 }
             }
+            // Log tester response payload for visibility into pass/fail and metadata
+            try {
+                String payload = response.length() == 0 ? "{}" : response.toString();
+                taskLogger.info("Tester response payload for '" + testName + "' on " + host + ":" + port + ": " + payload);
+            } catch (Exception ignore) { }
             JSONObject responseJson;
             try {
                 responseJson = new JSONObject(response.length() == 0 ? "{}" : response.toString());
