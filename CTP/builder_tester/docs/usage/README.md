@@ -136,11 +136,61 @@ Keep-alive (debug) run:
 # keepAlive true returns container info
 {
   "status": "started",
-  "containerName": "tester_debug_<name>_<ts>",
-  "execCommand": "docker exec -it tester_debug_<name>_<ts> bash",
+  "containerName": "tester_debug_<n>_<ts>",
+  "execCommand": "docker exec -it tester_debug_<n>_<ts> bash",
   "workspace": "/tmp/tester_work/test_.../docker_..."
 }
 ```
+
+## Multi-Node Testing
+
+Distribute tests across multiple tester nodes for parallel execution:
+
+```bash
+# Start multiple tester nodes (on different machines or ports)
+./bin/start_tester.sh  # Node 1 on port 8090
+./bin/start_tester.sh  # Node 2 on port 8091 (with modified conf)
+./bin/start_tester.sh  # Node 3 on port 8092 (with modified conf)
+
+# Send request with multiple worker IPs
+curl -X POST http://localhost:8089/build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "commits": ["6ea587e"],
+    "tests": ["test1.sh", "test2.sh", "test3.sh"],
+    "callbackUrl": "http://localhost:8089/callback",
+    "workerIps": ["192.168.1.10", "192.168.1.11", "192.168.1.12"],
+    "buildType": "debug"
+  }'
+```
+
+Tests are distributed using round-robin algorithm. See docs/MULTI_NODE_TESTING.md for details.
+
+## Ccache Performance Optimization
+
+Enable compiler cache for faster rebuilds:
+
+```bash
+# Install and setup ccache
+./bin/manage_ccache.sh install
+./bin/manage_ccache.sh setup
+
+# Check ccache status
+./bin/manage_ccache.sh status
+
+# Monitor cache statistics
+./bin/manage_ccache.sh stats
+```
+
+Configure in `conf/builder.conf`:
+```properties
+ccache_enabled=true
+ccache_dir=~/ccache
+ccache_max_size=5G
+parallel_jobs=0  # Auto-detect CPU cores
+```
+
+See docs/CCACHE_GUIDE.md for detailed setup.
 
 ## Notes on isolated builds
 
@@ -155,10 +205,12 @@ Keep-alive (debug) run:
 - Request logs: `~/cubrid-testtools/CTP/builder_tester/log/requests/req_*/{builder.log,builds/,tests/}`
 - Metadata: `~/cubrid-testtools/CTP/builder_tester/log/.metadata.json`
 - Service stdout: `bin/builder_output.log`, `bin/tester_output.log`
+- See log/LOG_MANAGEMENT.md for comprehensive logging architecture
 
 ## Troubleshooting
 
 - Docker permissions: `docker ps`
 - Token: ensure `GITHUB_TOKEN` is set in the environment where services start
-- Build issues: inspect `log/builds/*`
-- Test issues: inspect `log/tests/*` and container logs `docker logs <container>`
+- Build issues: inspect `log/requests/req_*/builds/*`
+- Test issues: inspect `log/requests/req_*/tests/*` and container logs `docker logs <container>`
+- Multi-node issues: verify all tester nodes are reachable and check network connectivity

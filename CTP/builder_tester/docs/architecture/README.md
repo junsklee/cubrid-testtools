@@ -39,6 +39,20 @@
   - System: `~/cubrid-testtools/CTP/builder_tester/log/system/{builder.log,tester.log}`
   - Requests: `~/cubrid-testtools/CTP/builder_tester/log/requests/req_*/{request.json,builder.log,builds/,tests/}`
   - Metadata: `~/cubrid-testtools/CTP/builder_tester/log/.metadata.json`
+  - See log/LOG_MANAGEMENT.md for detailed logging architecture
+
+## Logging Architecture
+
+The system implements a dual logging approach:
+- **System Logs**: Global visibility of all activities across all requests
+- **Request Logs**: Isolated logs for each specific request with unique request IDs
+- **Thread Context**: RequestContext propagation across executor threads
+- **Automatic Cleanup**: Configurable retention of request logs and build artifacts
+
+### Log File Naming
+- Build logs: `build_<commit_short>.log`
+- Test scripts: `docker_script_<commit_short>_<test_name>.sh`
+- Test output: `docker_<commit_short>_<test_name>.log`
 
 ## Docker run details (Tester)
 

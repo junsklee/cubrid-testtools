@@ -22,6 +22,13 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `build_timeout_minutes` (int): Per-build timeout (default 180)
 - `build_cache_size` (int): Max cached builds (default 20)
 - `docker_host_root` (path): Host dir for `/work` and Gradle cache binds (default `~/docker-work`)
+### Ccache configuration
+- `ccache_enabled` (bool): Enable compiler cache (default true)
+- `ccache_dir` (path): Cache directory (default `~/ccache`)
+- `ccache_max_size` (string): Maximum cache size (default `5G`)
+- `ccache_compilercheck` (string): Compiler check method (default `content`)
+- `ccache_hardlink` (bool): Use hard links to save space (default true)
+- `parallel_jobs` (int): Parallel compilation jobs, 0=auto-detect (default 0)
 ### Log management
 - `max_request_logs` (int): Keep last N request directories (default 5)
 - `max_tar_files` (int): Keep last N tar archives in work dir (default 10)
