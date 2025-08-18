@@ -188,6 +188,11 @@ public class Tester {
             }
             if (TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
                 lastResult.put("attempts", attempt);
+                // Mark as flaky if it passed after retries
+                if (attempt > 1) {
+                    lastResult.put("flaky", true);
+                    testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
+                }
                 return lastResult;
             }
             // Retry only on FAIL status

@@ -229,6 +229,14 @@
             display: inline-block;
         }
         
+        .result-flaky {
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+            color: #0c4a6e;
+            border-radius: 0.375rem;
+            padding: 0.25rem 0.75rem;
+            display: inline-block;
+        }
+        
         .result-skip {
             background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
             color: #6b7280;
@@ -279,6 +287,16 @@
         .verdict-success {
             background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
             color: #065f46;
+        }
+        
+        .verdict-error {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+        }
+        
+        .verdict-flaky {
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+            color: #0c4a6e;
         }
         
         .export-buttons {
@@ -378,6 +396,14 @@
                 <div class="stat-label">Unstable Tests</div>
             </div>
             <div class="stat-card">
+                <div class="stat-value" style="color: #92400e;" id="errorCount">0</div>
+                <div class="stat-label">Error Tests</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="color: #0c4a6e;" id="flakyCount">0</div>
+                <div class="stat-label">Flaky Tests</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-value" style="color: var(--info-color);" id="passRate">0%</div>
                 <div class="stat-label">Pass Rate</div>
             </div>
@@ -430,11 +456,24 @@
                     const commit = result.commit || 'unknown';
                     const test = result.test || 'unknown';
                     const status = result.status || 'error';
+                    const flaky = result.flaky || false;
+                    const attempts = result.attempts || 1;
+                    
                     commitSet.add(commit);
                     if (!testGroups[test]) {
                         testGroups[test] = {};
                     }
-                    testGroups[test][commit] = status;
+                    
+                    // Store full result object if it has extra info, otherwise just status
+                    if (flaky || attempts > 1) {
+                        testGroups[test][commit] = {
+                            status: status,
+                            flaky: flaky,
+                            attempts: attempts
+                        };
+                    } else {
+                        testGroups[test][commit] = status;
+                    }
                 });
             }
             commits = Array.from(commitSet).sort();
@@ -445,17 +484,23 @@
         }
         
         function updateStatistics() {
-            let totalTests = 0, passedTests = 0, failedTests = 0, unstableTests = 0;
+            let totalTests = 0, passedTests = 0, failedTests = 0, unstableTests = 0, errorTests = 0, flakyTests = 0;
             Object.keys(processedData).forEach(test => {
-                const failCount = calculateFailCount(test);
+                const verdict = getTestVerdict(test);
                 totalTests++;
-                if (failCount === 0) passedTests++;
-                else if (failCount === commits.length) failedTests++;
-                else unstableTests++;
+                
+                if (verdict.class === 'verdict-success') passedTests++;
+                else if (verdict.class === 'verdict-bug' || verdict.class === 'verdict-preexisting') failedTests++;
+                else if (verdict.class === 'verdict-unstable') unstableTests++;
+                else if (verdict.class === 'verdict-error') errorTests++;
+                else if (verdict.class === 'verdict-flaky') flakyTests++;
             });
+            
             document.getElementById('passedCount').textContent = passedTests;
             document.getElementById('failedCount').textContent = failedTests;
             document.getElementById('unstableCount').textContent = unstableTests;
+            document.getElementById('errorCount').textContent = errorTests;
+            document.getElementById('flakyCount').textContent = flakyTests;
             const passRate = totalTests > 0 ? Math.round((passedTests / totalTests) * 100) : 0;
             document.getElementById('passRate').textContent = passRate + '%';
         }
@@ -463,35 +508,87 @@
         function calculateFailCount(testName) {
             let failCount = 0;
             commits.forEach(commit => {
-                const status = processedData[testName][commit] || 'error';
+                const resultData = processedData[testName][commit];
+                let status;
+                if (typeof resultData === 'object' && resultData.status) {
+                    status = resultData.status;
+                } else {
+                    status = resultData || 'error';
+                }
                 if (status !== 'pass') failCount++;
             });
             return failCount;
         }
         
-        function getVerdict(testName, failCount) {
-            const numCommits = commits.length;
-            // Prioritize build/infra errors in verdict
-            const buildErrs = [];
-            const infraErrs = [];
+        function getTestVerdict(testName) {
+            // Check for flaky test first - look for any result marked as flaky
+            let hasFlaky = false;
+            let maxAttempts = 1;
+            
             commits.forEach(commit => {
-                const s = (processedData[testName][commit] || '').toLowerCase();
-                if (s === 'build_failed') buildErrs.push(commit.substring(0,7));
-                else if (s === 'execution_error' || s === 'error') infraErrs.push(commit.substring(0,7));
+                const resultData = processedData[testName][commit];
+                if (resultData && typeof resultData === 'object') {
+                    if (resultData.flaky) hasFlaky = true;
+                    if (resultData.attempts > maxAttempts) maxAttempts = resultData.attempts;
+                }
             });
+            
+            if (hasFlaky) {
+                return { text: 'Flaky: Passed after ' + maxAttempts + ' attempts', class: 'verdict-flaky' };
+            }
+            
+            // Check for errors (execution_error, environment_error, build_error)
+            const errorCommits = [];
+            const buildErrs = [];
+            commits.forEach(commit => {
+                const resultData = processedData[testName][commit];
+                let status;
+                if (typeof resultData === 'object' && resultData.status) {
+                    status = resultData.status;
+                } else {
+                    status = resultData || 'error';
+                }
+                
+                const statusLower = status.toString().toLowerCase();
+                if (statusLower === 'build_failed') {
+                    buildErrs.push(commit.substring(0,7));
+                } else if (statusLower === 'execution_error' || statusLower === 'environment_error' || statusLower === 'error') {
+                    errorCommits.push(commit.substring(0,7));
+                }
+            });
+            
             if (buildErrs.length > 0) {
                 return { text: 'Build errors in: ' + buildErrs.join(', '), class: 'verdict-bug' };
             }
-            if (infraErrs.length > 0) {
-                return { text: 'Test errors in: ' + infraErrs.join(', '), class: 'verdict-unstable' };
+            if (errorCommits.length > 0) {
+                return { text: 'Error: Test execution failed', class: 'verdict-error' };
             }
+            
+            // Fall back to traditional verdict logic
+            const failCount = calculateFailCount(testName);
+            return getVerdict(testName, failCount);
+        }
+        
+        function getVerdict(testName, failCount) {
+            const numCommits = commits.length;
+            
             if (failCount === 0) {
                 return { text: 'Pass: Not reproduced across listed commits', class: 'verdict-success' };
             } else if (failCount === 1) {
                 let failedCommit = null;
                 for (let i=0;i<commits.length;i++) {
                     const c = commits[i];
-                    if ((processedData[testName][c] || 'error') !== 'pass') { failedCommit = c.substring(0,7); break; }
+                    const resultData = processedData[testName][c];
+                    let status;
+                    if (typeof resultData === 'object' && resultData.status) {
+                        status = resultData.status;
+                    } else {
+                        status = resultData || 'error';
+                    }
+                    if (status !== 'pass') { 
+                        failedCommit = c.substring(0,7); 
+                        break; 
+                    }
                 }
                 return { text: 'Bug or Revise: Caused by ' + failedCommit, class: 'verdict-bug' };
             } else if (failCount === numCommits) {
@@ -529,12 +626,13 @@
         }
         
         function createTestRow(testName) {
+            const verdict = getTestVerdict(testName);
             const failCount = calculateFailCount(testName);
-            const verdict = getVerdict(testName, failCount);
+            
             if (currentFilter !== 'all') {
-                if (currentFilter === 'passed' && failCount !== 0) return null;
-                if (currentFilter === 'failed' && failCount !== commits.length) return null;
-                if (currentFilter === 'unstable' && (failCount === 0 || failCount === commits.length)) return null;
+                if (currentFilter === 'passed' && verdict.class !== 'verdict-success' && verdict.class !== 'verdict-flaky') return null;
+                if (currentFilter === 'failed' && verdict.class !== 'verdict-bug' && verdict.class !== 'verdict-preexisting') return null;
+                if (currentFilter === 'unstable' && verdict.class !== 'verdict-unstable') return null;
             }
             const row = document.createElement('tr');
             const testCell = document.createElement('td');
@@ -544,14 +642,28 @@
             commits.forEach(commit => {
                 const cell = document.createElement('td');
                 cell.className = 'result-cell';
-                const status = processedData[testName][commit] || 'error';
+                const resultData = processedData[testName][commit];
+                let status, isFlaky = false, attempts = 1;
+                
+                if (typeof resultData === 'object' && resultData.status) {
+                    status = resultData.status;
+                    isFlaky = resultData.flaky || false;
+                    attempts = resultData.attempts || 1;
+                } else {
+                    status = resultData || 'error';
+                }
+                
                 let statusClass = 'result-skip';
                 let statusText = 'N/A';
                 switch(status) {
-                    case 'pass': statusClass = 'result-pass'; statusText = 'PASS'; break;
+                    case 'pass': 
+                        statusClass = isFlaky ? 'result-flaky' : 'result-pass';
+                        statusText = isFlaky ? 'FLAKY(' + attempts + ')' : 'PASS';
+                        break;
                     case 'fail': statusClass = 'result-fail'; statusText = 'FAIL'; break;
                     case 'build_failed': statusClass = 'result-error'; statusText = 'BUILD'; break;
                     case 'execution_error':
+                    case 'environment_error':
                     case 'error': statusClass = 'result-error'; statusText = 'ERROR'; break;
                 }
                 cell.innerHTML = "<span class=\"" + statusClass + "\">" + statusText + "</span>";

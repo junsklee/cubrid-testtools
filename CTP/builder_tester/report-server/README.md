@@ -11,7 +11,9 @@ An interactive web-based report viewer for CUBRID Builder-Tester test results.
   - Bug or Revise: Caused by specific commit (1 failure)
   - Pre-existing Failure: Likely not caused by listed commits (all failures)
   - Unstable: Fails intermittently across commits (partial failures)
-- **Statistics Dashboard**: Shows pass rate, failed tests, and unstable tests at a glance
+  - Flaky: Passed after X attempts (tests that pass after retries)
+  - Error: Test execution failed (execution/environment errors)
+- **Statistics Dashboard**: Shows pass rate, failed tests, unstable tests, error tests, and flaky tests at a glance
 - **Export Options**: Download results as JSON or CSV (in the web interface)
 
 ## Installation
@@ -91,12 +93,15 @@ The web interface provides:
 
 ## Verdict Logic
 
-| Fail Num | Verdict |
-|----------|---------|
-| 0 | Pass: Not reproduced |
-| 1 | Bug or Revise: Caused by [commit_id] |
-| All commits | Pre-existing Failure: Likely not caused by listed commits |
-| Between 1 and all | Unstable: Fails intermittently across commits |
+| Priority | Condition | Verdict |
+|----------|-----------|---------|
+| 1 | Test passes after retries | Flaky: Passed after X attempts |
+| 2 | Execution/environment errors | Error: Test execution failed |
+| 3 | Build errors | Build errors in: [commit_ids] |
+| 4 | 0 failures | Pass: Not reproduced |
+| 5 | 1 failure | Bug or Revise: Caused by [commit_id] |
+| 6 | All commits fail | Pre-existing Failure: Likely not caused by listed commits |
+| 7 | Partial failures | Unstable: Fails intermittently across commits |
 
 ## Development
 

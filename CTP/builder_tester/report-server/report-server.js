@@ -104,8 +104,17 @@ function generateReportHTML(data, requestId) {
         td { padding: 1rem; border-bottom: 1px solid #e5e7eb; }
         .result-pass { background: #d1fae5; color: #065f46; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }
         .result-fail { background: #fee2e2; color: #991b1b; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }
-        .result-error { background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }        .verdict { font-size: 0.9rem; padding: 0.5rem 1rem; border-radius: 0.5rem; font-weight: 500; }
-        .verdict-unstable { background: #fef3c7; color: #92400e; }
+        .result-error { background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }
+        .result-flaky { background: #e0f2fe; color: #0c4a6e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }        .verdict { font-size: 0.9rem; padding: 0.5rem 1rem; border-radius: 0.5rem; font-weight: 500; }
+        .verdict-error {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+        }
+        
+        .verdict-flaky {
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+            color: #0c4a6e;
+        }
         .verdict-bug { background: #fee2e2; color: #991b1b; }
         .verdict-preexisting { background: #e0e7ff; color: #3730a3; }
         .verdict-success { background: #d1fae5; color: #065f46; }
@@ -135,6 +144,14 @@ function generateReportHTML(data, requestId) {
             <div class="stat-card">
                 <div style="font-size: 2.5rem; font-weight: bold; color: var(--warning-color);" id="unstableCount">0</div>
                 <div style="color: #6b7280; font-size: 0.9rem;">Unstable Tests</div>
+            </div>
+            <div class="stat-card">
+                <div style="font-size: 2.5rem; font-weight: bold; color: #92400e;" id="errorCount">0</div>
+                <div style="color: #6b7280; font-size: 0.9rem;">Error Tests</div>
+            </div>
+            <div class="stat-card">
+                <div style="font-size: 2.5rem; font-weight: bold; color: #0c4a6e;" id="flakyCount">0</div>
+                <div style="color: #6b7280; font-size: 0.9rem;">Flaky Tests</div>
             </div>            <div class="stat-card">
                 <div style="font-size: 2.5rem; font-weight: bold; color: var(--info-color);" id="passRate">0%</div>
                 <div style="color: #6b7280; font-size: 0.9rem;">Pass Rate</div>
@@ -174,10 +191,22 @@ function generateReportHTML(data, requestId) {
                     const commit = result.commit || 'unknown';
                     const test = result.test || 'unknown';
                     const status = result.status || 'error';
+                    const flaky = result.flaky || false;
+                    const attempts = result.attempts || 1;
                     
                     commitSet.add(commit);
                     if (!testGroups[test]) testGroups[test] = {};
-                    testGroups[test][commit] = status;
+                    
+                    // Store full result object if it has extra info, otherwise just status
+                    if (flaky || attempts > 1) {
+                        testGroups[test][commit] = {
+                            status: status,
+                            flaky: flaky,
+                            attempts: attempts
+                        };
+                    } else {
+                        testGroups[test][commit] = status;
+                    }
                 });
             }
             
@@ -190,19 +219,24 @@ function generateReportHTML(data, requestId) {
         }
         
         function updateStatistics() {
-            let totalTests = 0, passedTests = 0, failedTests = 0, unstableTests = 0;
+            let totalTests = 0, passedTests = 0, failedTests = 0, unstableTests = 0, errorTests = 0, flakyTests = 0;
             
             Object.keys(processedData).forEach(test => {
-                const failCount = calculateFailCount(test);
+                const verdict = getTestVerdict(test);
                 totalTests++;
                 
-                if (failCount === 0) passedTests++;
-                else if (failCount === commits.length) failedTests++;
-                else unstableTests++;
+                if (verdict.class === 'verdict-success') passedTests++;
+                else if (verdict.class === 'verdict-bug' || verdict.class === 'verdict-preexisting') failedTests++;
+                else if (verdict.class === 'verdict-unstable') unstableTests++;
+                else if (verdict.class === 'verdict-error') errorTests++;
+                else if (verdict.class === 'verdict-flaky') flakyTests++;
             });
             
             document.getElementById('passedCount').textContent = passedTests;
-            document.getElementById('failedCount').textContent = failedTests;            document.getElementById('unstableCount').textContent = unstableTests;
+            document.getElementById('failedCount').textContent = failedTests;
+            document.getElementById('unstableCount').textContent = unstableTests;
+            document.getElementById('errorCount').textContent = errorTests;
+            document.getElementById('flakyCount').textContent = flakyTests;
             document.getElementById('passRate').textContent = 
                 (totalTests > 0 ? Math.round((passedTests / totalTests) * 100) : 0) + '%';
         }
@@ -210,9 +244,65 @@ function generateReportHTML(data, requestId) {
         function calculateFailCount(testName) {
             let failCount = 0;
             commits.forEach(commit => {
-                if ((processedData[testName][commit] || 'error') !== 'pass') failCount++;
+                const resultData = processedData[testName][commit];
+                let status;
+                if (typeof resultData === 'object' && resultData.status) {
+                    status = resultData.status;
+                } else {
+                    status = resultData || 'error';
+                }
+                if (status !== 'pass') failCount++;
             });
             return failCount;
+        }
+        
+        function getTestVerdict(testName) {
+            // Check for flaky test first - look for any result marked as flaky
+            let hasFlaky = false;
+            let maxAttempts = 1;
+            
+            commits.forEach(commit => {
+                const resultData = processedData[testName][commit];
+                if (resultData && typeof resultData === 'object') {
+                    if (resultData.flaky) hasFlaky = true;
+                    if (resultData.attempts > maxAttempts) maxAttempts = resultData.attempts;
+                }
+            });
+            
+            if (hasFlaky) {
+                return { text: 'Flaky: Passed after ' + maxAttempts + ' attempts', class: 'verdict-flaky' };
+            }
+            
+            // Check for errors (execution_error, environment_error, build_error)
+            const errorCommits = [];
+            const buildErrs = [];
+            commits.forEach(commit => {
+                const resultData = processedData[testName][commit];
+                let status;
+                if (typeof resultData === 'object' && resultData.status) {
+                    status = resultData.status;
+                } else {
+                    status = resultData || 'error';
+                }
+                
+                const statusLower = status.toString().toLowerCase();
+                if (statusLower === 'build_failed') {
+                    buildErrs.push(commit.substring(0,7));
+                } else if (statusLower === 'execution_error' || statusLower === 'environment_error' || statusLower === 'error') {
+                    errorCommits.push(commit.substring(0,7));
+                }
+            });
+            
+            if (buildErrs.length > 0) {
+                return { text: 'Build errors in: ' + buildErrs.join(', '), class: 'verdict-bug' };
+            }
+            if (errorCommits.length > 0) {
+                return { text: 'Error: Test execution failed', class: 'verdict-error' };
+            }
+            
+            // Fall back to traditional verdict logic
+            const failCount = calculateFailCount(testName);
+            return getVerdict(testName, failCount);
         }
         
         function getVerdict(testName, failCount) {
@@ -223,7 +313,14 @@ function generateReportHTML(data, requestId) {
             } else if (failCount === 1) {
                 let failedCommit = null;
                 commits.forEach(commit => {
-                    if (processedData[testName][commit] !== 'pass') {
+                    const resultData = processedData[testName][commit];
+                    let status;
+                    if (typeof resultData === 'object' && resultData.status) {
+                        status = resultData.status;
+                    } else {
+                        status = resultData || 'error';
+                    }
+                    if (status !== 'pass') {
                         failedCommit = commit.substring(0, 7);
                     }
                 });
@@ -253,8 +350,8 @@ function generateReportHTML(data, requestId) {
             // Add test rows
             Object.keys(processedData).sort().forEach(test => {
                 const row = document.createElement('tr');
+                const verdict = getTestVerdict(test);
                 const failCount = calculateFailCount(test);
-                const verdict = getVerdict(test, failCount);
                 
                 // Test name
                 const testCell = document.createElement('td');
@@ -266,13 +363,23 @@ function generateReportHTML(data, requestId) {
                 commits.forEach(commit => {
                     const cell = document.createElement('td');
                     cell.style.textAlign = 'center';
-                    const status = processedData[test][commit] || 'error';
+                    const resultData = processedData[test][commit];
+                    let status, isFlaky = false, attempts = 1;
+                    
+                    if (typeof resultData === 'object' && resultData.status) {
+                        status = resultData.status;
+                        isFlaky = resultData.flaky || false;
+                        attempts = resultData.attempts || 1;
+                    } else {
+                        status = resultData || 'error';
+                    }
                     
                     let statusClass = 'result-error';
                     let statusText = '⚠️ ERROR';
-                                        if (status === 'pass') {
-                        statusClass = 'result-pass';
-                        statusText = '✅ PASS';
+                    
+                    if (status === 'pass') {
+                        statusClass = isFlaky ? 'result-flaky' : 'result-pass';
+                        statusText = isFlaky ? '🔄 FLAKY(' + attempts + ')' : '✅ PASS';
                     } else if (status === 'fail') {
                         statusClass = 'result-fail';
                         statusText = '❌ FAIL';

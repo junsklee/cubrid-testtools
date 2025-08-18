@@ -239,8 +239,18 @@ The Builder-Tester system includes an interactive web-based report viewer for an
   - `Bug or Revise: Caused by <commit>` - Single commit failure
   - `Pre-existing Failure` - Failures across all commits
   - `Unstable: Fails intermittently` - Partial failures
-- **Statistics Dashboard**: Visual KPIs showing pass rate, failed tests, and unstable tests
+  - `Flaky: Passed after X attempts` - Tests that pass after retries
+  - `Error: Test execution failed` - Tests with execution/environment errors
+- **Statistics Dashboard**: Visual KPIs showing pass rate, failed tests, unstable tests, error tests, and flaky tests
 - **Export Options**: Download results as JSON or CSV
+
+### Flaky Test Detection
+
+The system automatically detects flaky tests when retry functionality is enabled:
+- Tests that fail initially but pass on retry are marked as "flaky"
+- The number of attempts required for the test to pass is recorded
+- Flaky tests are displayed with a special verdict and visual indicator
+- Test logs preserve both failed and successful attempt outputs
 
 ### Using the Report Viewer
 
