@@ -257,14 +257,7 @@ public class DockerBuildManager {
                 writer.println("  # Set max size (use -M for compatibility)");
                 writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
                 writer.println("  ccache -z  # Clear statistics");
-                writer.println("  # Configure hard_link; detect supported flag to avoid noisy errors on old ccache");
-                writer.println("  if [ \"${CCACHE_HARDLINK}\" = \"1\" ]; then");
-                writer.println("    if ccache --help 2>&1 | grep -q -- '--set-config'; then ccache --set-config hard_link=true >/dev/null 2>&1; \\");
-                writer.println("    elif ccache --help 2>&1 | grep -q ' -o '; then ccache -o hard_link=true >/dev/null 2>&1; fi");
-                writer.println("  else");
-                writer.println("    if ccache --help 2>&1 | grep -q -- '--set-config'; then ccache --set-config hard_link=false >/dev/null 2>&1; \\");
-                writer.println("    elif ccache --help 2>&1 | grep -q ' -o '; then ccache -o hard_link=false >/dev/null 2>&1; fi");
-                writer.println("  fi");
+                writer.println("  # hard_link is controlled via CCACHE_HARDLINK env; avoid unsupported ccache flags on older versions");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
                 writer.println("fi");
@@ -516,11 +509,8 @@ public class DockerBuildManager {
                     executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize());
                     executeCommand(wtPb, "ccache", "-z");
                     // Ensure hard_link is configured explicitly with fallback
-                    try {
-                        String want = config.getCcacheHardlink() ? "true" : "false";
-                        try { executeCommand(wtPb, "ccache", "--set-config", "hard_link=" + want); } catch (Exception ignore) {}
-                        try { executeCommand(wtPb, "ccache", "-o", "hard_link=" + want); } catch (Exception ignore) {}
-                    } catch (Exception ignore) {}
+                    // Older ccache (3.1.6) does not support --set-config or -o; rely on CCACHE_HARDLINK env only
+                    // TODO: Implement --set-config and/or -o for hard_link when build environment is updated
                     logger.info("Ccache initialized for direct build");
                 } catch (Exception e) {
                     logger.warning("Failed to initialize ccache: " + e.getMessage());
