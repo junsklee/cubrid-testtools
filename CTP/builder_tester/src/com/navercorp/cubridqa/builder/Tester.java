@@ -114,23 +114,26 @@ public class Tester {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             Logger requestLogger = logger;  // Default to system logger
-            
+
             logger.info("Received " + exchange.getRequestMethod() + " request");
-            
+
             if (!"POST".equals(exchange.getRequestMethod())) {
                 sendResponse(exchange, 405, "Method not allowed");
                 return;
             }
-            
+
+            JSONObject responsePayload = null;
+            int httpStatus = 200;
+
             try {
                 String requestBody = readRequestBody(exchange);
                 JSONObject request = new JSONObject(requestBody);
-                
+
                 // Extract request ID if provided
                 String requestId = request.optString("requestId", null);
                 if (requestId != null) {
                     RequestContext.setRequestId(requestId);
-                    
+
                     // Try to get request-specific logger
                     try {
                         if (config.isRequestGroupingEnabled()) {
@@ -140,27 +143,46 @@ public class Tester {
                         logger.warning("Failed to create request logger: " + e.getMessage());
                     }
                 }
-                
-                requestLogger.info("Test request for: " + request.getString("testPath") + 
-                           (requestId != null ? " [" + requestId + "]" : ""));
+
+                requestLogger.info("Test request for: " + request.getString("testPath") +
+                           (request.has("requestId") ? " [" + request.optString("requestId") + "]" : ""));
                 requestLogger.info("Build package: " + request.getString("buildPackage"));
-                
+
                 // Run test with retry using request logger
-                JSONObject result = runTestWithRetry(request, requestLogger);
-                
-                // Send response
-                exchange.getResponseHeaders().set("Content-Type", "application/json");
-                // Avoid broken pipe by writing a short JSON and closing promptly
-                sendResponse(exchange, 200, result.toString());
-                requestLogger.info("Sent response: " + result.toString());
-                
+                responsePayload = runTestWithRetry(request, requestLogger);
+                httpStatus = 200;
+
             } catch (Exception e) {
-                requestLogger.log(Level.SEVERE, "Error processing test request", e);
-                JSONObject error = new JSONObject()
+                // Only errors that occur before generating the result should reach here
+                logger.log(Level.SEVERE, "Error processing test request (pre-response)", e);
+                responsePayload = new JSONObject()
                     .put("status", TestStatus.EXECUTION_ERROR.getValue())
                     .put("message", e.getMessage());
-                exchange.getResponseHeaders().set("Content-Type", "application/json");
-                sendResponse(exchange, 500, error.toString());
+                httpStatus = 500;
+            } finally {
+                // Nothing here yet; we still need to attempt to send the response below
+            }
+
+            // Try to send the response once. If client disconnected (broken pipe), just log and do not overwrite result.
+            if (responsePayload == null) {
+                responsePayload = new JSONObject()
+                    .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                    .put("message", "No result generated");
+                httpStatus = 500;
+            }
+
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            try {
+                sendResponse(exchange, httpStatus, responsePayload.toString());
+                logger.info("Sent response: " + responsePayload.toString());
+            } catch (IOException ioe) {
+                String msg = ioe.getMessage() == null ? "" : ioe.getMessage();
+                if (isClientAbort(ioe) || msg.contains("insufficient bytes written")) {
+                    // Client (likely Builder) closed connection early. Do not treat as test failure.
+                    logger.warning("Client disconnected before response was fully sent. Result was: " + responsePayload.toString());
+                } else {
+                    logger.log(Level.SEVERE, "Failed to send response", ioe);
+                }
             } finally {
                 RequestContext.clear();
             }
@@ -1124,6 +1146,29 @@ public class Tester {
             return matcher.group(1) + "s";
         }
         return null;
+    }
+    
+    /**
+     * Determines whether an IOException likely indicates the client disconnected
+     * (e.g., broken pipe, connection reset) while we were writing the response.
+     * Such cases should be logged but not treated as test execution failures.
+     */
+    private boolean isClientAbort(IOException ioe) {
+        Throwable t = ioe;
+        while (t != null) {
+            if (t instanceof java.net.SocketException) {
+                String m = t.getMessage();
+                if (m != null && (m.contains("Broken pipe") || m.contains("Connection reset") || m.contains("reset by peer"))) {
+                    return true;
+                }
+            }
+            if (t instanceof java.nio.channels.ClosedChannelException) {
+                return true;
+            }
+            t = t.getCause();
+        }
+        String msg = ioe.getMessage();
+        return msg != null && (msg.contains("Broken pipe") || msg.contains("Connection reset") || msg.contains("reset by peer"));
     }
     
     private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
