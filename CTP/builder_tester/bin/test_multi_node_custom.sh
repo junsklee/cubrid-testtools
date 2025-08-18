@@ -37,9 +37,9 @@ echo "Builder: http://${BUILDER_HOST}:${BUILDER_PORT}"
 echo "Local Tester: localhost:8090 (192.168.1.5)"
 echo "Remote Tester: 192.168.1.15:8090 (junHA user)"
 echo ""
-echo "Using commits and tests from test_client_1924.sh"
-echo "Commits: 1609a3a, 8dae125, dd64b39"
-echo "Tests: 10 test cases from various bug fixes and issues"
+echo "Using custom commits and tests from this script"
+echo "Commits: 911e5d3, 6407e07"
+echo "Tests: 8 test cases as listed in the payload"
 echo ""
 echo "Sending build request with test distribution..."
 echo ""
@@ -49,16 +49,15 @@ cat <<EOF | curl -X POST "http://${BUILDER_HOST}:${BUILDER_PORT}/build" \
   -H "Content-Type: application/json" \
   -d @-
 {
-  "commits": ["1609a3a41c5b73492cf5b716ced19196bd428494", "8dae125ebffa6cd333cd55406e0a0439b6f2b82d", "dd64b39dbf6914a739636e80c66a5c25cb2daa46"],
+  "commits": ["911e5d3561156d0b3ad2043a6d5a00dbc937c994", "6407e0769f8426cb2ead1d47f127bb0876f9c37d"],
   "tests": [
+    "shell/_05_addition/cubridsus1961/cases/cubridsus1961.sh",
     "shell/_06_issues/_12_2h/bug_bts_9521_1/cases/bug_bts_9521_1.sh",
-    "shell/_06_issues/_17_1h/cbrd_21279/cases/cbrd_21279.sh",
-    "shell/_06_issues/_20_1h/cbrd_23613_5/cases/cbrd_23613_5.sh",
-    "shell/_06_issues/_23_1h/cbrd_24850/cases/cbrd_24850.sh",
-    "shell/_37_elderberry/cbrd_23990_qcache_overflow/cases/cbrd_23990_qcache_overflow.sh",
+    "shell/_06_issues/_17_1h/cbrd_20867/cases/cbrd_20867.sh",
+    "shell/_06_issues/_25_1h/cbrd_26020/cases/cbrd_26020.sh",
+    "shell/_28_features_844/issue_10984_query_profiling/_03_mixed_test/_07_show_columns/cases/_07_show_columns.sh",
+    "shell/_08_shard/_50_cubridsus/bug_bts_10130/cases/bug_bts_10130.sh",
     "shell/_10_plcsql/bug_fix/cbrd_25894/cases/cbrd_25894.sh",
-    "shell/_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_26_apricot_qa/_04_i18/tr_TR/_02_unloaddb_monetary/cases/_02_unloaddb_monetary.sh",
-    "shell/_38_fig/cbrd_24425/cases/cbrd_24425.sh",
     "shell/_38_fig/cbrd_24882/vacuumdb/cases/vacuumdb.sh"
   ],
   "callbackUrl": "http://localhost:8089/callback",
@@ -79,21 +78,19 @@ echo ""
 echo ""
 echo "Request sent! Expected test distribution:"
 echo "========================================="
-echo "Round-robin distribution across 2 nodes with 10 tests per commit (30 total tests):"
+echo "Round-robin distribution across 2 nodes with 8 tests per commit (16 total tests):"
 echo ""
-echo "For each commit (1609a3a, 8dae125, dd64b39):"
-echo "- Test 1 (bug_bts_9521_1.sh) → localhost:8090 (Local)"
-echo "- Test 2 (cbrd_21279.sh) → 192.168.1.15:8090 (Remote)"
-echo "- Test 3 (cbrd_23613_5.sh) → localhost:8090 (Local)"
-echo "- Test 4 (cbrd_24850.sh) → 192.168.1.15:8090 (Remote)"
-echo "- Test 5 (cbrd_26020.sh) → localhost:8090 (Local)"
-echo "- Test 6 (cbrd_23990_qcache_overflow.sh) → 192.168.1.15:8090 (Remote)"
+echo "For each commit (911e5d3, 6407e07):"
+echo "- Test 1 (cubridsus1961.sh) → localhost:8090 (Local)"
+echo "- Test 2 (bug_bts_9521_1.sh) → 192.168.1.15:8090 (Remote)"
+echo "- Test 3 (cbrd_20867.sh) → localhost:8090 (Local)"
+echo "- Test 4 (cbrd_26020.sh) → 192.168.1.15:8090 (Remote)"
+echo "- Test 5 (_07_show_columns.sh) → localhost:8090 (Local)"
+echo "- Test 6 (bug_bts_10130.sh) → 192.168.1.15:8090 (Remote)"
 echo "- Test 7 (cbrd_25894.sh) → localhost:8090 (Local)"
-echo "- Test 8 (_02_unloaddb_monetary.sh) → 192.168.1.15:8090 (Remote)"
-echo "- Test 9 (cbrd_24425.sh) → localhost:8090 (Local)"
-echo "- Test 10 (vacuumdb.sh) → 192.168.1.15:8090 (Remote)"
+echo "- Test 8 (vacuumdb.sh) → 192.168.1.15:8090 (Remote)"
 echo ""
-echo "Total: 15 tests per node (30 tests total)"
+echo "Total: 8 tests per node (16 tests total)"
 echo ""
 echo "Key fixes applied:"
 echo "- ✅ Fixed BuildDownloadHandler to search in build subdirectories"
@@ -104,4 +101,4 @@ echo "Monitor progress with:"
 echo "  tail -f log/requests/req_\$(date +%Y%m%d)_*/builder.log"
 echo ""
 echo "Check download endpoint:"
-echo "  curl -I http://localhost:8089/download/build/cubrid_8dae125.tar.gz"
+echo "  curl -I http://${BUILDER_HOST}:${BUILDER_PORT}/download/build/cubrid_911e5d3.tar.gz"
