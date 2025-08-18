@@ -20,6 +20,16 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
   - Merge commits are cherry-picked with `-m 1` (mainline 1) by default
   - This avoids cumulative history and keeps builds hermetic
 
+## Build Performance Features
+
+- **Ccache Support**: Compiler cache for 5-10x faster rebuilds
+  - Persistent cache across builds
+  - Automatic setup and management
+  - Works in both Docker and direct build modes
+  - See docs/CCACHE_GUIDE.md for details
+- **Parallel Compilation**: Auto-detects CPU cores for optimal parallelization
+- **Build Artifact Caching**: Reuses previous builds when possible
+
 ## Quick start
 
 Prerequisites:
@@ -33,6 +43,10 @@ Build and run:
 ```bash
 cd CTP/builder_tester
 ./bin/compile.sh
+
+# Optional: Set up ccache for faster rebuilds
+./bin/manage_ccache.sh install
+./bin/manage_ccache.sh setup
 
 # In a shell on the test machine
 export GITHUB_TOKEN=your_github_token

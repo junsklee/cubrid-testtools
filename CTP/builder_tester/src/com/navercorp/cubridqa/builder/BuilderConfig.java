@@ -33,6 +33,12 @@ public class BuilderConfig {
     private static final String ENABLE_REQUEST_GROUPING = "enable_request_grouping";
     private static final String RETRY_COUNT = "retry_count"; // Tester: number of times to retry a failed test
     private static final String TEST_READ_TIMEOUT_MINUTES = "test_read_timeout_minutes"; // Tester: HTTP read timeout for /test
+    private static final String CCACHE_ENABLED = "ccache_enabled";
+    private static final String CCACHE_DIR = "ccache_dir";
+    private static final String CCACHE_MAX_SIZE = "ccache_max_size";
+    private static final String CCACHE_COMPILERCHECK = "ccache_compilercheck";
+    private static final String CCACHE_HARDLINK = "ccache_hardlink";
+    private static final String PARALLEL_JOBS = "parallel_jobs";
     
     public BuilderConfig(String configFile) throws IOException {
         this.properties = new Properties();
@@ -223,6 +229,43 @@ public class BuilderConfig {
             value = Integer.parseInt(properties.getProperty(TEST_READ_TIMEOUT_MINUTES, "60"));
         } catch (NumberFormatException e) {
             value = 60;
+        }
+        return Math.max(1, value);
+    }
+    
+    // Ccache configuration methods
+    
+    public boolean isCcacheEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(CCACHE_ENABLED, "true"));
+    }
+    
+    public String getCcacheDir() {
+        String dir = properties.getProperty(CCACHE_DIR, System.getProperty("user.home") + "/ccache");
+        return expandEnvironmentVariables(dir);
+    }
+    
+    public String getCcacheMaxSize() {
+        return properties.getProperty(CCACHE_MAX_SIZE, "5G");
+    }
+    
+    public String getCcacheCompilerCheck() {
+        return properties.getProperty(CCACHE_COMPILERCHECK, "content");
+    }
+    
+    public boolean getCcacheHardlink() {
+        return Boolean.parseBoolean(properties.getProperty(CCACHE_HARDLINK, "true"));
+    }
+    
+    public int getParallelJobs() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(PARALLEL_JOBS, "0"));
+        } catch (NumberFormatException e) {
+            value = 0;
+        }
+        // 0 means auto-detect from CPU cores
+        if (value == 0) {
+            value = Runtime.getRuntime().availableProcessors();
         }
         return Math.max(1, value);
     }

@@ -97,6 +97,16 @@ public class DockerBuildManager {
             gradleCacheDir.mkdirs();
         }
         
+        // Prepare ccache directory if enabled
+        File ccacheDir = null;
+        if (config.isCcacheEnabled()) {
+            ccacheDir = new File(config.getCcacheDir());
+            if (!ccacheDir.exists()) {
+                ccacheDir.mkdirs();
+                logger.info("Created ccache directory: " + ccacheDir.getAbsolutePath());
+            }
+        }
+        
         // Create build script
         File buildScript = createDockerBuildScript(commitHash, buildType, baselineCommit, workDir);
         
@@ -116,6 +126,13 @@ public class DockerBuildManager {
         baseDockerCmd.add(hostWorkDir.getAbsolutePath() + ":/work:rw");
         baseDockerCmd.add("-v");
         baseDockerCmd.add(gradleCacheDir.getAbsolutePath() + ":/root/.gradle:rw");
+        
+        // Mount ccache directory if enabled
+        if (config.isCcacheEnabled() && ccacheDir != null) {
+            baseDockerCmd.add("-v");
+            baseDockerCmd.add(ccacheDir.getAbsolutePath() + ":/ccache:rw");
+        }
+        
         baseDockerCmd.add("-v");
         baseDockerCmd.add(buildScript.getAbsolutePath() + ":/build.sh:ro");
         baseDockerCmd.add("-e");
@@ -126,6 +143,27 @@ public class DockerBuildManager {
         baseDockerCmd.add("BASELINE_COMMIT=" + baselineCommit);
         baseDockerCmd.add("-e");
         baseDockerCmd.add("GITHUB_TOKEN=" + githubToken);
+        
+        // Add ccache environment variables if enabled
+        if (config.isCcacheEnabled()) {
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CC=ccache gcc");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CXX=ccache g++");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_DIR=/ccache");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_COMPILERCHECK=" + config.getCcacheCompilerCheck());
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_HARDLINK=" + (config.getCcacheHardlink() ? "1" : "0"));
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_MAXSIZE=" + config.getCcacheMaxSize());
+        }
+        
+        // Add parallel jobs configuration
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("MAKEFLAGS=-j" + config.getParallelJobs());
+        
         baseDockerCmd.add(config.getDockerBuildImage());
         // Run build script in login shell to ensure git-worktree is available and PATH updated
         baseDockerCmd.add("bash");
@@ -202,6 +240,19 @@ public class DockerBuildManager {
             writer.println("#!/bin/bash");
             writer.println("set -e");
             writer.println();
+            
+            // Setup ccache if enabled
+            if (config.isCcacheEnabled()) {
+                writer.println("# Configure ccache for faster builds");
+                writer.println("if command -v ccache &> /dev/null; then");
+                writer.println("  ccache --max-size=${CCACHE_MAXSIZE:-5G}");
+                writer.println("  ccache -z  # Clear statistics");
+                writer.println("  echo 'Ccache status before build:'");
+                writer.println("  ccache -s");
+                writer.println("fi");
+                writer.println();
+            }
+            
             writer.println("# Prepare working directory (prefer host-mounted /work if available), per-commit to avoid collisions");
             writer.println("if [ -d /work ]; then");
             writer.println("  target=/work/cubrid-build_${COMMIT_HASH:0:7}");
@@ -288,8 +339,29 @@ public class DockerBuildManager {
             writer.println("rm -rf cubridmanager/*");
             writer.println();
             writer.println("# Build CUBRID");
-            writer.println("./build.sh " + config.getBuildArg() + " || { echo '[FATAL] Build failed'; exit 1; }");
+            
+            // Check if devtoolset-8 is available and use it
+            writer.println("# Try to use devtoolset-8 if available");
+            writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
+            writer.println("  echo 'Using devtoolset-8 for build'");
+            writer.println("  source /opt/rh/devtoolset-8/enable");
+            writer.println("  ./build.sh " + config.getBuildArg() + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("else");
+            writer.println("  echo 'Building with default toolchain'");
+            writer.println("  ./build.sh " + config.getBuildArg() + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("fi");
             writer.println();
+            
+            // Report ccache statistics after build
+            if (config.isCcacheEnabled()) {
+                writer.println("# Report ccache statistics after build");
+                writer.println("if command -v ccache &> /dev/null; then");
+                writer.println("  echo 'Ccache status after build:'");
+                writer.println("  ccache -s");
+                writer.println("fi");
+                writer.println();
+            }
+            
             writer.println("# Create package");
             writer.println("cd " + config.getBuildDir());
             writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
@@ -399,12 +471,45 @@ public class DockerBuildManager {
             executeCommand(wtPb, "git", "clean", "-xdf");
             executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
             executeCommand(wtPb, "rm", "-rf", "cubridmanager");
+            
+            // Set up environment for ccache if enabled
+            if (config.isCcacheEnabled()) {
+                wtPb.environment().put("CC", "ccache gcc");
+                wtPb.environment().put("CXX", "ccache g++");
+                wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
+                wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
+                wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
+                wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
+                
+                // Initialize ccache
+                try {
+                    executeCommand(wtPb, "ccache", "--max-size=" + config.getCcacheMaxSize());
+                    executeCommand(wtPb, "ccache", "-z");
+                    logger.info("Ccache initialized for direct build");
+                } catch (Exception e) {
+                    logger.warning("Failed to initialize ccache: " + e.getMessage());
+                }
+            }
+            
+            // Set parallel build flags
+            wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
+            
             java.util.List<String> buildCmd = new java.util.ArrayList<>();
             buildCmd.add("./build.sh");
             for (String token : config.getBuildArg().trim().split("\\s+")) {
                 if (!token.isEmpty()) buildCmd.add(token);
             }
             executeCommand(wtPb, buildCmd.toArray(new String[0]));
+            
+            // Report ccache statistics after build
+            if (config.isCcacheEnabled()) {
+                try {
+                    String stats = executeAndGet(wtPb, "ccache", "-s");
+                    logger.info("Ccache statistics after build:\n" + stats);
+                } catch (Exception e) {
+                    logger.warning("Failed to get ccache statistics: " + e.getMessage());
+                }
+            }
             String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
             File packageFile = new File(workDir, packageName);
             ProcessBuilder tarPb = new ProcessBuilder();
