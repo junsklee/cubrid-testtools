@@ -591,14 +591,21 @@ public class BuilderTask {
             }
             
             // Normal success path
-            
-            JSONObject responseJsonFinal = responseJson;
-            
-            return new JSONObject()
+            JSONObject result = new JSONObject()
                 .put("commit", commit)
                 .put("test", testPath)
-                .put("status", responseJsonFinal.optString("status", "unknown"))
-                .put("message", responseJsonFinal.optString("message", ""));
+                .put("status", responseJson.optString("status", "unknown"))
+                .put("message", responseJson.optString("message", ""));
+                
+            // Copy flaky and attempts information if present
+            if (responseJson.has("flaky")) {
+                result.put("flaky", responseJson.getBoolean("flaky"));
+            }
+            if (responseJson.has("attempts")) {
+                result.put("attempts", responseJson.getInt("attempts"));
+            }
+            
+            return result;
                 
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Failed to test commit " + commit + 

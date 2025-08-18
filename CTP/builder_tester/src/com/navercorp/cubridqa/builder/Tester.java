@@ -168,8 +168,8 @@ public class Tester {
     }
     
     /**
-     * Run a test with retry logic. Retries only when the test status is FAIL.
-     * Returns immediately for PASS or STARTED (keepAlive mode) or for execution/environment/build errors.
+     * Run a test with retry logic. Retries on FAIL, EXECUTION_ERROR, and ENVIRONMENT_ERROR.
+     * Returns immediately for PASS or STARTED (keepAlive mode) or for BUILD_ERROR.
      */
     private JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
         // retry_count is number of retries; total attempts = 1 + retries. If 0 (default), run once with no retries.
@@ -179,7 +179,12 @@ public class Tester {
             if (totalAttempts > 1) {
                 testLogger.info("Running test attempt " + attempt + "/" + totalAttempts);
             }
-            lastResult = runTest(request, testLogger);
+            
+            // Add attempt number to request for logging purposes
+            JSONObject requestWithAttempt = new JSONObject(request.toString());
+            requestWithAttempt.put("attemptNumber", attempt);
+            
+            lastResult = runTest(requestWithAttempt, testLogger);
             String status = lastResult.optString("status", "");
             // For keepAlive=true Docker runs, we get 'started' — no further retries
             if ("started".equalsIgnoreCase(status)) {
@@ -195,13 +200,20 @@ public class Tester {
                 }
                 return lastResult;
             }
-            // Retry only on FAIL status
-            if (!TestStatus.FAIL.getValue().equalsIgnoreCase(status)) {
+            
+            // Retry on FAIL, EXECUTION_ERROR, and ENVIRONMENT_ERROR
+            boolean shouldRetry = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
+                                TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
+                                TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status);
+            
+            if (!shouldRetry) {
+                // Don't retry on BUILD_ERROR or unknown statuses
                 lastResult.put("attempts", attempt);
                 return lastResult;
             }
+            
             if (attempt < totalAttempts) {
-                testLogger.info("Test failed on attempt " + attempt + ", retrying...");
+                testLogger.info("Test " + status + " on attempt " + attempt + ", retrying...");
                 continue;
             }
             // Last attempt, return as is with attempts
@@ -489,8 +501,15 @@ public class Tester {
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                // Include commit in the log file name for uniqueness
-                Path logFile = Paths.get(testsDir, String.format("docker_%s_%s.log", commitShort, safeTestName));
+                // Include commit and attempt number in the log file name for uniqueness
+                int attemptNumber = request.optInt("attemptNumber", 1);
+                String logFileName;
+                if (attemptNumber == 1) {
+                    logFileName = String.format("docker_%s_%s.log", commitShort, safeTestName);
+                } else {
+                    logFileName = String.format("docker_%s_%s.%d.log", commitShort, safeTestName, attemptNumber);
+                }
+                Path logFile = Paths.get(testsDir, logFileName);
                 Files.write(logFile, dockerOutput.getBytes("UTF-8"));
                 testLogger.info("Saved full docker test log to: " + logFile.toString());
             }
