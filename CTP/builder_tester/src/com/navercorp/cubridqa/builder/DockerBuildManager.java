@@ -257,11 +257,13 @@ public class DockerBuildManager {
                 writer.println("  # Set max size (use -M for compatibility)");
                 writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
                 writer.println("  ccache -z  # Clear statistics");
-                writer.println("  # Configure hard_link with fallback for older versions");
+                writer.println("  # Configure hard_link; detect supported flag to avoid noisy errors on old ccache");
                 writer.println("  if [ \"${CCACHE_HARDLINK}\" = \"1\" ]; then");
-                writer.println("    ccache --set-config hard_link=true 2>/dev/null || ccache -o hard_link=true || true");
+                writer.println("    if ccache --help 2>&1 | grep -q -- '--set-config'; then ccache --set-config hard_link=true >/dev/null 2>&1; \\");
+                writer.println("    elif ccache --help 2>&1 | grep -q ' -o '; then ccache -o hard_link=true >/dev/null 2>&1; fi");
                 writer.println("  else");
-                writer.println("    ccache --set-config hard_link=false 2>/dev/null || ccache -o hard_link=false || true");
+                writer.println("    if ccache --help 2>&1 | grep -q -- '--set-config'; then ccache --set-config hard_link=false >/dev/null 2>&1; \\");
+                writer.println("    elif ccache --help 2>&1 | grep -q ' -o '; then ccache -o hard_link=false >/dev/null 2>&1; fi");
                 writer.println("  fi");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
