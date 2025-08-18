@@ -1358,24 +1358,29 @@ public class Tester {
         }
     }
 
+    /**
+     * Checks if a remote branch exists by using 'git ls-remote --heads <remote> <branch>'.
+     */
     private boolean remoteBranchExists(ProcessBuilder pb, String remote, String branch) throws IOException, InterruptedException {
-        // Use ls-remote to test if the branch exists on the remote
-        ProcessBuilder lp = new ProcessBuilder("bash", "-lc",
-            "git ls-remote --heads " + escapeShell(remote) + " " + escapeShell(branch) + " | wc -l");
+        // Use git ls-remote --heads <remote> <branch> and check for any output lines
+        ProcessBuilder lp = new ProcessBuilder(
+            "git", "ls-remote", "--heads", remote, branch
+        );
         lp.directory(pb.directory());
         lp.redirectErrorStream(true);
         Process p = lp.start();
-        StringBuilder out = new StringBuilder();
+        boolean found = false;
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-            String line; while ((line = r.readLine()) != null) { out.append(line); }
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (!line.trim().isEmpty()) {
+                    found = true;
+                    break;
+                }
+            }
         }
         p.waitFor();
-        String s = out.toString().trim();
-        try {
-            return Integer.parseInt(s.isEmpty() ? "0" : s) > 0;
-        } catch (NumberFormatException e) {
-            return false;
-        }
+        return found;
     }
 
     private int runAndExitCode(ProcessBuilder basePb, String[] cmd) throws IOException, InterruptedException {

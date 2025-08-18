@@ -97,14 +97,17 @@ public class DockerBuildManager {
             gradleCacheDir.mkdirs();
         }
         
-        // Prepare ccache directory if enabled
+        // Prepare ccache directory if enabled (place it under hostWorkDir to avoid cross-device link issues)
         File ccacheDir = null;
         if (config.isCcacheEnabled()) {
-            ccacheDir = new File(config.getCcacheDir());
+            ccacheDir = new File(hostWorkDir, ".ccache");
             if (!ccacheDir.exists()) {
                 ccacheDir.mkdirs();
-                logger.info("Created ccache directory: " + ccacheDir.getAbsolutePath());
+                logger.info("Created ccache directory under work mount: " + ccacheDir.getAbsolutePath());
             }
+            // Ensure required subdirectories exist to avoid runtime errors
+            try { new File(ccacheDir, "logs").mkdirs(); } catch (Exception ignore) {}
+            try { new File(ccacheDir, "tmp").mkdirs(); } catch (Exception ignore) {}
         }
         
         // Create build script
@@ -127,11 +130,7 @@ public class DockerBuildManager {
         baseDockerCmd.add("-v");
         baseDockerCmd.add(gradleCacheDir.getAbsolutePath() + ":/root/.gradle:rw");
         
-        // Mount ccache directory if enabled
-        if (config.isCcacheEnabled() && ccacheDir != null) {
-            baseDockerCmd.add("-v");
-            baseDockerCmd.add(ccacheDir.getAbsolutePath() + ":/ccache:rw");
-        }
+        // Note: No separate mount for ccache needed since it's inside hostWorkDir (mounted at /work)
         
         baseDockerCmd.add("-v");
         baseDockerCmd.add(buildScript.getAbsolutePath() + ":/build.sh:ro");
@@ -151,13 +150,22 @@ public class DockerBuildManager {
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CXX=ccache g++");
             baseDockerCmd.add("-e");
-            baseDockerCmd.add("CCACHE_DIR=/ccache");
+            baseDockerCmd.add("CCACHE_DIR=/work/.ccache");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_COMPILERCHECK=" + config.getCcacheCompilerCheck());
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_HARDLINK=" + (config.getCcacheHardlink() ? "1" : "0"));
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_MAXSIZE=" + config.getCcacheMaxSize());
+            // Improve reuse across different work dirs and enable logging
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_BASEDIR=/work");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_NOHASHDIR=1");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_LOGFILE=/work/.ccache/logs/ccache_" + commitShort + ".log");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_TEMPDIR=/work/.ccache/tmp");
         }
         
         // Add parallel jobs configuration
@@ -245,6 +253,7 @@ public class DockerBuildManager {
             if (config.isCcacheEnabled()) {
                 writer.println("# Configure ccache for faster builds");
                 writer.println("if command -v ccache &> /dev/null; then");
+                writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
                 writer.println("  ccache --max-size=${CCACHE_MAXSIZE:-5G}");
                 writer.println("  ccache -z  # Clear statistics");
                 writer.println("  echo 'Ccache status before build:'");
@@ -474,12 +483,24 @@ public class DockerBuildManager {
             
             // Set up environment for ccache if enabled
             if (config.isCcacheEnabled()) {
+                // Ensure logs directory exists
+                try {
+                    File logsDir = new File(config.getCcacheDir(), "logs");
+                    if (!logsDir.exists()) {
+                        logsDir.mkdirs();
+                    }
+                } catch (Exception ignore) {}
+                String commitShort = commitHash.substring(0, Math.min(commitHash.length(), 7));
                 wtPb.environment().put("CC", "ccache gcc");
                 wtPb.environment().put("CXX", "ccache g++");
                 wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
                 wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
                 wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
                 wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
+                // Improve reuse across different work dirs and enable logging
+                wtPb.environment().put("CCACHE_BASEDIR", wtDir.getAbsolutePath());
+                wtPb.environment().put("CCACHE_NOHASHDIR", "1");
+                wtPb.environment().put("CCACHE_LOGFILE", new File(config.getCcacheDir(), "logs/ccache_" + commitShort + ".log").getAbsolutePath());
                 
                 // Initialize ccache
                 try {

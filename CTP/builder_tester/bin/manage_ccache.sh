@@ -48,16 +48,55 @@ install_ccache() {
     
     # Detect OS and install ccache
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        if command -v apt-get &> /dev/null; then
+        # Prefer dnf on RHEL/Rocky/Alma/CentOS 8+
+        if command -v dnf &> /dev/null; then
+            # Load OS metadata
+            OS_ID=""; OS_VER=""
+            if [ -f /etc/os-release ]; then
+                OS_ID=$(grep -E '^ID=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
+                OS_VER=$(grep -E '^VERSION_ID=' /etc/os-release | cut -d'=' -f2 | tr -d '"')
+            fi
+            echo "Detected OS: ${OS_ID:-unknown} ${OS_VER:-unknown}"
+            # Ensure dnf plugins are available for config-manager
+            sudo dnf install -y dnf-plugins-core || true
+            # Attempt to enable common repos on EL8/EL9 families
+            if [[ "${OS_VER}" == 8* ]]; then
+                sudo dnf config-manager --set-enabled powertools || sudo dnf config-manager --set-enabled PowerTools || true
+                sudo dnf install -y epel-release epel-next-release || true
+            elif [[ "${OS_VER}" == 9* ]]; then
+                sudo dnf config-manager --set-enabled crb || true
+                sudo dnf install -y epel-release || true
+            else
+                sudo dnf install -y epel-release || true
+            fi
+            sudo dnf makecache || true
+            echo "Installing ccache using dnf..."
+            if ! sudo dnf --enablerepo=epel --setopt=install_weak_deps=False install -y ccache; then
+                echo "ccache not found in enabled repos. Trying with additional repos..."
+                if ! sudo dnf --enablerepo=epel,crb,powertools --setopt=install_weak_deps=False install -y ccache; then
+                    echo "ccache package still not available via dnf. Falling back to source build."
+                    install_ccache_from_source || {
+                        echo "Error: Failed to install ccache from source."; exit 1;
+                    }
+                    return 0
+                fi
+            fi
+        elif command -v apt-get &> /dev/null; then
             echo "Installing ccache using apt-get..."
             sudo apt-get update
             sudo apt-get install -y ccache
         elif command -v yum &> /dev/null; then
             echo "Installing ccache using yum..."
-            sudo yum install -y ccache
-        elif command -v dnf &> /dev/null; then
-            echo "Installing ccache using dnf..."
-            sudo dnf install -y ccache
+            if ! sudo yum install -y ccache; then
+                echo "ccache not found with yum. Trying to enable EPEL and retry..."
+                sudo yum install -y epel-release || true
+                sudo yum makecache || true
+                if ! sudo yum install -y ccache; then
+                    echo "ccache package still not available via yum. Falling back to source build."
+                    install_ccache_from_source || { echo "Error: Failed to install ccache from source."; exit 1; }
+                    return 0
+                fi
+            fi
         else
             echo "Error: Unable to detect package manager. Please install ccache manually."
             exit 1
@@ -82,6 +121,35 @@ install_ccache() {
         echo "Error: Failed to install ccache"
         exit 1
     fi
+}
+
+# Fallback: build and install ccache from source
+install_ccache_from_source() {
+    echo "Attempting to build ccache from source..."
+    CCACHE_VERSION="4.10.2"
+    TMP_DIR="/tmp/ccache-src-$$"
+    mkdir -p "$TMP_DIR"
+    pushd "$TMP_DIR" >/dev/null || return 1
+    # Ensure build deps
+    if command -v dnf &> /dev/null; then
+        sudo dnf install -y gcc gcc-c++ make cmake tar xz zlib zlib-devel || true
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y gcc gcc-c++ make cmake tar xz zlib zlib-devel || true
+    elif command -v apt-get &> /dev/null; then
+        sudo apt-get update || true
+        sudo apt-get install -y build-essential cmake tar xz-utils zlib1g-dev || true
+    fi
+    echo "Downloading ccache v$CCACHE_VERSION sources..."
+    curl -fsSL -o ccache.tar.xz "https://github.com/ccache/ccache/releases/download/v$CCACHE_VERSION/ccache-$CCACHE_VERSION.tar.xz" || return 1
+    tar xf ccache.tar.xz || return 1
+    cd "ccache-$CCACHE_VERSION" || return 1
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTING=OFF || return 1
+    cmake --build build --parallel || return 1
+    echo "Installing ccache to /usr/local (requires sudo)..."
+    sudo cmake --install build || return 1
+    popd >/dev/null || true
+    rm -rf "$TMP_DIR"
+    command -v ccache && return 0 || return 1
 }
 
 setup_ccache() {

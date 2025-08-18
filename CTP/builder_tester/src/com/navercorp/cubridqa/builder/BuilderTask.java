@@ -272,7 +272,14 @@ public class BuilderTask {
 
     private int fetchTesterConcurrency(String workerIp) {
         try {
-            URL url = new URL("http://" + workerIp + ":" + config.getTesterPort() + "/health");
+            String host = workerIp;
+            int port = config.getTesterPort();
+            if (workerIp.contains(":")) {
+                String[] parts = workerIp.split(":");
+                host = parts[0];
+                try { port = Integer.parseInt(parts[1]); } catch (NumberFormatException ignore) { port = config.getTesterPort(); }
+            }
+            URL url = new URL("http://" + host + ":" + port + "/health");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(3000);
@@ -292,7 +299,7 @@ public class BuilderTask {
                     return json.getInt("maxConcurrentTests");
                 }
             } else {
-                taskLogger.warning("Health check responded with status: " + status);
+                taskLogger.warning("Health check responded with status: " + status + " from " + host + ":" + port);
             }
         } catch (Exception e) {
             taskLogger.log(Level.WARNING, "Failed to fetch tester concurrency from health endpoint, using default", e);
@@ -546,6 +553,7 @@ public class BuilderTask {
             // Read timeout is configurable via tester.conf (reported by Tester and used by BuilderConfig)
             int testTimeoutMin = config.getTestReadTimeoutMinutes();
             conn.setReadTimeout(testTimeoutMin * 60 * 1000);
+            taskLogger.info("Sending test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length())) + ") to tester " + host + ":" + port);
             
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(testRequest.toString().getBytes());
@@ -553,6 +561,7 @@ public class BuilderTask {
             
             // Read response (handle non-2xx by reading error stream)
             int httpStatus = conn.getResponseCode();
+            taskLogger.info("Tester response HTTP " + httpStatus + " for '" + testName + "' on " + host + ":" + port);
             StringBuilder response = new StringBuilder();
             InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream();
             if (is != null) {
