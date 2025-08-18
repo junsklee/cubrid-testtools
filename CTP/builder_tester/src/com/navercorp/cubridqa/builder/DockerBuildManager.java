@@ -256,6 +256,7 @@ public class DockerBuildManager {
                 writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
                 writer.println("  ccache --max-size=${CCACHE_MAXSIZE:-5G}");
                 writer.println("  ccache -z  # Clear statistics");
+                writer.println("  if [ \"${CCACHE_HARDLINK}\" = \"1\" ]; then ccache --set-config hard_link=true; else ccache --set-config hard_link=false; fi");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s");
                 writer.println("fi");
@@ -272,13 +273,12 @@ public class DockerBuildManager {
             writer.println("mkdir -p \"$target\" ");
             writer.println("cd \"$target\"");
             writer.println();
-            writer.println("# Clone source into writable target to avoid touching read-only bind mount");
-            writer.println("git clone --no-checkout /cubrid-src repo");
+            writer.println("# Clone source into writable target using local reference to avoid network fetches");
+            writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
             writer.println("cd repo");
             writer.println("git config advice.detachedHead false");
             writer.println("git config user.email build@localhost");
             writer.println("git config user.name Build Bot");
-            writer.println("git fetch --all --recurse-submodules=on-demand || true");
             writer.println();
             writer.println("# Checkout baseline on a temporary branch and cherry-pick the commit (no worktree required)");
             writer.println("tmp_branch=isolate_${COMMIT_HASH:0:7}_tmp");
@@ -506,6 +506,11 @@ public class DockerBuildManager {
                 try {
                     executeCommand(wtPb, "ccache", "--max-size=" + config.getCcacheMaxSize());
                     executeCommand(wtPb, "ccache", "-z");
+                    // Ensure hard_link is configured explicitly for diagnostics
+                    try {
+                        String want = config.getCcacheHardlink() ? "true" : "false";
+                        executeCommand(wtPb, "ccache", "--set-config", "hard_link=" + want);
+                    } catch (Exception ignore) {}
                     logger.info("Ccache initialized for direct build");
                 } catch (Exception e) {
                     logger.warning("Failed to initialize ccache: " + e.getMessage());

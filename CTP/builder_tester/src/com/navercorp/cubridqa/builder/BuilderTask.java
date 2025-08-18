@@ -213,13 +213,26 @@ public class BuilderTask {
                 try {
                     progress.put(commit, 0); // Starting
                     
-                    // Check cache first
-                    String cacheKey = commit + "_" + buildType;
-                    String cachedPackage = buildCache.get(cacheKey);
+                    // Normalize commit to full SHA to make cache keys stable
+                    String normalizedCommit = resolveFullCommitHashSafe(commit);
+                    String normalizedShort = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
                     
+                    // Check in-memory cache first using normalized key
+                    String cacheKey = normalizedCommit + "_" + buildType;
+                    String cachedPackage = buildCache.get(cacheKey);
                     if (cachedPackage != null && new File(cachedPackage).exists()) {
-                        taskLogger.info("Using cached build for commit " + commit);
+                        taskLogger.info("Using cached build for commit " + normalizedCommit);
                         builtPackages.put(commit, cachedPackage);
+                        progress.put(commit, 100); // Complete
+                        return null;
+                    }
+
+                    // Fall back to scanning disk for an existing package if memory cache missed
+                    String diskPackage = findExistingBuildPackageOnDisk(normalizedShort, buildType, baselineCommit, normalizedCommit);
+                    if (diskPackage != null) {
+                        taskLogger.info("Using cached build from disk for commit " + normalizedCommit);
+                        builtPackages.put(commit, diskPackage);
+                        buildCache.put(cacheKey, diskPackage);
                         progress.put(commit, 100); // Complete
                         return null;
                     }
@@ -228,14 +241,16 @@ public class BuilderTask {
                     
                     // Create work directory for this commit
                     Path workDir = Files.createTempDirectory(
-                        Paths.get(config.getWorkDir()), "build_" + commit.substring(0, 7) + "_");
+                        Paths.get(config.getWorkDir()), "build_" + normalizedShort + "_");
                     
                     // Build the commit (isolated on baseline via worktree + cherry-pick)
-                    String buildPackage = buildCommit(commit, buildType, workDir.toFile(), baselineCommit);
+                    String buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit);
                     
                     if (buildPackage != null) {
                         builtPackages.put(commit, buildPackage);
                         buildCache.put(cacheKey, buildPackage);
+                        // Persist metadata for validation in future requests
+                        writeBuildMetadata(buildPackage, normalizedCommit, buildType, baselineCommit);
                         cleanBuildCache(config.getBuildCacheSize());
                     }
                     
@@ -268,6 +283,57 @@ public class BuilderTask {
         
         executor.shutdown();
         return builtPackages;
+    }
+
+    /**
+     * Resolve the given commit identifier to a full 40-character SHA using the
+     * configured repository. If resolution fails, returns the original string.
+     */
+    private String resolveFullCommitHashSafe(String commit) {
+        try {
+            File repoRoot = new File(config.getCubridSrcDir());
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(repoRoot);
+            String out = executeCommandAndGetOutput(pb, "git", "rev-parse", commit).trim();
+            if (out != null && !out.isEmpty()) {
+                return out;
+            }
+        } catch (Exception ignore) { }
+        return commit;
+    }
+
+    /**
+     * Find an existing built package on disk for the given 7-char short commit.
+     * Returns absolute path if found, otherwise null. Chooses the most recently
+     * modified package if multiple are present.
+     */
+    private String findExistingBuildPackageOnDisk(String commitShort) {
+        try {
+            File workDirRoot = new File(config.getWorkDir());
+            if (!workDirRoot.exists() || !workDirRoot.isDirectory()) {
+                return null;
+            }
+            File[] buildDirs = workDirRoot.listFiles(f -> f.isDirectory() && f.getName().startsWith("build_"));
+            if (buildDirs == null || buildDirs.length == 0) {
+                return null;
+            }
+            String targetName = "cubrid_" + commitShort + ".tar.gz";
+            File newest = null;
+            long newestMtime = Long.MIN_VALUE;
+            for (File dir : buildDirs) {
+                File candidate = new File(dir, targetName);
+                if (candidate.exists() && candidate.isFile()) {
+                    long mtime = candidate.lastModified();
+                    if (mtime > newestMtime) {
+                        newest = candidate;
+                        newestMtime = mtime;
+                    }
+                }
+            }
+            return newest != null ? newest.getAbsolutePath() : null;
+        } catch (Exception ignore) {
+            return null;
+        }
     }
 
     private int fetchTesterConcurrency(String workerIp) {
@@ -450,6 +516,56 @@ public class BuilderTask {
                     deleteRecursively(wtDir);
                 } catch (Exception ignore) {}
             }
+        }
+    }
+
+    /**
+     * Write a small metadata JSON alongside the built package to allow safe reuse
+     * across requests and validate buildType/baseline consistency quickly.
+     */
+    private void writeBuildMetadata(String packagePath, String fullCommit, String buildType, String baselineCommit) {
+        try {
+            File pkg = new File(packagePath);
+            File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
+            JSONObject j = new JSONObject();
+            j.put("commit", fullCommit);
+            j.put("commitShort", fullCommit.substring(0, Math.min(7, fullCommit.length())));
+            j.put("buildType", buildType);
+            j.put("baseline", baselineCommit);
+            j.put("createdAt", System.currentTimeMillis());
+            try (FileWriter w = new FileWriter(meta)) {
+                w.write(j.toString());
+            }
+        } catch (Exception ignore) { }
+    }
+
+    /**
+     * Try to find an existing package on disk and verify it matches the expected
+     * buildType and baseline (when metadata is present). Returns null if not found
+     * or if validation fails.
+     */
+    private String findExistingBuildPackageOnDisk(String commitShort, String buildType, String baselineCommit, String fullCommit) {
+        String found = findExistingBuildPackageOnDisk(commitShort);
+        if (found == null) return null;
+        // Validate metadata if available
+        try {
+            File pkg = new File(found);
+            File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
+            if (!meta.exists()) return found; // no metadata, accept
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new FileReader(meta))) {
+                String line; while ((line = br.readLine()) != null) sb.append(line);
+            }
+            JSONObject j = new JSONObject(sb.toString());
+            String metaCommit = j.optString("commitShort", j.optString("commit", "")).substring(0, Math.min(7, j.optString("commitShort", j.optString("commit", "")).length()));
+            if (!metaCommit.equals(commitShort)) return null;
+            if (!buildType.equals(j.optString("buildType", buildType))) return null;
+            // If baseline differs significantly, we can choose to reject reuse; accept if absent
+            String metaBaseline = j.optString("baseline", baselineCommit);
+            if (metaBaseline != null && baselineCommit != null && !metaBaseline.equals(baselineCommit)) return null;
+            return found;
+        } catch (Exception ignore) {
+            return found; // be permissive on metadata parsing errors
         }
     }
 
@@ -784,15 +900,11 @@ public class BuilderTask {
     
     private void cleanBuildCache(int maxSize) {
         if (buildCache.size() > maxSize) {
-            // Simple FIFO cleanup
+            // Evict oldest entries without deleting files on disk.
             int toRemove = buildCache.size() - maxSize;
             Iterator<Map.Entry<String, String>> iter = buildCache.entrySet().iterator();
             while (iter.hasNext() && toRemove > 0) {
-                Map.Entry<String, String> entry = iter.next();
-                File file = new File(entry.getValue());
-                if (file.exists()) {
-                    file.delete();
-                }
+                iter.next();
                 iter.remove();
                 toRemove--;
             }
