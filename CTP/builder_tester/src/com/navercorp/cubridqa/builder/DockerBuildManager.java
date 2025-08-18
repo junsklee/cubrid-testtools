@@ -251,14 +251,20 @@ public class DockerBuildManager {
             
             // Setup ccache if enabled
             if (config.isCcacheEnabled()) {
-                writer.println("# Configure ccache for faster builds");
+                writer.println("# Configure ccache for faster builds (compatible with older ccache)");
                 writer.println("if command -v ccache &> /dev/null; then");
                 writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
-                writer.println("  ccache --max-size=${CCACHE_MAXSIZE:-5G}");
+                writer.println("  # Set max size (use -M for compatibility)");
+                writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
                 writer.println("  ccache -z  # Clear statistics");
-                writer.println("  if [ \"${CCACHE_HARDLINK}\" = \"1\" ]; then ccache --set-config hard_link=true; else ccache --set-config hard_link=false; fi");
+                writer.println("  # Configure hard_link with fallback for older versions");
+                writer.println("  if [ \"${CCACHE_HARDLINK}\" = \"1\" ]; then");
+                writer.println("    ccache --set-config hard_link=true 2>/dev/null || ccache -o hard_link=true || true");
+                writer.println("  else");
+                writer.println("    ccache --set-config hard_link=false 2>/dev/null || ccache -o hard_link=false || true");
+                writer.println("  fi");
                 writer.println("  echo 'Ccache status before build:'");
-                writer.println("  ccache -s");
+                writer.println("  ccache -s || true");
                 writer.println("fi");
                 writer.println();
             }
@@ -366,7 +372,7 @@ public class DockerBuildManager {
                 writer.println("# Report ccache statistics after build");
                 writer.println("if command -v ccache &> /dev/null; then");
                 writer.println("  echo 'Ccache status after build:'");
-                writer.println("  ccache -s");
+                writer.println("  ccache -s || true");
                 writer.println("fi");
                 writer.println();
             }
@@ -504,12 +510,14 @@ public class DockerBuildManager {
                 
                 // Initialize ccache
                 try {
-                    executeCommand(wtPb, "ccache", "--max-size=" + config.getCcacheMaxSize());
+                    // Set max size with legacy-compatible -M
+                    executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize());
                     executeCommand(wtPb, "ccache", "-z");
-                    // Ensure hard_link is configured explicitly for diagnostics
+                    // Ensure hard_link is configured explicitly with fallback
                     try {
                         String want = config.getCcacheHardlink() ? "true" : "false";
-                        executeCommand(wtPb, "ccache", "--set-config", "hard_link=" + want);
+                        try { executeCommand(wtPb, "ccache", "--set-config", "hard_link=" + want); } catch (Exception ignore) {}
+                        try { executeCommand(wtPb, "ccache", "-o", "hard_link=" + want); } catch (Exception ignore) {}
                     } catch (Exception ignore) {}
                     logger.info("Ccache initialized for direct build");
                 } catch (Exception e) {
