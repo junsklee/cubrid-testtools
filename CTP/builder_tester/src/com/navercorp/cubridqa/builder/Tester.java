@@ -330,11 +330,14 @@ public class Tester {
         }
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
+        testLogger.info("Docker work dir: " + dockerWorkDir.toString());
         
-        // Download build package if it's a URL
+        // Download build package if it's a URL (use shared cache dir to avoid per-test races)
         Path localBuildPackage;
         try {
-            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, dockerWorkDir, testLogger);
+            Path sharedCacheDir = Paths.get(config.getWorkDir(), "cache");
+            try { Files.createDirectories(sharedCacheDir); } catch (Exception ignore) {}
+            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, sharedCacheDir, testLogger);
         } catch (IOException e) {
             return new JSONObject()
                 .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
@@ -355,11 +358,11 @@ public class Tester {
             testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
         }
         
-        // Copy build package to Docker work directory
+        // Copy build package from cache to Docker work directory
         Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
         if (!localBuildPackage.equals(dockerBuildPackage)) {
             try {
-                Files.copy(localBuildPackage, dockerBuildPackage);
+                Files.copy(localBuildPackage, dockerBuildPackage, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
                 return new JSONObject()
                     .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
