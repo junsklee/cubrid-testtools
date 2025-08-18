@@ -551,23 +551,45 @@ public class BuilderTask {
                 os.write(testRequest.toString().getBytes());
             }
             
-            // Read response
+            // Read response (handle non-2xx by reading error stream)
+            int httpStatus = conn.getResponseCode();
             StringBuilder response = new StringBuilder();
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream()))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    response.append(line);
+            InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream();
+            if (is != null) {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        response.append(line);
+                    }
                 }
             }
+            JSONObject responseJson;
+            try {
+                responseJson = new JSONObject(response.length() == 0 ? "{}" : response.toString());
+            } catch (Exception parseEx) {
+                responseJson = new JSONObject().put("status", httpStatus >= 200 && httpStatus < 300 ? "unknown" : "execution_error")
+                                              .put("message", "Tester returned HTTP " + httpStatus);
+            }
+            // If tester returned non-2xx, mark as execution_error unless a status is provided
+            if (httpStatus < 200 || httpStatus >= 300) {
+                String status = responseJson.optString("status", "execution_error");
+                String message = responseJson.optString("message", "Tester HTTP status: " + httpStatus);
+                return new JSONObject()
+                    .put("commit", commit)
+                    .put("test", testPath)
+                    .put("status", status)
+                    .put("message", message);
+            }
             
-            JSONObject responseJson = new JSONObject(response.toString());
+            // Normal success path
+            
+            JSONObject responseJsonFinal = responseJson;
             
             return new JSONObject()
                 .put("commit", commit)
                 .put("test", testPath)
-                .put("status", responseJson.getString("status"))
-                .put("message", responseJson.optString("message", ""));
+                .put("status", responseJsonFinal.optString("status", "unknown"))
+                .put("message", responseJsonFinal.optString("message", ""));
                 
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Failed to test commit " + commit + 

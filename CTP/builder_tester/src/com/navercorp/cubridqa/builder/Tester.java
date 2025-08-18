@@ -293,7 +293,21 @@ public class Tester {
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         
         // Download build package if it's a URL
-        Path localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, dockerWorkDir, testLogger);
+        Path localBuildPackage;
+        try {
+            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, dockerWorkDir, testLogger);
+        } catch (IOException e) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Failed to download build package: " + e.getMessage())
+                .put("test", testName);
+        }
+        if (localBuildPackage == null || !Files.exists(localBuildPackage)) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Downloaded build package missing: " + String.valueOf(localBuildPackage))
+                .put("test", testName);
+        }
 
         // Ensure shell testcases repository is on the requested branch from preferred remote
         try {
@@ -305,13 +319,55 @@ public class Tester {
         // Copy build package to Docker work directory
         Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
         if (!localBuildPackage.equals(dockerBuildPackage)) {
-            Files.copy(localBuildPackage, dockerBuildPackage);
+            try {
+                Files.copy(localBuildPackage, dockerBuildPackage);
+            } catch (IOException e) {
+                return new JSONObject()
+                    .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                    .put("message", "Failed to stage build package for Docker: " + e.getMessage())
+                    .put("test", testName);
+            }
         }
         
-        // Copy test case directory to isolated workspace
+        // Resolve and copy test case directory to isolated workspace
         Path testCasesDir = dockerWorkDir.resolve("testcases");
         Files.createDirectories(testCasesDir);
-        copyTestCaseDirectory(Paths.get(testDir), testCasesDir);
+        Path sourceTestDir = Paths.get(testDir);
+        if (!Files.exists(sourceTestDir)) {
+            String testPathFull = request.optString("testPath", null);
+            if (testPathFull != null && testPathFull.contains("/")) {
+                String relDir = testPathFull.substring(0, testPathFull.lastIndexOf("/"));
+                Path fallbackDir = Paths.get(config.getShellTcDir(), relDir);
+                if (Files.exists(fallbackDir)) {
+                    testLogger.warning("Provided testDir not found on tester; using fallback: " + fallbackDir.toString());
+                    sourceTestDir = fallbackDir;
+                } else {
+                    return new JSONObject()
+                        .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                        .put("message", "Test directory not found on tester: " + sourceTestDir.toString())
+                        .put("test", testName);
+                }
+            } else {
+                return new JSONObject()
+                    .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                    .put("message", "Invalid testPath; cannot resolve test directory")
+                    .put("test", testName);
+            }
+        }
+        if (!Files.isReadable(sourceTestDir)) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Permission denied reading test directory: " + sourceTestDir)
+                .put("test", testName);
+        }
+        try {
+            copyTestCaseDirectory(sourceTestDir, testCasesDir);
+        } catch (IOException e) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Failed to copy test cases: " + e.getMessage())
+                .put("test", testName);
+        }
         testLogger.info("Copied test case directory to isolated workspace: " + testCasesDir);
         
         // Create test execution script for Docker (now using isolated testcases dir)
@@ -542,7 +598,21 @@ public class Tester {
         testLogger.info("  Test: " + testName);
         
         // Download build package if it's a URL
-        Path localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, workDir, testLogger);
+        Path localBuildPackage;
+        try {
+            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, workDir, testLogger);
+        } catch (IOException e) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Failed to download build package: " + e.getMessage())
+                .put("test", testName);
+        }
+        if (localBuildPackage == null || !Files.exists(localBuildPackage)) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Downloaded build package missing: " + String.valueOf(localBuildPackage))
+                .put("test", testName);
+        }
 
         // Ensure shell testcases repository is on the requested branch from preferred remote
         try {
@@ -586,23 +656,47 @@ public class Tester {
             Files.createDirectories(installDir.resolve("databases"));
         }
         
+        // Resolve test directory on tester host
+        Path sourceTestDir = Paths.get(testDir);
+        if (!Files.exists(sourceTestDir)) {
+            String testPathFull = request.optString("testPath", null);
+            if (testPathFull != null && testPathFull.contains("/")) {
+                String relDir = testPathFull.substring(0, testPathFull.lastIndexOf("/"));
+                Path fallbackDir = Paths.get(config.getShellTcDir(), relDir);
+                if (Files.exists(fallbackDir)) {
+                    testLogger.warning("Provided testDir not found on tester; using fallback: " + fallbackDir.toString());
+                    sourceTestDir = fallbackDir;
+                } else {
+                    return new JSONObject()
+                        .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                        .put("message", "Test directory not found on tester: " + sourceTestDir.toString())
+                        .put("test", testName);
+                }
+            } else {
+                return new JSONObject()
+                    .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                    .put("message", "Invalid testPath; cannot resolve test directory")
+                    .put("test", testName);
+            }
+        }
+
         // Run the test
         String resultBaseFromScript = testScript.endsWith(".sh")
             ? testScript.substring(0, testScript.length() - 3)
             : (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
-        File namedResultFileObj = new File(testDir, resultBaseFromScript + ".result");
+        File namedResultFileObj = new File(sourceTestDir.toFile(), resultBaseFromScript + ".result");
         testLogger.info("Running test: " + testScript);
         if (namedResultFileObj.exists()) namedResultFileObj.delete();
         
         // Create wrapper script
-        String wrapperScript = createTestWrapperScript(testDir, testScript, testName, ctpHome);
+        String wrapperScript = createTestWrapperScript(sourceTestDir.toString(), testScript, testName, ctpHome);
         File wrapperFile = new File(workDir.toFile(), "test_wrapper.sh");
         Files.write(wrapperFile.toPath(), wrapperScript.getBytes());
         wrapperFile.setExecutable(true);
         
         // Run test
         ProcessBuilder pb = new ProcessBuilder();
-        pb.directory(new File(testDir));
+        pb.directory(sourceTestDir.toFile());
         pb.environment().clear();
         pb.environment().putAll(env);
         pb.command("bash", wrapperFile.getAbsolutePath());
@@ -1017,21 +1111,42 @@ public class Tester {
     }
     
     private void copyTestCaseDirectory(Path source, Path target) throws IOException {
-        Files.walk(source)
-            .forEach(sourcePath -> {
+        if (!Files.exists(source) || !Files.isDirectory(source)) {
+            throw new IOException("Source test directory does not exist: " + source);
+        }
+        Files.walkFileTree(source, new java.nio.file.SimpleFileVisitor<Path>() {
+            @Override
+            public java.nio.file.FileVisitResult preVisitDirectory(Path dir, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
+                Path targetDir = target.resolve(source.relativize(dir));
                 try {
-                    Path targetPath = target.resolve(source.relativize(sourcePath));
-                    if (Files.isDirectory(sourcePath)) {
-                        if (!Files.exists(targetPath)) {
-                            Files.createDirectories(targetPath);
-                        }
-                    } else {
-                        Files.copy(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
-                    }
+                    Files.createDirectories(targetDir);
                 } catch (IOException e) {
-                    logger.warning("Failed to copy: " + sourcePath + " - " + e.getMessage());
+                    logger.warning("Failed to create directory: " + targetDir + " - " + e.getMessage());
+                    throw e;
                 }
-            });
+                return java.nio.file.FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public java.nio.file.FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
+                Path targetFile = target.resolve(source.relativize(file));
+                try {
+                    Files.copy(file, targetFile, StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException e) {
+                    // Fail fast on permission errors to surface clear message
+                    logger.warning("Failed to copy file: " + file + " - " + e.getMessage());
+                    throw e;
+                }
+                return java.nio.file.FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public java.nio.file.FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                // Propagate AccessDeniedException or any IO error to caller for proper HTTP error response
+                logger.warning("Visit failed: " + file + " - " + (exc != null ? exc.getMessage() : "unknown error"));
+                throw exc != null ? exc : new IOException("Failed visiting: " + file);
+            }
+        });
     }
     
     /**
