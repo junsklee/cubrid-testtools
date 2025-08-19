@@ -135,7 +135,7 @@ public class BuilderTask {
                 
                 for (int i = 0; i < tests.length(); i++) {
                     final String raw = tests.getString(i);
-                    final String testPath = raw.startsWith("shell/") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+                    final String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
                     
                     // FIX: Use global test index for proper round-robin distribution
                     final String assignedWorker = workerIps.get(globalTestIndex % workerIps.size());
