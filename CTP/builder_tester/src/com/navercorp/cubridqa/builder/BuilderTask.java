@@ -555,13 +555,29 @@ public class BuilderTask {
             executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
             executeCommand(wtPb, "rm", "-rf", "cubridmanager"); // temporary fix parity
 
-            // Build command
+            // Build command with output capture for logging
             List<String> buildCmd = new ArrayList<>();
             buildCmd.add("./build.sh");
             for (String token : config.getBuildArg().trim().split("\\s+")) {
                 if (!token.isEmpty()) buildCmd.add(token);
             }
-            executeCommand(wtPb, buildCmd.toArray(new String[0]));
+            
+            // Capture build output
+            String buildOutput = executeCommandAndGetOutput(wtPb, buildCmd.toArray(new String[0]));
+            
+            // Save build log
+            try {
+                String requestId = RequestContext.getRequestId();
+                if (requestId != null && config.isRequestGroupingEnabled()) {
+                    String buildsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "builds");
+                    String buildLogFile = String.format("build_%s.log", commit.substring(0, 7));
+                    Path logFile = Paths.get(buildsDir, buildLogFile);
+                    Files.write(logFile, buildOutput.getBytes("UTF-8"));
+                    taskLogger.info("Saved build log to: " + logFile.toString());
+                }
+            } catch (Exception e) {
+                taskLogger.warning("Failed to save build log: " + e.getMessage());
+            }
 
             // 5) Create package from the isolated worktree build output
             String packageName = "cubrid_" + commit.substring(0, 7) + ".tar.gz";
@@ -792,6 +808,37 @@ public class BuilderTask {
             }
             if (responseJson.has("attempts")) {
                 result.put("attempts", responseJson.getInt("attempts"));
+            }
+            
+            // Handle log content from tester
+            if (responseJson.has("logContent")) {
+                String logContent = responseJson.getString("logContent");
+                String logFileName = responseJson.optString("logFileName", null);
+                boolean logTruncated = responseJson.optBoolean("logTruncated", false);
+                
+                // Save log to request directory
+                try {
+                    if (requestId != null && config.isRequestGroupingEnabled()) {
+                        String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                        String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                        String commitShort = commit.substring(0, Math.min(commit.length(), 7));
+                        
+                        // Use the filename from Tester if provided, otherwise generate one
+                        String fileName = logFileName != null ? logFileName : 
+                            String.format("test_%s_%s.log", commitShort, safeTestName);
+                        
+                        Path logFile = Paths.get(testsDir, fileName);
+                        Files.write(logFile, logContent.getBytes("UTF-8"));
+                        
+                        taskLogger.info("Saved test execution log to: " + logFile.toString() + 
+                                       (logTruncated ? " (truncated)" : ""));
+                        
+                        // Add log path to result for later reference
+                        result.put("logPath", logFile.toString());
+                    }
+                } catch (Exception e) {
+                    taskLogger.warning("Failed to save test log: " + e.getMessage());
+                }
             }
             
             return result;

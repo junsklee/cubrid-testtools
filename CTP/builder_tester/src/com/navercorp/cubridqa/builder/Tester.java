@@ -536,7 +536,9 @@ public class Tester {
         String dockerOutput = outputGobbler.getOutput();
         testLogger.info("Docker test completed with exit code: " + exitCode);
 
-        // Persist full docker output for diagnostics
+        // Persist full docker output for diagnostics and prepare for sending back to Builder
+        String logContent = dockerOutput; // Store log content to include in response
+        String logFileName = null;
         try {
             String requestId = RequestContext.getRequestId();
             if (requestId != null && config.isRequestGroupingEnabled()) {
@@ -544,7 +546,6 @@ public class Tester {
                 String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
                 // Include commit and attempt number in the log file name for uniqueness
                 int attemptNumber = request.optInt("attemptNumber", 1);
-                String logFileName;
                 if (attemptNumber == 1) {
                     logFileName = String.format("docker_%s_%s.log", commitShort, safeTestName);
                 } else {
@@ -576,6 +577,9 @@ public class Tester {
                  .put("commitShort", commitShort)
                  .put("execution_mode", "docker")
                  .put("timestamp", System.currentTimeMillis());
+             
+             // Add log content to response
+             addLogToResponse(response, logContent, logFileName);
              
              if (executionTime != null) {
                  response.put("execution_time", executionTime);
@@ -790,33 +794,68 @@ public class Tester {
         String testOutput = outputGobbler.getOutput();
         String testError = errorGobbler.getOutput();
         
+        // Combine output and error for log content
+        String directLogContent = "=== STDOUT ===\n" + testOutput + "\n\n=== STDERR ===\n" + testError;
+        String directLogFileName = null;
+        
+        // Save logs to file
+        try {
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                String commitShortForLog = request.optString("commitShort", "unknown");
+                int attemptNumber = request.optInt("attemptNumber", 1);
+                if (attemptNumber == 1) {
+                    directLogFileName = String.format("direct_%s_%s.log", commitShortForLog, safeTestName);
+                } else {
+                    directLogFileName = String.format("direct_%s_%s.%d.log", commitShortForLog, safeTestName, attemptNumber);
+                }
+                Path logFile = Paths.get(testsDir, directLogFileName);
+                Files.write(logFile, directLogContent.getBytes("UTF-8"));
+                testLogger.info("Saved direct test log to: " + logFile.toString());
+            }
+        } catch (Exception ignore) {
+            // Swallow logging persistence issues
+        }
+        
         // Check for execution errors
         if (exitCode != 0 && (testError.contains("command not found") || 
                               testError.contains("syntax error"))) {
             testLogger.severe("Test execution error: " + testError);
-            return new JSONObject()
+            JSONObject response = new JSONObject()
                 .put("status", TestStatus.EXECUTION_ERROR.getValue())
                 .put("message", "Test script execution error")
                 .put("test", testName)
                 .put("exit_code", exitCode);
+            addLogToResponse(response, directLogContent, directLogFileName);
+            return response;
         }
         
         // Check named result first then nok.result
         if (namedResultFileObj.exists()) {
             String resultContent = new String(Files.readAllBytes(namedResultFileObj.toPath()));
             testLogger.info("Named Result (" + resultBaseFromScript + ".result): " + resultContent.trim());
+            JSONObject response = new JSONObject().put("test", testName);
             if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
-                return new JSONObject().put("status", TestStatus.FAIL.getValue()).put("test", testName);
+                response.put("status", TestStatus.FAIL.getValue());
             } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
-                return new JSONObject().put("status", TestStatus.PASS.getValue()).put("test", testName);
+                response.put("status", TestStatus.PASS.getValue());
+            } else {
+                response.put("status", TestStatus.EXECUTION_ERROR.getValue())
+                       .put("message", "Could not determine test result");
             }
+            addLogToResponse(response, directLogContent, directLogFileName);
+            return response;
         }
         
-        return new JSONObject()
+        JSONObject response = new JSONObject()
             .put("status", TestStatus.EXECUTION_ERROR.getValue())
             .put("message", "No result file generated")
             .put("test", testName)
             .put("exit_code", exitCode);
+        addLogToResponse(response, directLogContent, directLogFileName);
+        return response;
     }
     
     private Path installCubrid(String buildPackage, Path workDir, Logger testLogger) 
@@ -1829,6 +1868,36 @@ public class Tester {
     private String escapeShell(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "'\\''");
+    }
+    
+    /**
+     * Helper method to add log content to response JSON
+     * Truncates large logs to avoid overwhelming the network
+     */
+    private void addLogToResponse(JSONObject response, String logContent, String logFileName) {
+        if (logContent == null || logContent.isEmpty()) {
+            return;
+        }
+        
+        // Limit log size to 500KB to avoid network issues
+        final int MAX_LOG_SIZE = 500 * 1024;
+        String truncatedLog = logContent;
+        boolean wasTruncated = false;
+        
+        if (logContent.length() > MAX_LOG_SIZE) {
+            // Keep first and last parts of the log
+            int keepSize = MAX_LOG_SIZE / 2;
+            truncatedLog = logContent.substring(0, keepSize) + 
+                          "\n\n... [LOG TRUNCATED - Total size: " + logContent.length() + " bytes] ...\n\n" +
+                          logContent.substring(logContent.length() - keepSize);
+            wasTruncated = true;
+        }
+        
+        response.put("logContent", truncatedLog);
+        response.put("logTruncated", wasTruncated);
+        if (logFileName != null) {
+            response.put("logFileName", logFileName);
+        }
     }
     
     public static void main(String[] args) {
