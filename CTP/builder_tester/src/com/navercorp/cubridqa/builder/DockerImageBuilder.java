@@ -114,7 +114,7 @@ public class DockerImageBuilder {
                     new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    logger.fine("Docker build: " + line);
+                    logger.info("Docker build: " + line);
                 }
             }
             
@@ -155,39 +155,38 @@ public class DockerImageBuilder {
         dockerfile.append("COPY build.tar.gz /tmp/build.tar.gz\n\n");
         
         // Extract and setup CUBRID
-        dockerfile.append("# Extract and setup CUBRID\n");
+        dockerfile.append("# Extract CUBRID build package\n");
         dockerfile.append("RUN mkdir -p /opt/cubrid && \\\n");
         dockerfile.append("    cd /opt/cubrid && \\\n");
         dockerfile.append("    tar -xzf /tmp/build.tar.gz && \\\n");
-        dockerfile.append("    rm /tmp/build.tar.gz && \\\n");
+        dockerfile.append("    rm /tmp/build.tar.gz\n\n");
         
-        // Find CUBRID installation directory
-        dockerfile.append("    CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname) && \\\n");
+        dockerfile.append("# Find and move CUBRID installation\n");
+        dockerfile.append("RUN CUBRID_DIR=$(find /opt/cubrid -path '*/_install/CUBRID' -type d | head -1) && \\\n");
         dockerfile.append("    if [ -z \"$CUBRID_DIR\" ]; then \\\n");
-        dockerfile.append("        echo 'ERROR: Could not find CUBRID installation' && exit 1; \\\n");
+        dockerfile.append("        CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname); \\\n");
         dockerfile.append("    fi && \\\n");
+        dockerfile.append("    echo \"Found CUBRID at: $CUBRID_DIR\" && \\\n");
+        dockerfile.append("    if [ \"$CUBRID_DIR\" != \"/opt/cubrid\" ] && [ -d \"$CUBRID_DIR\" ]; then \\\n");
+        dockerfile.append("        echo \"Moving CUBRID installation to /opt/cubrid\" && \\\n");
+        dockerfile.append("        cp -rf \"$CUBRID_DIR\"/* /opt/cubrid/ && \\\n");
+        dockerfile.append("        rm -rf /opt/cubrid/_install; \\\n");
+        dockerfile.append("    fi\n\n");
         
-        // Move CUBRID to standard location if needed
-        dockerfile.append("    if [ \"$CUBRID_DIR\" != \"/opt/cubrid\" ]; then \\\n");
-        dockerfile.append("        mv \"$CUBRID_DIR\"/* /opt/cubrid/ && \\\n");
-        dockerfile.append("        rm -rf \"$CUBRID_DIR\"; \\\n");
-        dockerfile.append("    fi && \\\n");
-        
-        // Run setup.sh if available
-        dockerfile.append("    if [ -f /opt/cubrid/share/scripts/setup.sh ]; then \\\n");
+        dockerfile.append("# Setup CUBRID environment\n");
+        dockerfile.append("RUN if [ -f /opt/cubrid/share/scripts/setup.sh ]; then \\\n");
         dockerfile.append("        cd /opt/cubrid && \\\n");
-        dockerfile.append("        yes | sh share/scripts/setup.sh /opt/cubrid || true; \\\n");
+        dockerfile.append("        echo 'y' | sh share/scripts/setup.sh /opt/cubrid || true; \\\n");
         dockerfile.append("    elif [ -f /opt/cubrid/setup.sh ]; then \\\n");
         dockerfile.append("        cd /opt/cubrid && \\\n");
-        dockerfile.append("        yes | sh setup.sh /opt/cubrid || true; \\\n");
-        dockerfile.append("    fi && \\\n");
+        dockerfile.append("        echo 'y' | sh setup.sh /opt/cubrid || true; \\\n");
+        dockerfile.append("    fi\n\n");
         
-        // Create databases directory
-        dockerfile.append("    mkdir -p /opt/cubrid/databases && \\\n");
+        dockerfile.append("# Prepare databases directory and verify installation\n");
+        dockerfile.append("RUN mkdir -p /opt/cubrid/databases && \\\n");
         dockerfile.append("    touch /opt/cubrid/databases/databases.txt && \\\n");
-        
-        // Verify installation
-        dockerfile.append("    /opt/cubrid/bin/cubrid_rel || true\n\n");
+        dockerfile.append("    ls -la /opt/cubrid/bin/ && \\\n");
+        dockerfile.append("    /opt/cubrid/bin/cubrid_rel || echo \"cubrid_rel check failed\"\n\n");
         
         // Set environment variables
         dockerfile.append("# Set CUBRID environment\n");

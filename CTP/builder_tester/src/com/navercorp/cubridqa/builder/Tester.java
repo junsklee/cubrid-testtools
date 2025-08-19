@@ -1261,16 +1261,18 @@ public class Tester {
         dockerCommand.add("-w");
         dockerCommand.add("/workspace");
         
+        // Override entrypoint to use bash instead of the base image entrypoint
+        dockerCommand.add("--entrypoint");
+        dockerCommand.add("bash");
+        
         // Use the pre-built image
         dockerCommand.add(dockerImage);
         
         // Command to execute
         if (keepAlive) {
-            dockerCommand.add("bash");
             dockerCommand.add("-lc");
             dockerCommand.add("/workspace/run_test.sh; echo READY; tail -f /dev/null");
         } else {
-            dockerCommand.add("bash");
             dockerCommand.add("-lc");
             dockerCommand.add("/workspace/run_test.sh");
         }
