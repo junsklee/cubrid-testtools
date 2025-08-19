@@ -1739,8 +1739,11 @@ public class Tester {
                 return;
             }
 
-            // Determine preferred remote: upstream, fallback to origin
-            String preferred = "upstream";
+            // Determine preferred remote from config (default: upstream), fallback to origin if missing
+            String preferred = config.getShellTcPreferredRemote();
+            if (preferred == null || preferred.trim().isEmpty()) {
+                preferred = "upstream";
+            }
             String chosenRemote = preferred;
             if (runAndExitCode(pb, new String[]{"git", "remote", "get-url", preferred}) != 0) {
                 chosenRemote = "origin";

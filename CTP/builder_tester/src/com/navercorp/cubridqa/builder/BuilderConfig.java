@@ -17,6 +17,7 @@ public class BuilderConfig {
     private static final String CUBRID_SRC_DIR = "cubrid_src_dir";
     private static final String SHELL_TC_DIR = "shell_tc_dir";
     private static final String SHELL_TC_BRANCH = "shell_tc_branch";
+    private static final String SHELL_TC_PREFERRED_REMOTE = "shell_tc_preferred_remote";
     private static final String BUILD_ARG = "build_arg";
     private static final String BUILD_DIR = "build_dir";
     private static final String WORK_DIR = "work_dir";
@@ -131,6 +132,10 @@ public class BuilderConfig {
 
     public String getShellTcBranch() {
         return properties.getProperty(SHELL_TC_BRANCH, "develop");
+    }
+
+    public String getShellTcPreferredRemote() {
+        return properties.getProperty(SHELL_TC_PREFERRED_REMOTE, "upstream");
     }
     
     public String getBuildArg() {
