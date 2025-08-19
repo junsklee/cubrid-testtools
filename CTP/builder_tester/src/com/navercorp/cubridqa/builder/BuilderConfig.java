@@ -33,6 +33,7 @@ public class BuilderConfig {
     private static final String ENABLE_REQUEST_GROUPING = "enable_request_grouping";
     private static final String RETRY_COUNT = "retry_count"; // Tester: number of times to retry a failed test
     private static final String TEST_READ_TIMEOUT_MINUTES = "test_read_timeout_minutes"; // Tester: HTTP read timeout for /test
+    private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String CCACHE_ENABLED = "ccache_enabled";
     private static final String CCACHE_DIR = "ccache_dir";
     private static final String CCACHE_MAX_SIZE = "ccache_max_size";
@@ -203,6 +204,14 @@ public class BuilderConfig {
     
     public boolean isRequestGroupingEnabled() {
         return Boolean.parseBoolean(properties.getProperty(ENABLE_REQUEST_GROUPING, "true"));
+    }
+    
+    /**
+     * Check if optimized Docker execution with pre-built images is enabled.
+     * Default is true when Docker is enabled.
+     */
+    public boolean isOptimizedDockerEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(OPTIMIZED_DOCKER_ENABLED, "true"));
     }
     
     /**

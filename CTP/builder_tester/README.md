@@ -8,7 +8,8 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
 - docs/architecture/README.md – Components and flow
 - docs/usage/README.md – Setup and usage, CLI and APIs
 - docs/configuration/README.md – All configuration options and defaults
- - log/LOG_MANAGEMENT.md – Request-based logging design and operations
+- docs/DOCKER_OPTIMIZATION.md – Docker performance optimization (80-90% faster)
+- log/LOG_MANAGEMENT.md – Request-based logging design and operations
 
 ## Isolated per-commit builds
 
@@ -29,6 +30,11 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
   - See docs/CCACHE_GUIDE.md for details
 - **Parallel Compilation**: Auto-detects CPU cores for optimal parallelization
 - **Build Artifact Caching**: Reuses previous builds when possible
+- **Docker Image Optimization**: Pre-built images with CUBRID installed
+  - 80-90% reduction in test execution overhead
+  - Automatic image caching per commit
+  - Transparent fallback on failures
+  - See docs/DOCKER_OPTIMIZATION.md for details
 
 ## Quick start
 

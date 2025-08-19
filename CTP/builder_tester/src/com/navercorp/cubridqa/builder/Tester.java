@@ -32,6 +32,7 @@ public class Tester {
     private final HttpServer server;
     private final DockerTesterManager dockerManager;
     private final boolean useDocker;
+    private final DockerImageBuilder imageBuilder;  // Docker image builder for pre-installed builds
     // Prevent concurrent git operations on the shared shell testcases repo
     private static final Object SHELL_TC_SYNC_LOCK = new Object();
     
@@ -69,6 +70,9 @@ public class Tester {
         }
         this.useDocker = config.useDockerForTester();
         this.dockerManager = useDocker ? new DockerTesterManager(config) : null;
+        
+        // Initialize Docker image builder for optimized test execution
+        this.imageBuilder = useDocker ? new DockerImageBuilder(config) : null;
         
         // Create work directory if it doesn't exist
         File workDir = new File(config.getWorkDir());
@@ -314,6 +318,18 @@ public class Tester {
     }
     
     private JSONObject runTestInDocker(JSONObject request, Path workDir, Logger testLogger) throws Exception {
+        // Try to use optimized Docker execution with pre-built images
+        if (imageBuilder != null && config.isOptimizedDockerEnabled()) {
+            try {
+                testLogger.info("Attempting optimized Docker execution with pre-built image...");
+                return runTestInDockerOptimized(request, workDir, testLogger);
+            } catch (Exception e) {
+                testLogger.warning("Optimized Docker execution failed, falling back to standard: " + e.getMessage());
+                // Fall through to standard execution
+            }
+        }
+        
+        // Standard Docker execution (original implementation)
         testLogger.info("Running test in Docker container...");
         
         String buildPackage = request.getString("buildPackage");
@@ -1092,6 +1108,333 @@ public class Tester {
          
          return script.toString();
      }
+    
+    /**
+     * Optimized Docker test execution using pre-built images with CUBRID already installed.
+     * This eliminates the need to extract and setup CUBRID for each test.
+     */
+    private JSONObject runTestInDockerOptimized(JSONObject request, Path workDir, Logger testLogger) throws Exception {
+        testLogger.info("Running test in optimized Docker container with pre-built image...");
+        
+        String buildPackage = request.getString("buildPackage");
+        String testDir = request.getString("testDir");
+        String testScript = request.getString("testScript");
+        String testName = request.getString("testName");
+        String expectedBuildVersion = request.optString("expectedBuildVersion", null);
+        String commit = request.optString("commit", "unknown");
+        String commitShort = request.optString("commitShort", commit.substring(0, Math.min(commit.length(), 7)));
+        boolean keepAlive = request.optBoolean("keepAlive", config.getKeepFailedContainers());
+        String containerName = request.optString("containerName", 
+            "tester_opt_" + testName.replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis());
+        
+        Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
+        testLogger.info("Docker work dir: " + dockerWorkDir.toString());
+        
+        // Download build package if it's a URL
+        Path localBuildPackage;
+        try {
+            Path sharedCacheDir = Paths.get(config.getWorkDir(), "cache");
+            Files.createDirectories(sharedCacheDir);
+            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, sharedCacheDir, testLogger);
+        } catch (IOException e) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Failed to download build package: " + e.getMessage())
+                .put("test", testName);
+        }
+        
+        // Build or get Docker image with CUBRID pre-installed
+        String dockerImage;
+        try {
+            if (imageBuilder != null) {
+                dockerImage = imageBuilder.getOrBuildImage(commitShort, localBuildPackage);
+                testLogger.info("Using Docker image: " + dockerImage);
+            } else {
+                testLogger.info("Image builder not available, falling back to standard execution");
+                throw new Exception("Image builder not available");
+            }
+        } catch (Exception e) {
+            testLogger.warning("Failed to build optimized Docker image: " + e.getMessage());
+            throw e;  // Let the calling method handle fallback
+        }
+        
+        // Ensure shell testcases repository is on the requested branch
+        try {
+            syncShellTestcasesRepo(testLogger);
+        } catch (Exception e) {
+            testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
+        }
+        
+        // Copy test case directory to isolated workspace
+        Path testCasesDir = dockerWorkDir.resolve("testcases");
+        Files.createDirectories(testCasesDir);
+        Path sourceTestDir = Paths.get(testDir);
+        if (!Files.exists(sourceTestDir)) {
+            String testPathFull = request.optString("testPath", null);
+            if (testPathFull != null && testPathFull.contains("/")) {
+                String relDir = testPathFull.substring(0, testPathFull.lastIndexOf("/"));
+                Path fallbackDir = Paths.get(config.getShellTcDir(), relDir);
+                if (Files.exists(fallbackDir)) {
+                    testLogger.warning("Provided testDir not found; using fallback: " + fallbackDir);
+                    sourceTestDir = fallbackDir;
+                } else {
+                    return new JSONObject()
+                        .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                        .put("message", "Test directory not found: " + sourceTestDir)
+                        .put("test", testName);
+                }
+            }
+        }
+        
+        try {
+            copyTestCaseDirectory(sourceTestDir, testCasesDir);
+        } catch (IOException e) {
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "Failed to copy test cases: " + e.getMessage())
+                .put("test", testName);
+        }
+        testLogger.info("Copied test case directory to isolated workspace");
+        
+        // Create simplified test script (no CUBRID extraction needed!)
+        String dockerScript = createOptimizedDockerTestScript(testScript, testName, expectedBuildVersion);
+        Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
+        Files.write(dockerScriptPath, dockerScript.getBytes());
+        dockerScriptPath.toFile().setExecutable(true);
+        
+        // Save script for debugging
+        try {
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                Path scriptLogPath = Paths.get(testsDir, 
+                    String.format("docker_script_opt_%s_%s.sh", commitShort, safeTestName));
+                Files.write(scriptLogPath, dockerScript.getBytes("UTF-8"));
+                testLogger.info("Saved optimized Docker test script to: " + scriptLogPath);
+            }
+        } catch (Exception ignore) {}
+        
+        // Check for GitHub token
+        String githubToken = System.getenv("GITHUB_TOKEN");
+        if (githubToken == null || githubToken.trim().isEmpty()) {
+            testLogger.severe("GITHUB_TOKEN not set");
+            return new JSONObject()
+                .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
+                .put("message", "GITHUB_TOKEN environment variable not configured")
+                .put("test", testName);
+        }
+        
+        // Run Docker container with optimized flags
+        List<String> dockerCommand = new ArrayList<>();
+        dockerCommand.add("docker");
+        dockerCommand.add("run");
+        if (keepAlive) {
+            dockerCommand.add("-d");
+            dockerCommand.add("--name");
+            dockerCommand.add(containerName);
+        } else {
+            dockerCommand.add("--rm");
+        }
+        
+        // Performance optimizations
+        dockerCommand.add("--init");
+        dockerCommand.add("--tmpfs");
+        dockerCommand.add("/tmp:exec,size=2G");
+        dockerCommand.add("--shm-size=2g");
+        
+        // Volume mounts
+        dockerCommand.add("-v");
+        dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
+        dockerCommand.add("-v");
+        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:ro");
+        
+        // Environment variables
+        dockerCommand.add("-e");
+        dockerCommand.add("GITHUB_TOKEN=" + githubToken);
+        dockerCommand.add("-e");
+        dockerCommand.add("CTP_HOME=/home/cubrid-testtools/CTP");
+        dockerCommand.add("-e");
+        dockerCommand.add("init_path=/home/cubrid-testtools/CTP/shell/init_path");
+        
+        // Working directory
+        dockerCommand.add("-w");
+        dockerCommand.add("/workspace");
+        
+        // Use the pre-built image
+        dockerCommand.add(dockerImage);
+        
+        // Command to execute
+        if (keepAlive) {
+            dockerCommand.add("bash");
+            dockerCommand.add("-lc");
+            dockerCommand.add("/workspace/run_test.sh; echo READY; tail -f /dev/null");
+        } else {
+            dockerCommand.add("bash");
+            dockerCommand.add("-lc");
+            dockerCommand.add("/workspace/run_test.sh");
+        }
+        
+        testLogger.info("Executing optimized Docker command: " + String.join(" ", dockerCommand));
+        
+        ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        
+        if (keepAlive) {
+            try { Files.createFile(workDir.resolve("KEEP_WORKSPACE")); } catch (Exception ignore) {}
+            String execCmd = "docker exec -it " + containerName + " bash";
+            return new JSONObject()
+                .put("status", "started")
+                .put("test", testName)
+                .put("containerName", containerName)
+                .put("execCommand", execCmd)
+                .put("workspace", dockerWorkDir.toString());
+        }
+        
+        // Read output
+        StreamReader outputGobbler = new StreamReader(process.getInputStream(), "DOCKER");
+        outputGobbler.start();
+        boolean completed = process.waitFor(30, TimeUnit.MINUTES);
+        if (!completed) {
+            process.destroyForcibly();
+            testLogger.severe("Docker test timeout");
+            return new JSONObject()
+                .put("status", TestStatus.EXECUTION_ERROR.getValue())
+                .put("message", "Docker test timeout after 30 minutes")
+                .put("test", testName);
+        }
+        
+        int exitCode = process.exitValue();
+        outputGobbler.join(2000);
+        String dockerOutput = outputGobbler.getOutput();
+        testLogger.info("Docker test completed with exit code: " + exitCode);
+        
+        // Save output log
+        try {
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                Path logFile = Paths.get(testsDir, 
+                    String.format("docker_opt_%s_%s.log", commitShort, safeTestName));
+                Files.write(logFile, dockerOutput.getBytes("UTF-8"));
+                testLogger.info("Saved optimized Docker test log to: " + logFile);
+            }
+        } catch (Exception ignore) {}
+        
+        // Check for result file
+        String resultBase = testScript.endsWith(".sh") ? 
+            testScript.substring(0, testScript.length() - 3) : testScript;
+        Path namedResult = dockerWorkDir.resolve(resultBase + ".result");
+        
+        if (Files.exists(namedResult)) {
+            String resultContent = new String(Files.readAllBytes(namedResult));
+            testLogger.info("Test result file content: " + resultContent);
+            
+            boolean isPassed = resultContent.contains("OK") || 
+                              resultContent.toUpperCase().contains("PASS");
+            boolean isFailed = resultContent.contains("NOK") || 
+                              resultContent.toUpperCase().contains("FAIL");
+            
+            if (isPassed && !isFailed) {
+                return new JSONObject()
+                    .put("status", TestStatus.PASS.getValue())
+                    .put("test", testName)
+                    .put("commit", commit)
+                    .put("commitShort", commitShort)
+                    .put("execution_mode", "docker_optimized")
+                    .put("timestamp", System.currentTimeMillis());
+            } else if (isFailed) {
+                return new JSONObject()
+                    .put("status", TestStatus.FAIL.getValue())
+                    .put("test", testName)
+                    .put("commit", commit)
+                    .put("commitShort", commitShort)
+                    .put("execution_mode", "docker_optimized")
+                    .put("timestamp", System.currentTimeMillis());
+            }
+        }
+        
+        // Check exit code
+        if (exitCode == 0) {
+            return new JSONObject()
+                .put("status", TestStatus.PASS.getValue())
+                .put("test", testName)
+                .put("commit", commit)
+                .put("commitShort", commitShort)
+                .put("execution_mode", "docker_optimized")
+                .put("timestamp", System.currentTimeMillis());
+        } else {
+            return new JSONObject()
+                .put("status", TestStatus.FAIL.getValue())
+                .put("test", testName)
+                .put("commit", commit)
+                .put("commitShort", commitShort)
+                .put("execution_mode", "docker_optimized")
+                .put("exit_code", exitCode)
+                .put("timestamp", System.currentTimeMillis());
+        }
+    }
+    
+    /**
+     * Create optimized Docker test script for pre-built images.
+     * CUBRID is already installed in /opt/cubrid, so we just run the test.
+     */
+    private String createOptimizedDockerTestScript(String testScript, String testName, 
+                                                   String expectedBuildVersion) {
+        StringBuilder script = new StringBuilder();
+        script.append("#!/bin/bash\n");
+        script.append("set -e\n");
+        script.append("set -x\n\n");
+        
+        script.append("# CUBRID is pre-installed in /opt/cubrid\n");
+        script.append("export CUBRID=/opt/cubrid\n");
+        script.append("export CUBRID_DATABASES=/opt/cubrid/databases\n");
+        script.append("export PATH=/opt/cubrid/bin:/home/cubrid-testtools/CTP/shell/init_path:$PATH\n");
+        script.append("export LD_LIBRARY_PATH=/opt/cubrid/lib:/opt/cubrid/cci/lib:$LD_LIBRARY_PATH\n");
+        script.append("export CUBRID_LANG=en_US\n");
+        script.append("export CUBRID_CHARSET=en_US\n");
+        script.append("export CTP_HOME=/home/cubrid-testtools/CTP\n");
+        script.append("export init_path=/home/cubrid-testtools/CTP/shell/init_path\n\n");
+        
+        script.append("# Verify CUBRID installation\n");
+        script.append("echo \"Verifying CUBRID installation...\"\n");
+        script.append("cubrid_rel\n\n");
+        
+        // Verify expected build version if provided
+        if (expectedBuildVersion != null && !expectedBuildVersion.isEmpty()) {
+            script.append("# Verify expected build version\n");
+            script.append("INSTALLED_VER=$(cubrid_rel 2>/dev/null | head -1)\n");
+            script.append("echo \"Installed version: $INSTALLED_VER\"\n");
+            script.append("if [[ \"$INSTALLED_VER\" != *\"").append(expectedBuildVersion).append("\"* ]]; then\n");
+            script.append("    echo \"WARNING: Expected build version ").append(expectedBuildVersion);
+            script.append(" not found in installed version\"\n");
+            script.append("fi\n\n");
+        }
+        
+        script.append("# Clean any previous database state\n");
+        script.append("rm -rf /opt/cubrid/databases/*\n");
+        script.append("mkdir -p /opt/cubrid/databases\n");
+        script.append("touch /opt/cubrid/databases/databases.txt\n\n");
+        
+        script.append("# Run the test\n");
+        script.append("cd /workspace/testcases\n");
+        script.append("bash ").append(testScript).append("\n");
+        script.append("TEST_EXIT=$?\n\n");
+        
+        // Copy result file to workspace
+        String resultBase = testScript.endsWith(".sh") ? 
+            testScript.substring(0, testScript.length() - 3) : testScript;
+        script.append("# Copy result file if generated\n");
+        script.append("if [ -f \"").append(resultBase).append(".result\" ]; then\n");
+        script.append("    cp \"").append(resultBase).append(".result\" /workspace/\n");
+        script.append("fi\n\n");
+        
+        script.append("exit $TEST_EXIT\n");
+        
+        return script.toString();
+    }
     
     private String readRequestBody(HttpExchange exchange) throws IOException {
         try (BufferedReader reader = new BufferedReader(
