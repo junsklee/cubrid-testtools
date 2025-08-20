@@ -1908,9 +1908,6 @@ public class Tester {
 
             log.info("Syncing shell testcases repo: branch='" + targetBranch + "' via remote='" + chosenRemote + "'");
 
-            // Proactively remove stale git lock if present (common on mounted dirs)
-            removeStaleGitIndexLock(repoDir, log);
-
             try {
                 // Fetch just the target branch to reduce traffic
                 runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
@@ -1921,14 +1918,20 @@ public class Tester {
                 // Hard reset to remote branch to avoid local drift
                 runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
             } catch (IOException e) {
-                if (isGitLockError(e)) {
-                    log.warning("Detected git lock error; attempting cleanup and one-time retry...");
-                    removeStaleGitIndexLock(repoDir, log);
-                    // Retry once after cleanup
-                    runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
-                    runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
-                    runAndExitCode(pb, new String[]{"git", "clean", "-df"});
-                    runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+                // If a git index.lock is present, avoid interfering unless it appears stale
+                if (isGitLockPresent(repoDir)) {
+                    long staleThresholdMs = 10L * 60L * 1000L; // 10 minutes
+                    if (isLikelyStaleGitLock(repoDir, staleThresholdMs)) {
+                        log.warning("Detected stale git index lock; removing and retrying sync once...");
+                        removeStaleGitIndexLock(repoDir, log);
+                        // Retry once after cleanup
+                        runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
+                        runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
+                        runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+                        runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+                    } else {
+                        log.warning("Git index.lock present; another git process may be running. Skipping repo sync this run to avoid interference.");
+                    }
                 } else {
                     throw e;
                 }
@@ -1975,6 +1978,20 @@ public class Tester {
         String msg = e.getMessage();
         if (msg == null) return false;
         return msg.contains("index.lock") || msg.contains(".lock");
+    }
+
+    private boolean isGitLockPresent(File repoDir) {
+        File gitDir = new File(repoDir, ".git");
+        File indexLock = new File(gitDir, "index.lock");
+        return indexLock.exists();
+    }
+
+    private boolean isLikelyStaleGitLock(File repoDir, long staleAgeMillis) {
+        File gitDir = new File(repoDir, ".git");
+        File indexLock = new File(gitDir, "index.lock");
+        if (!indexLock.exists()) return false;
+        long age = System.currentTimeMillis() - indexLock.lastModified();
+        return age >= staleAgeMillis;
     }
 
     private void removeStaleGitIndexLock(File repoDir, Logger log) {
