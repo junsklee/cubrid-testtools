@@ -510,17 +510,17 @@ function generateReportHTML(data, requestId) {
                     
                     const result = processedData[test][commit];
                     if (!result) {
-                        cell.innerHTML = '<span class="result-error">⚠️ N/A</span>';
+                        cell.innerHTML = '<span class="result-error">N/A</span>';
                         row.appendChild(cell);
                         return;
                     }
                     
                     let statusClass = 'result-error';
-                    let statusText = '⚠️ ERROR';
+                    let statusText = 'ERROR';
                     
                     if (result.status === 'pass') {
                         statusClass = result.flaky ? 'result-flaky' : 'result-pass';
-                        statusText = result.flaky ? '🔄 FLAKY(' + result.attempts + ')' : '✅ PASS';
+                        statusText = result.flaky ? 'FLAKY(' + result.attempts + ')' : 'PASS';
                     } else if (result.status === 'fail') {
                         statusClass = 'result-fail';
                         statusText = 'FAIL';
@@ -587,7 +587,7 @@ function generateReportHTML(data, requestId) {
                     content += '</div>';
                     
                     if (result.flaky) {
-                        content += '<p style="color: #0c4a6e; margin-top: 0.5rem;">🔄 Flaky test - passed after ' + 
+                        content += '<p style="color: #0c4a6e; margin-top: 0.5rem;">Flaky test - passed after ' + 
                                   result.attempts + ' attempts</p>';
                     }
                     
