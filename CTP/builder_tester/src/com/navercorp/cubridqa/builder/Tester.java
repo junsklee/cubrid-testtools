@@ -14,6 +14,7 @@ import com.sun.net.httpserver.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
+import java.util.stream.Collectors;
 import com.navercorp.cubridqa.builder.impl.MattermostSender;
 
 /**
@@ -363,25 +364,11 @@ public class Tester {
                     return;
                 }
                 
-                // Look for log file in current request's tests directory
-                String currentRequestId = RequestContext.getRequestId();
-                if (currentRequestId == null || !config.isRequestGroupingEnabled()) {
-                    sendResponse(exchange, 404, "No active request context");
+                // Look for log file across all request directories
+                Path logFile = findLogFile(filename);
+                if (logFile == null) {
+                    sendResponse(exchange, 404, "Log file not found: " + filename);
                     return;
-                }
-                
-                String testsDir = RequestLogManager.getInstance().createRequestSubdir(currentRequestId, "tests");
-                Path logFile = Paths.get(testsDir, filename);
-                
-                if (!Files.exists(logFile)) {
-                    // Also check in system log directory as fallback
-                    Path systemLogFile = Paths.get(System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system", filename);
-                    if (Files.exists(systemLogFile)) {
-                        logFile = systemLogFile;
-                    } else {
-                        sendResponse(exchange, 404, "Log file not found: " + filename);
-                        return;
-                    }
                 }
                 
                 // Serve the log file content
@@ -405,6 +392,54 @@ public class Tester {
                 }
             }
         }
+    }
+    
+    /**
+     * Find log file by searching across all request directories
+     */
+    private Path findLogFile(String filename) {
+        try {
+            // First try current request context if available
+            String currentRequestId = RequestContext.getRequestId();
+            if (currentRequestId != null && config.isRequestGroupingEnabled()) {
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(currentRequestId, "tests");
+                Path currentRequestLogFile = Paths.get(testsDir, filename);
+                if (Files.exists(currentRequestLogFile)) {
+                    return currentRequestLogFile;
+                }
+            }
+            
+            // Search all request directories
+            String logBaseDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/requests";
+            Path requestsDir = Paths.get(logBaseDir);
+            if (Files.exists(requestsDir) && Files.isDirectory(requestsDir)) {
+                try (java.util.stream.Stream<Path> requestDirs = Files.list(requestsDir)) {
+                    for (Path requestDir : requestDirs.sorted((a, b) -> b.getFileName().toString().compareTo(a.getFileName().toString())).collect(Collectors.toList())) {
+                        if (Files.isDirectory(requestDir)) {
+                            Path testsDir = requestDir.resolve("tests");
+                            if (Files.exists(testsDir) && Files.isDirectory(testsDir)) {
+                                Path logFile = testsDir.resolve(filename);
+                                if (Files.exists(logFile)) {
+                                    logger.info("Found log file: " + logFile.toString());
+                                    return logFile;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: check system log directory
+            Path systemLogFile = Paths.get(System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system", filename);
+            if (Files.exists(systemLogFile)) {
+                return systemLogFile;
+            }
+            
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Error searching for log file: " + filename, e);
+        }
+        
+        return null;
     }
     
     private JSONObject runTest(JSONObject request) throws Exception {
