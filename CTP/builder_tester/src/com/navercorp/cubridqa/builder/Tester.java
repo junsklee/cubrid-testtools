@@ -97,6 +97,7 @@ public class Tester {
         this.server = HttpServer.create(new InetSocketAddress(config.getTesterPort()), 0);
         this.server.createContext("/test", new TestRequestHandler());
         this.server.createContext("/health", new HealthCheckHandler());
+        this.server.createContext("/log/", new LogRequestHandler());
         int maxThreads = Math.max(1, config.getMaxConcurrentTests());
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }
@@ -340,6 +341,68 @@ public class Tester {
                     .put("message", e.getMessage());
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 500, error.toString());
+            }
+        }
+    }
+    
+    private class LogRequestHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "Method not allowed");
+                return;
+            }
+            
+            try {
+                String path = exchange.getRequestURI().getPath();
+                // Extract filename from /log/filename.log
+                String filename = path.substring(path.lastIndexOf('/') + 1);
+                
+                if (filename.isEmpty() || !filename.endsWith(".log")) {
+                    sendResponse(exchange, 400, "Invalid log filename");
+                    return;
+                }
+                
+                // Look for log file in current request's tests directory
+                String currentRequestId = RequestContext.getRequestId();
+                if (currentRequestId == null || !config.isRequestGroupingEnabled()) {
+                    sendResponse(exchange, 404, "No active request context");
+                    return;
+                }
+                
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(currentRequestId, "tests");
+                Path logFile = Paths.get(testsDir, filename);
+                
+                if (!Files.exists(logFile)) {
+                    // Also check in system log directory as fallback
+                    Path systemLogFile = Paths.get(System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system", filename);
+                    if (Files.exists(systemLogFile)) {
+                        logFile = systemLogFile;
+                    } else {
+                        sendResponse(exchange, 404, "Log file not found: " + filename);
+                        return;
+                    }
+                }
+                
+                // Serve the log file content
+                byte[] content = Files.readAllBytes(logFile);
+                exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+                exchange.getResponseHeaders().set("Content-Length", String.valueOf(content.length));
+                exchange.sendResponseHeaders(200, content.length);
+                
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(content);
+                }
+                
+                logger.info("Served log file: " + filename + " (" + content.length + " bytes)");
+                
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Error serving log file", e);
+                try {
+                    sendResponse(exchange, 500, "Internal server error: " + e.getMessage());
+                } catch (IOException ignore) {
+                    // Ignore secondary error
+                }
             }
         }
     }

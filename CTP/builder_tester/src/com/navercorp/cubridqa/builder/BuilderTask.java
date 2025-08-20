@@ -902,11 +902,44 @@ public class BuilderTask {
                     taskLogger.warning("Failed to save multipart log files: " + e.getMessage());
                 }
             }
-            // Handle attempt log metadata from JSON response
+            // Handle attempt log metadata from JSON response - fetch actual log content from remote tester
             else if (responseJson.has("attemptLogMetadata")) {
                 try {
                     JSONArray metadata = responseJson.getJSONArray("attemptLogMetadata");
-                    taskLogger.info("Received metadata for " + metadata.length() + " attempt logs");
+                    taskLogger.info("Received metadata for " + metadata.length() + " attempt logs - fetching content from remote tester");
+                    
+                    if (requestId != null && config.isRequestGroupingEnabled()) {
+                        String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                        
+                        for (int i = 0; i < metadata.length(); i++) {
+                            JSONObject attemptMeta = metadata.getJSONObject(i);
+                            String logFileName = attemptMeta.getString("logFileName");
+                            int attemptNum = attemptMeta.getInt("attempt");
+                            String status = attemptMeta.optString("status", "unknown");
+                            
+                            // Fetch log content from remote tester
+                            try {
+                                String logContent = fetchLogContentFromRemoteTester(host, port, logFileName);
+                                if (logContent != null && !logContent.isEmpty()) {
+                                    Path logFile = Paths.get(testsDir, logFileName);
+                                    Files.write(logFile, logContent.getBytes("UTF-8"));
+                                    taskLogger.info("Saved attempt " + attemptNum + " log (" + status + ") to: " + logFile.toString());
+                                } else {
+                                    taskLogger.warning("Empty or null log content received for: " + logFileName);
+                                }
+                            } catch (Exception logFetchEx) {
+                                taskLogger.warning("Failed to fetch log content for " + logFileName + ": " + logFetchEx.getMessage());
+                            }
+                        }
+                        
+                        // Set logPath to the final attempt for backward compatibility
+                        if (metadata.length() > 0) {
+                            JSONObject lastAttemptMeta = metadata.getJSONObject(metadata.length() - 1);
+                            String lastFileName = lastAttemptMeta.getString("logFileName");
+                            result.put("logPath", Paths.get(testsDir, lastFileName).toString());
+                        }
+                    }
+                    
                     // Store metadata for report generation
                     result.put("attemptLogMetadata", metadata);
                 } catch (Exception e) {
@@ -1264,6 +1297,45 @@ public class BuilderTask {
         }
         
         return request;
+    }
+    
+    /**
+     * Fetch log content from remote tester
+     */
+    private String fetchLogContentFromRemoteTester(String host, int port, String logFileName) throws Exception {
+        String url = "http://" + host + ":" + port + "/log/" + logFileName;
+        taskLogger.info("Fetching log content from: " + url);
+        
+        HttpURLConnection conn = null;
+        try {
+            URL logUrl = new URL(url);
+            conn = (HttpURLConnection) logUrl.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10000); // 10 seconds
+            conn.setReadTimeout(30000); // 30 seconds
+            
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                StringBuilder content = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        content.append(line).append("\n");
+                    }
+                }
+                return content.toString();
+            } else if (responseCode == 404) {
+                taskLogger.warning("Log file not found on remote tester: " + logFileName);
+                return null;
+            } else {
+                taskLogger.warning("Failed to fetch log from remote tester. HTTP " + responseCode + " for: " + url);
+                return null;
+            }
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
     }
     
     /**
