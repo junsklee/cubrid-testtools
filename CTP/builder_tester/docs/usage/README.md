@@ -164,7 +164,7 @@ curl -X POST http://localhost:8089/build \
   }'
 ```
 
-Tests are distributed using round-robin algorithm. See docs/MULTI_NODE_TESTING.md for details.
+Tests are distributed using round-robin algorithm. Remote testers automatically serve log files via HTTP endpoints for comprehensive result viewing. See docs/MULTI_NODE_TESTING.md for details.
 
 ## Ccache Performance Optimization
 
@@ -207,6 +207,22 @@ See docs/CCACHE_GUIDE.md for detailed setup.
 - Service stdout: `bin/builder_output.log`, `bin/tester_output.log`
 - See log/LOG_MANAGEMENT.md for comprehensive logging architecture
 
+## Report System
+
+Enhanced HTML reports provide detailed test result analysis:
+
+### Interactive Report Features
+- **Status-based color coding**: Green (pass), red (fail), orange (errors), gray (unknown)
+- **Multi-attempt log viewing**: Individual log access for each test retry
+- **Context-aware navigation**: Smart modal navigation preserving current view
+- **Flaky test detection**: Automatic identification of tests with mixed results
+
+### Viewing Test Execution Logs
+- Click any test result in the report to view detailed execution logs
+- Multi-attempt tests show separate logs for each retry attempt
+- Remote test logs are automatically fetched and displayed
+- Modal windows provide easy navigation between different test attempts
+
 ## Troubleshooting
 
 - Docker permissions: `docker ps`
@@ -214,3 +230,4 @@ See docs/CCACHE_GUIDE.md for detailed setup.
 - Build issues: inspect `log/requests/req_*/builds/*`
 - Test issues: inspect `log/requests/req_*/tests/*` and container logs `docker logs <container>`
 - Multi-node issues: verify all tester nodes are reachable and check network connectivity
+- Report modal issues: check browser console for JavaScript errors, verify log files exist in request directory

@@ -4,16 +4,23 @@
 
 - Builder (port 8089): HTTP server; receives build requests, orchestrates builds/tests, sends callbacks
 - Tester (port 8090): HTTP server; executes a single test against a provided build package
+  - **Enhanced with `/log/{filename}` endpoint**: Serves test execution logs to remote builders
+  - **Multi-attempt log support**: Stores separate log files for each test retry
 - DockerBuildManager: initializes/pulls build image and runs builds
 - DockerTesterManager: initializes/pulls test image
 - DockerUtils: Docker helpers (availability checks, image pull, run helpers)
+- **ReportHandler**: Enhanced report system with improved modal functionality
+- **MultipartHelper**: Handles efficient log transfer via HTTP multipart responses
 
 ## Flow
 
 1. Client POSTs to Builder `/build` with `commits[]`, `tests[]`, `callbackUrl`, `workerIp`, `buildType`.
 2. Builder task builds each commit (Docker or direct) in isolation onto a common baseline (parent of earliest commit). For each built artifact, it calls Tester `/test` on `workerIp` with the test details.
 3. Tester extracts the build, configures CUBRID, runs the shell test in Docker (or direct fallback). The testcases mount is read-write. Result is read from `<scriptBase>.result` (e.g., `foo.sh` → `foo.result`).
-4. Builder aggregates results and POSTs them to `callbackUrl`.
+   - **Multi-attempt execution**: If retry is configured, creates separate log files (test.log, test.2.log, etc.)
+   - **Response with metadata**: Returns `attemptLogMetadata` array with status and filename for each attempt
+4. **Enhanced result processing**: Builder fetches log files from remote testers using `/log/{filename}` endpoint
+5. Builder aggregates results and POSTs them to `callbackUrl` with comprehensive log data.
 
 ## Execution modes
 

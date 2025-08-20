@@ -62,7 +62,7 @@ For remote testers, you'll see:
 ```
 
 ### Tester Logs
-Each tester will show when it downloads packages:
+Each tester will show when it downloads packages and serves logs:
 ```
 [INFO] Build package is a URL: http://10.0.0.5:8089/download/build/cubrid_6ea587e.tar.gz
 [INFO] Downloading build package from: http://10.0.0.5:8089/download/build/cubrid_6ea587e.tar.gz
@@ -70,6 +70,8 @@ Each tester will show when it downloads packages:
 [INFO] Download progress: 50%
 [INFO] Download progress: 75%
 [INFO] Build package downloaded successfully: /tmp/tester_work/test_123/cubrid_6ea587e.tar.gz
+[INFO] Serving log file request: /log/docker_opt_6ea587e_test1.log
+[INFO] Found log file at: /home/qahome/cubrid-testtools/CTP/builder_tester/log/requests/req_20250820_232327_192d/tests/docker_opt_6ea587e_test1.log
 ```
 
 ## Performance Benefits
@@ -132,12 +134,14 @@ For large build packages (>100MB):
    - Detection of local vs remote testers
    - HTTP URL generation for remote testers
    - Enhanced logging for test assignments
+   - **Remote log retrieval**: Fetches test execution logs from remote testers using HTTP
 
 3. **Tester.java**
    - Automatic detection of URL vs file path
    - HTTP download capability with progress logging
    - Package caching to avoid re-downloads
    - Cache management (auto-cleanup)
+   - **HTTP log endpoint**: `/log/{filename}` serves test execution logs to builders
 
 ### Design Decisions
 - **HTTP Transfer**: Chosen for simplicity and portability
