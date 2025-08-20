@@ -1,9 +1,11 @@
 /**
- * CUBRID Test Report Server
+ * CUBRID Test Report Server - Enhanced Version
  * 
- * A standalone Node.js server for receiving test results and generating
- * interactive HTML reports. This can be used as an alternative to the
- * Java-based report handler.
+ * Enhanced features:
+ * - Build log viewer
+ * - Test execution log viewer
+ * - Modal for test case details
+ * - Clickable result cells to view logs
  * 
  * Usage:
  *   node report-server.js [port]
@@ -28,12 +30,35 @@ async function ensureDirectories() {
     const requestsDir = path.join(LOG_BASE_DIR, 'requests');
     try {
         await fs.mkdir(requestsDir, { recursive: true });
-        console.log(`✓ Log directory ready: ${requestsDir}`);
+        console.log(`Log directory ready: ${requestsDir}`);
     } catch (err) {
-        console.error(`✗ Failed to create log directory: ${err.message}`);
+        console.error(`Failed to create log directory: ${err.message}`);
     }
 }
-// Generate HTML report template
+
+// Helper function to read log files
+async function readLogFile(requestId, logType, fileName) {
+    try {
+        const logPath = path.join(LOG_BASE_DIR, 'requests', requestId, logType, fileName);
+        const content = await fs.readFile(logPath, 'utf8');
+        return { success: true, content };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+// Helper function to list files in a directory
+async function listLogFiles(requestId, logType) {
+    try {
+        const dirPath = path.join(LOG_BASE_DIR, 'requests', requestId, logType);
+        const files = await fs.readdir(dirPath);
+        return { success: true, files };
+    } catch (err) {
+        return { success: false, files: [] };
+    }
+}
+
+// Generate enhanced HTML report template
 function generateReportHTML(data, requestId) {
     const timestamp = new Date().toISOString();
     const resultsJSON = JSON.stringify(data);
@@ -59,8 +84,7 @@ function generateReportHTML(data, requestId) {
             min-height: 100vh;
             color: #1f2937;
             line-height: 1.6;
-        }
-        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+        }        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
         .header { 
             background: rgba(255,255,255,0.95); 
             backdrop-filter: blur(10px); 
@@ -68,7 +92,8 @@ function generateReportHTML(data, requestId) {
             padding: 2rem; 
             margin-bottom: 2rem; 
             box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); 
-        }        .header h1 { 
+        }
+        .header h1 { 
             font-size: 2.5rem; 
             background: var(--primary-gradient); 
             -webkit-background-clip: text; 
@@ -76,6 +101,24 @@ function generateReportHTML(data, requestId) {
             margin-bottom: 0.5rem; 
         }
         .metadata { display: flex; gap: 2rem; color: #6b7280; font-size: 0.9rem; flex-wrap: wrap; }
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-weight: 500;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: scale(1.05);
+        }
         .stats-grid { 
             display: grid; 
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
@@ -102,6 +145,22 @@ function generateReportHTML(data, requestId) {
             background: #f3f4f6; 
         }
         td { padding: 1rem; border-bottom: 1px solid #e5e7eb; }
+        .test-name {
+            font-family: monospace;
+            cursor: pointer;
+            color: #3b82f6;
+            text-decoration: underline;
+        }
+        .test-name:hover {
+            color: #2563eb;
+        }
+        .result-cell {
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .result-cell:hover {
+            background-color: #f3f4f6;
+        }
         .result-pass { background: #d1fae5; color: #065f46; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }
         .result-fail { background: #fee2e2; color: #991b1b; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }
         .result-error { background: #fef3c7; color: #92400e; padding: 0.25rem 0.75rem; border-radius: 0.375rem; }
@@ -110,7 +169,6 @@ function generateReportHTML(data, requestId) {
             background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
             color: #92400e;
         }
-        
         .verdict-flaky {
             background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
             color: #0c4a6e;
@@ -118,20 +176,117 @@ function generateReportHTML(data, requestId) {
         .verdict-bug { background: #fee2e2; color: #991b1b; }
         .verdict-preexisting { background: #e0e7ff; color: #3730a3; }
         .verdict-success { background: #d1fae5; color: #065f46; }
+        
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.3s;
+        }
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 2rem;
+            border-radius: 1rem;
+            width: 90%;
+            max-width: 1200px;
+            max-height: 80vh;
+            overflow-y: auto;
+            animation: slideIn 0.3s;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #1f2937;
+        }
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 2rem;
+            cursor: pointer;
+            color: #6b7280;
+        }
+        .close-btn:hover {
+            color: #374151;
+        }
+        .log-viewer {
+            background: #1f2937;
+            color: #e5e7eb;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            line-height: 1.5;
+            overflow-x: auto;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .log-section {
+            margin-bottom: 1.5rem;
+        }
+        .log-section-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 0.5rem;
+        }
+        .file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .file-link {
+            color: #3b82f6;
+            text-decoration: none;
+            padding: 0.5rem;
+            background: #f3f4f6;
+            border-radius: 0.375rem;
+            display: inline-block;
+            transition: background-color 0.2s;
+        }
+        .file-link:hover {
+            background: #e5e7eb;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @keyframes slideIn {
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🧪 CUBRID Test Results</h1>
+            <h1>CUBRID Test Results</h1>
             <div class="metadata">
                 <div><strong>Request ID:</strong> ${requestId}</div>
                 <div><strong>Generated:</strong> ${timestamp}</div>
                 <div><strong>Total Tests:</strong> <span id="totalTests">-</span></div>
                 <div><strong>Commits:</strong> <span id="totalCommits">-</span></div>
             </div>
-        </div>
-        
+            <div class="action-buttons">
+                <button class="btn" onclick="viewBuildLogs()">View Build Logs</button>
+                <button class="btn" onclick="exportJSON()">Export JSON</button>
+                <button class="btn" onclick="exportCSV()">Export CSV</button>
+            </div>
+        </div>        
         <div class="stats-grid">
             <div class="stat-card">
                 <div style="font-size: 2.5rem; font-weight: bold; color: var(--success-color);" id="passedCount">0</div>
@@ -152,7 +307,8 @@ function generateReportHTML(data, requestId) {
             <div class="stat-card">
                 <div style="font-size: 2.5rem; font-weight: bold; color: #0c4a6e;" id="flakyCount">0</div>
                 <div style="color: #6b7280; font-size: 0.9rem;">Flaky Tests</div>
-            </div>            <div class="stat-card">
+            </div>
+            <div class="stat-card">
                 <div style="font-size: 2.5rem; font-weight: bold; color: var(--info-color);" id="passRate">0%</div>
                 <div style="color: #6b7280; font-size: 0.9rem;">Pass Rate</div>
             </div>
@@ -172,8 +328,19 @@ function generateReportHTML(data, requestId) {
         </div>
     </div>
     
+    <!-- Modal for viewing details -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">Test Details</h2>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <div id="modalBody"></div>
+        </div>
+    </div>    
     <script>
         const rawData = ${resultsJSON};
+        const requestId = '${requestId}';
         let processedData = {};
         let commits = [];
         
@@ -185,7 +352,8 @@ function generateReportHTML(data, requestId) {
         function processData() {
             const commitSet = new Set();
             const testGroups = {};
-            const results = rawData.results || rawData;            
+            const results = rawData.results || rawData;
+            
             if (Array.isArray(results)) {
                 results.forEach(result => {
                     const commit = result.commit || 'unknown';
@@ -193,20 +361,18 @@ function generateReportHTML(data, requestId) {
                     const status = result.status || 'error';
                     const flaky = result.flaky || false;
                     const attempts = result.attempts || 1;
+                    const logPath = result.logPath || null;
                     
                     commitSet.add(commit);
                     if (!testGroups[test]) testGroups[test] = {};
                     
-                    // Store full result object if it has extra info, otherwise just status
-                    if (flaky || attempts > 1) {
-                        testGroups[test][commit] = {
-                            status: status,
-                            flaky: flaky,
-                            attempts: attempts
-                        };
-                    } else {
-                        testGroups[test][commit] = status;
-                    }
+                    testGroups[test][commit] = {
+                        status: status,
+                        flaky: flaky,
+                        attempts: attempts,
+                        logPath: logPath,
+                        message: result.message || ''
+                    };
                 });
             }
             
@@ -216,8 +382,7 @@ function generateReportHTML(data, requestId) {
             document.getElementById('totalTests').textContent = Object.keys(testGroups).length;
             document.getElementById('totalCommits').textContent = commits.length;
             updateStatistics();
-        }
-        
+        }        
         function updateStatistics() {
             let totalTests = 0, passedTests = 0, failedTests = 0, unstableTests = 0, errorTests = 0, flakyTests = 0;
             
@@ -244,28 +409,21 @@ function generateReportHTML(data, requestId) {
         function calculateFailCount(testName) {
             let failCount = 0;
             commits.forEach(commit => {
-                const resultData = processedData[testName][commit];
-                let status;
-                if (typeof resultData === 'object' && resultData.status) {
-                    status = resultData.status;
-                } else {
-                    status = resultData || 'error';
-                }
-                if (status !== 'pass') failCount++;
+                const result = processedData[testName][commit];
+                if (result && result.status !== 'pass') failCount++;
             });
             return failCount;
-        }
-        
+        }        
         function getTestVerdict(testName) {
-            // Check for flaky test first - look for any result marked as flaky
+            // Check for flaky test first
             let hasFlaky = false;
             let maxAttempts = 1;
             
             commits.forEach(commit => {
-                const resultData = processedData[testName][commit];
-                if (resultData && typeof resultData === 'object') {
-                    if (resultData.flaky) hasFlaky = true;
-                    if (resultData.attempts > maxAttempts) maxAttempts = resultData.attempts;
+                const result = processedData[testName][commit];
+                if (result && result.flaky) {
+                    hasFlaky = true;
+                    if (result.attempts > maxAttempts) maxAttempts = result.attempts;
                 }
             });
             
@@ -273,19 +431,14 @@ function generateReportHTML(data, requestId) {
                 return { text: 'Flaky: Passed after ' + maxAttempts + ' attempts', class: 'verdict-flaky' };
             }
             
-            // Check for errors (execution_error, environment_error, build_error)
+            // Check for errors
             const errorCommits = [];
             const buildErrs = [];
             commits.forEach(commit => {
-                const resultData = processedData[testName][commit];
-                let status;
-                if (typeof resultData === 'object' && resultData.status) {
-                    status = resultData.status;
-                } else {
-                    status = resultData || 'error';
-                }
+                const result = processedData[testName][commit];
+                if (!result) return;
                 
-                const statusLower = status.toString().toLowerCase();
+                const statusLower = result.status.toString().toLowerCase();
                 if (statusLower === 'build_failed') {
                     buildErrs.push(commit.substring(0,7));
                 } else if (statusLower === 'execution_error' || statusLower === 'environment_error' || statusLower === 'error') {
@@ -300,12 +453,8 @@ function generateReportHTML(data, requestId) {
                 return { text: 'Error: Test execution failed', class: 'verdict-error' };
             }
             
-            // Fall back to traditional verdict logic
+            // Traditional verdict logic
             const failCount = calculateFailCount(testName);
-            return getVerdict(testName, failCount);
-        }
-        
-        function getVerdict(testName, failCount) {
             const numCommits = commits.length;
             
             if (failCount === 0) {
@@ -313,14 +462,8 @@ function generateReportHTML(data, requestId) {
             } else if (failCount === 1) {
                 let failedCommit = null;
                 commits.forEach(commit => {
-                    const resultData = processedData[testName][commit];
-                    let status;
-                    if (typeof resultData === 'object' && resultData.status) {
-                        status = resultData.status;
-                    } else {
-                        status = resultData || 'error';
-                    }
-                    if (status !== 'pass') {
+                    const result = processedData[testName][commit];
+                    if (result && result.status !== 'pass') {
                         failedCommit = commit.substring(0, 7);
                     }
                 });
@@ -330,10 +473,10 @@ function generateReportHTML(data, requestId) {
             } else {
                 return { text: "Unstable: Fails intermittently across commits", class: "verdict-unstable" };
             }
-        }
-        
+        }        
         function renderTable() {
-            const headerRow = document.getElementById('tableHeader');            const tbody = document.getElementById('tableBody');
+            const headerRow = document.getElementById('tableHeader');
+            const tbody = document.getElementById('tableBody');
             
             // Clear and add commit columns
             while (headerRow.children.length > 1) headerRow.removeChild(headerRow.children[1]);
@@ -353,41 +496,40 @@ function generateReportHTML(data, requestId) {
                 const verdict = getTestVerdict(test);
                 const failCount = calculateFailCount(test);
                 
-                // Test name
+                // Test name - clickable to show details
                 const testCell = document.createElement('td');
-                testCell.style.fontFamily = 'monospace';
-                testCell.textContent = test;
+                testCell.innerHTML = '<span class="test-name" onclick="showTestDetails(\'' + 
+                    test.replace(/'/g, "\\'") + '\')">' + test + '</span>';
                 row.appendChild(testCell);
                 
-                // Commit results
+                // Commit results - clickable to show logs
                 commits.forEach(commit => {
                     const cell = document.createElement('td');
+                    cell.className = 'result-cell';
                     cell.style.textAlign = 'center';
-                    const resultData = processedData[test][commit];
-                    let status, isFlaky = false, attempts = 1;
                     
-                    if (typeof resultData === 'object' && resultData.status) {
-                        status = resultData.status;
-                        isFlaky = resultData.flaky || false;
-                        attempts = resultData.attempts || 1;
-                    } else {
-                        status = resultData || 'error';
+                    const result = processedData[test][commit];
+                    if (!result) {
+                        cell.innerHTML = '<span class="result-error">N/A</span>';
+                        row.appendChild(cell);
+                        return;
                     }
                     
                     let statusClass = 'result-error';
-                    let statusText = '⚠️ ERROR';
+                    let statusText = 'ERROR';
                     
-                    if (status === 'pass') {
-                        statusClass = isFlaky ? 'result-flaky' : 'result-pass';
-                        statusText = isFlaky ? '🔄 FLAKY(' + attempts + ')' : '✅ PASS';
-                    } else if (status === 'fail') {
+                    if (result.status === 'pass') {
+                        statusClass = result.flaky ? 'result-flaky' : 'result-pass';
+                        statusText = result.flaky ? 'FLAKY(' + result.attempts + ')' : 'PASS';
+                    } else if (result.status === 'fail') {
                         statusClass = 'result-fail';
-                        statusText = '❌ FAIL';
-                    } else if (status === 'build_failed') {
-                        statusText = '🔨 BUILD';
+                        statusText = 'FAIL';
+                    } else if (result.status === 'build_failed') {
+                        statusText = 'BUILD';
                     }
                     
-                    cell.innerHTML = '<span class="' + statusClass + '">' + statusText + '</span>';
+                    cell.innerHTML = '<span class="' + statusClass + '" onclick="showExecutionLog(\'' + 
+                        test.replace(/'/g, "\\'") + '\', \'' + commit + '\')">' + statusText + '</span>';
                     row.appendChild(cell);
                 });
                 
@@ -406,6 +548,281 @@ function generateReportHTML(data, requestId) {
                 
                 tbody.appendChild(row);
             });
+        }        
+        // Modal functions
+        function showModal(title, content) {
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalBody').innerHTML = content;
+            document.getElementById('detailModal').style.display = 'block';
+        }
+        
+        function closeModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+        
+        // Show test case details
+        async function showTestDetails(testName) {
+            let content = '<div class="log-section">';
+            content += '<h3 class="log-section-title">Test Information</h3>';
+            content += '<p><strong>Test Path:</strong> ' + testName + '</p>';
+            content += '</div>';
+            
+            // Show results for each commit
+            content += '<div class="log-section">';
+            content += '<h3 class="log-section-title">Execution Results</h3>';
+            content += '<div class="file-list">';
+            
+            commits.forEach(commit => {
+                const result = processedData[testName][commit];
+                if (result) {
+                    const commitShort = commit.substring(0, 7);
+                    const status = result.status.toUpperCase();
+                    const statusColor = result.status === 'pass' ? '#10b981' : 
+                                       result.status === 'fail' ? '#ef4444' : '#f59e0b';
+                    
+                    content += '<div style="margin-bottom: 1rem; padding: 1rem; background: #f9fafb; border-radius: 0.5rem;">';
+                    content += '<div style="display: flex; justify-content: space-between; align-items: center;">';
+                    content += '<strong>Commit ' + commitShort + ':</strong>';
+                    content += '<span style="color: ' + statusColor + '; font-weight: bold;">' + status + '</span>';
+                    content += '</div>';
+                    
+                    if (result.flaky) {
+                        content += '<p style="color: #0c4a6e; margin-top: 0.5rem;">Flaky test - passed after ' + 
+                                  result.attempts + ' attempts</p>';
+                    }
+                    
+                    if (result.message) {
+                        content += '<p style="color: #6b7280; margin-top: 0.5rem;">' + result.message + '</p>';
+                    }
+                    
+                    content += '<button class="btn" style="margin-top: 0.5rem;" onclick="showExecutionLog(\'' + 
+                              testName.replace(/'/g, "\\'") + '\', \'' + commit + '\')">View Execution Log</button>';
+                    content += '</div>';
+                }
+            });
+            
+            content += '</div>';
+            content += '</div>';
+            
+            // Try to load test script and related files
+            content += '<div class="log-section">';
+            content += '<h3 class="log-section-title">Test Files</h3>';
+            content += '<div id="testFilesSection">Loading...</div>';
+            content += '</div>';
+            
+            showModal('Test Details: ' + testName, content);
+            
+            // Load test files asynchronously
+            loadTestFiles(testName);
+        }        
+        // Show execution log for a specific test and commit
+        async function showExecutionLog(testName, commit) {
+            const result = processedData[testName][commit];
+            if (!result) {
+                showModal('Error', '<p>No log available for this test execution.</p>');
+                return;
+            }
+            
+            const commitShort = commit.substring(0, 7);
+            let content = '<div class="log-section">';
+            content += '<h3 class="log-section-title">Execution Details</h3>';
+            content += '<p><strong>Test:</strong> ' + testName + '</p>';
+            content += '<p><strong>Commit:</strong> ' + commitShort + ' (' + commit + ')</p>';
+            content += '<p><strong>Status:</strong> ' + result.status.toUpperCase() + '</p>';
+            
+            if (result.flaky) {
+                content += '<p><strong>Attempts:</strong> ' + result.attempts + ' (Flaky test)</p>';
+            }
+            
+            content += '</div>';
+            
+            content += '<div class="log-section">';
+            content += '<h3 class="log-section-title">Execution Log</h3>';
+            content += '<div id="logContent" class="log-viewer">Loading log...</div>';
+            content += '</div>';
+            
+            showModal('Execution Log: ' + testName + ' @ ' + commitShort, content);
+            
+            // Load log content
+            loadExecutionLog(testName, commit);
+        }
+        
+        // Load execution log via API
+        async function loadExecutionLog(testName, commit) {
+            try {
+                const safeTestName = testName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                const commitShort = commit.substring(0, 7);
+                
+                // Try different log file patterns
+                const patterns = [
+                    'docker_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log',
+                    'direct_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log',
+                    'test_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log'
+                ];
+                
+                let logFound = false;
+                for (const pattern of patterns) {
+                    const response = await fetch('/api/log/' + requestId + '/tests/' + pattern);
+                    if (response.ok) {
+                        const logContent = await response.text();
+                        document.getElementById('logContent').textContent = logContent;
+                        logFound = true;
+                        break;
+                    }
+                }
+                
+                if (!logFound) {
+                    // Try to list available logs
+                    const listResponse = await fetch('/api/logs/' + requestId + '/tests');
+                    if (listResponse.ok) {
+                        const files = await listResponse.json();
+                        const relevantFiles = files.filter(f => 
+                            f.includes(commitShort) && f.includes(safeTestName.split('/').pop().replace('.sh', ''))
+                        );
+                        
+                        if (relevantFiles.length > 0) {
+                            // Show list of available logs
+                            let content = '<p>Available log files:</p><div class="file-list">';
+                            relevantFiles.forEach(file => {
+                                content += '<a href="#" class="file-link" onclick="loadSpecificLog(\'' + 
+                                          file + '\'); return false;">' + file + '</a>';
+                            });
+                            content += '</div>';
+                            document.getElementById('logContent').innerHTML = content;
+                        } else {
+                            document.getElementById('logContent').textContent = 'No log file found for this execution.';
+                        }
+                    } else {
+                        document.getElementById('logContent').textContent = 'Failed to load log file.';
+                    }
+                }
+            } catch (error) {
+                document.getElementById('logContent').textContent = 'Error loading log: ' + error.message;
+            }
+        }        
+        // Load specific log file
+        async function loadSpecificLog(fileName) {
+            try {
+                const response = await fetch('/api/log/' + requestId + '/tests/' + fileName);
+                if (response.ok) {
+                    const logContent = await response.text();
+                    document.getElementById('logContent').textContent = logContent;
+                } else {
+                    document.getElementById('logContent').textContent = 'Failed to load log file: ' + fileName;
+                }
+            } catch (error) {
+                document.getElementById('logContent').textContent = 'Error loading log: ' + error.message;
+            }
+        }
+        
+        // View build logs
+        async function viewBuildLogs() {
+            let content = '<div class="log-section">';
+            content += '<h3 class="log-section-title">Build Logs</h3>';
+            content += '<div id="buildLogsSection">Loading...</div>';
+            content += '</div>';
+            
+            showModal('Build Logs', content);
+            
+            // Load build logs
+            try {
+                const response = await fetch('/api/logs/' + requestId + '/builds');
+                if (response.ok) {
+                    const files = await response.json();
+                    let logsContent = '<div class="file-list">';
+                    
+                    if (files.length === 0) {
+                        logsContent = '<p>No build logs available.</p>';
+                    } else {
+                        files.forEach(file => {
+                            const commitShort = file.replace('build_', '').replace('.log', '');
+                            logsContent += '<div style="margin-bottom: 1rem;">';
+                            logsContent += '<button class="btn" onclick="loadBuildLog(\'' + file + '\')">';
+                            logsContent += 'Build Log - Commit ' + commitShort + '</button>';
+                            logsContent += '</div>';
+                        });
+                    }
+                    
+                    logsContent += '</div>';
+                    document.getElementById('buildLogsSection').innerHTML = logsContent;
+                } else {
+                    document.getElementById('buildLogsSection').innerHTML = '<p>Failed to load build logs.</p>';
+                }
+            } catch (error) {
+                document.getElementById('buildLogsSection').innerHTML = '<p>Error: ' + error.message + '</p>';
+            }
+        }
+        
+        // Load specific build log
+        async function loadBuildLog(fileName) {
+            try {
+                const response = await fetch('/api/log/' + requestId + '/builds/' + fileName);
+                if (response.ok) {
+                    const logContent = await response.text();
+                    const content = '<div class="log-section">' +
+                                   '<h3 class="log-section-title">' + fileName + '</h3>' +
+                                   '<div class="log-viewer">' + escapeHtml(logContent) + '</div>' +
+                                   '</div>';
+                    showModal('Build Log: ' + fileName, content);
+                } else {
+                    alert('Failed to load build log: ' + fileName);
+                }
+            } catch (error) {
+                alert('Error loading build log: ' + error.message);
+            }
+        }
+        
+        // Load test files (stub for now)
+        async function loadTestFiles(testName) {
+            const section = document.getElementById('testFilesSection');
+            section.innerHTML = '<p>Test script: ' + testName + '</p>' +
+                               '<p style="color: #6b7280;">Additional test files would be listed here if available.</p>';
+        }
+        
+        // Utility function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Export functions
+        function exportJSON() {
+            const dataStr = JSON.stringify(rawData, null, 2);
+            const dataBlob = new Blob([dataStr], {type: 'application/json'});
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = requestId + '_results.json';
+            link.click();
+        }
+        
+        function exportCSV() {
+            let csv = 'Test,Commit,Status,Flaky,Attempts\\n';
+            Object.keys(processedData).forEach(test => {
+                commits.forEach(commit => {
+                    const result = processedData[test][commit];
+                    if (result) {
+                        csv += test + ',' + commit + ',' + result.status + ',' + 
+                               (result.flaky || false) + ',' + (result.attempts || 1) + '\\n';
+                    }
+                });
+            });
+            
+            const dataBlob = new Blob([csv], {type: 'text/csv'});
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = requestId + '_results.csv';
+            link.click();
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailModal');
+            if (event.target === modal) {
+                closeModal();
+            }
         }
     </script>
 </body>
@@ -417,6 +834,57 @@ function generateReportHTML(data, requestId) {
 async function handleRequest(req, res) {
     const parsedUrl = url.parse(req.url, true);
     const pathname = parsedUrl.pathname;
+    
+    // CORS headers for API endpoints
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+    
+    // API endpoint to get log file
+    if (pathname.startsWith('/api/log/')) {
+        const pathParts = pathname.split('/').filter(p => p);
+        if (pathParts.length >= 5) {
+            const requestId = pathParts[2];
+            const logType = pathParts[3]; // 'builds' or 'tests'
+            const fileName = pathParts.slice(4).join('/');
+            
+            const result = await readLogFile(requestId, logType, fileName);
+            if (result.success) {
+                res.writeHead(200, { 'Content-Type': 'text/plain; charset=UTF-8' });
+                res.end(result.content);
+            } else {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Log file not found' }));
+            }
+        } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid log path' }));
+        }
+        return;
+    }
+    
+    // API endpoint to list log files
+    if (pathname.startsWith('/api/logs/')) {
+        const pathParts = pathname.split('/').filter(p => p);
+        if (pathParts.length >= 3) {
+            const requestId = pathParts[2];
+            const logType = pathParts[3]; // 'builds' or 'tests'
+            
+            const result = await listLogFiles(requestId, logType);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result.files));
+        } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid path' }));
+        }
+        return;
+    }
     
     if (pathname === '/callback' && req.method === 'POST') {
         // Handle callback POST request
@@ -430,8 +898,8 @@ async function handleRequest(req, res) {
             try {
                 const data = JSON.parse(body);
                 
-                // Generate request ID
-                const requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                // Generate request ID if not provided
+                const requestId = data.taskId || 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
                 const requestDir = path.join(LOG_BASE_DIR, 'requests', requestId);
                 
                 // Create directory and save files
@@ -448,15 +916,16 @@ async function handleRequest(req, res) {
                 await fs.writeFile(
                     path.join(requestDir, 'report.html'),
                     reportHtml
-                );                
-                console.log('✓ Saved report: ' + requestId);
+                );
+                
+                console.log('Saved report: ' + requestId);
                 
                 // Return HTML report as response
                 res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
                 res.end(reportHtml);
                 
             } catch (err) {
-                console.error('✗ Error handling callback: ' + err.message);
+                console.error('Error handling callback: ' + err.message);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: err.message }));
             }
@@ -482,7 +951,8 @@ async function handleRequest(req, res) {
             // List all reports
             try {
                 const requestsDir = path.join(LOG_BASE_DIR, 'requests');
-                const dirs = await fs.readdir(requestsDir);                
+                const dirs = await fs.readdir(requestsDir);
+                
                 const reports = [];
                 for (const dir of dirs) {
                     const reportFile = path.join(requestsDir, dir, 'report.html');
@@ -516,9 +986,10 @@ async function handleRequest(req, res) {
                 listHtml += 'border-radius: 0.5rem; transition: all 0.3s ease; }';
                 listHtml += '.report-item:hover { background: rgba(255,255,255,0.15); transform: translateX(10px); }';
                 listHtml += 'a { color: white; text-decoration: none; font-weight: 500; }';
-                listHtml += '.timestamp { opacity: 0.8; font-size: 0.9rem; }';                listHtml += '</style></head><body>';
+                listHtml += '.timestamp { opacity: 0.8; font-size: 0.9rem; }';
+                listHtml += '</style></head><body>';
                 listHtml += '<div class="container">';
-                listHtml += '<h1>Test Report Viewer</h1>';
+                listHtml += '<h1>Enhanced Test Report Viewer</h1>';
                 listHtml += '<div class="report-list">';
                 
                 if (reports.length === 0) {
@@ -545,13 +1016,14 @@ async function handleRequest(req, res) {
         
     } else if (pathname === '/health' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'healthy', service: 'report-server' }));
+        res.end(JSON.stringify({ status: 'healthy', service: 'enhanced-report-server' }));
         
     } else {
         res.writeHead(404, { 'Content-Type': 'text/html' });
-        res.end('<h1>Not Found</h1><p>Available endpoints: /callback (POST), /report (GET), /health (GET)</p>');
+        res.end('<h1>Not Found</h1><p>Available endpoints: /callback (POST), /report (GET), /health (GET), /api/log/*, /api/logs/*</p>');
     }
 }
+
 // Create and start server
 const server = http.createServer(handleRequest);
 
@@ -560,14 +1032,21 @@ async function startServer() {
     
     server.listen(PORT, () => {
         console.log('');
-        console.log('╔════════════════════════════════════════════╗');
-        console.log('║     CUBRID Test Report Server Started      ║');
-        console.log('╠════════════════════════════════════════════╣');
-        console.log('║  Port:     ' + PORT.toString().padEnd(32) + '║');
-        console.log('║  Callback: http://localhost:' + PORT + '/callback  ║');
-        console.log('║  Reports:  http://localhost:' + PORT + '/report    ║');
-        console.log('║  Health:   http://localhost:' + PORT + '/health    ║');
-        console.log('╚════════════════════════════════════════════╝');
+        console.log('╔════════════════════════════════════════════════╗');
+        console.log('║  CUBRID Enhanced Test Report Server Started   ║');
+        console.log('╠════════════════════════════════════════════════╣');
+        console.log('║  Port:     ' + PORT.toString().padEnd(36) + '║');
+        console.log('║  Callback: http://localhost:' + PORT + '/callback      ║');
+        console.log('║  Reports:  http://localhost:' + PORT + '/report        ║');
+        console.log('║  API Logs: http://localhost:' + PORT + '/api/log/*     ║');
+        console.log('║  Health:   http://localhost:' + PORT + '/health        ║');
+        console.log('╚════════════════════════════════════════════════╝');
+        console.log('');
+        console.log('Enhanced features:');
+        console.log('  - View build logs for each commit');
+        console.log('  - Click test names to see test details');
+        console.log('  - Click PASS/FAIL cells to view execution logs');
+        console.log('  - Support for flaky test logs with multiple attempts');
         console.log('');
         console.log('Press Ctrl+C to stop the server');
     });

@@ -85,7 +85,7 @@ private void addLogToResponse(JSONObject response, String logContent, String log
 1. **Standalone Mode**:
 ```bash
 cd report-server
-node report-server-enhanced.js [port]
+node report-server.js [port]
 ```
 
 2. **Integrated with Builder**:
@@ -206,7 +206,7 @@ curl http://localhost:8091/api/logs/req_12345/tests
 4. Start enhanced report server:
 ```bash
 cd report-server
-node report-server-enhanced.js
+node report-server.js
 ```
 
 ## Security Considerations
