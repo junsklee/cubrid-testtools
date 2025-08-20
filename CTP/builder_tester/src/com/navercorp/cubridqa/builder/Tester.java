@@ -1888,14 +1888,31 @@ public class Tester {
 
             log.info("Syncing shell testcases repo: branch='" + targetBranch + "' via remote='" + chosenRemote + "'");
 
-            // Fetch just the target branch to reduce traffic
-            runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
-            // Create/reset local branch to remote branch
-            runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
-            // Ensure clean state (avoid untracked noise)
-            runAndExitCode(pb, new String[]{"git", "clean", "-df"});
-            // Hard reset to remote branch to avoid local drift
-            runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+            // Proactively remove stale git lock if present (common on mounted dirs)
+            removeStaleGitIndexLock(repoDir, log);
+
+            try {
+                // Fetch just the target branch to reduce traffic
+                runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
+                // Create/reset local branch to remote branch
+                runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
+                // Ensure clean state (avoid untracked noise)
+                runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+                // Hard reset to remote branch to avoid local drift
+                runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+            } catch (IOException e) {
+                if (isGitLockError(e)) {
+                    log.warning("Detected git lock error; attempting cleanup and one-time retry...");
+                    removeStaleGitIndexLock(repoDir, log);
+                    // Retry once after cleanup
+                    runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
+                    runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
+                    runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+                    runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+                } else {
+                    throw e;
+                }
+            }
         }
     }
 
@@ -1932,6 +1949,24 @@ public class Tester {
         drain(p.getInputStream());
         p.waitFor();
         return p.exitValue();
+    }
+
+    private boolean isGitLockError(IOException e) {
+        String msg = e.getMessage();
+        if (msg == null) return false;
+        return msg.contains("index.lock") || msg.contains(".lock");
+    }
+
+    private void removeStaleGitIndexLock(File repoDir, Logger log) {
+        File gitDir = new File(repoDir, ".git");
+        File indexLock = new File(gitDir, "index.lock");
+        if (indexLock.exists()) {
+            if (indexLock.delete()) {
+                log.warning("Removed stale git index lock: " + indexLock.getAbsolutePath());
+            } else {
+                log.warning("Failed to remove stale git index lock: " + indexLock.getAbsolutePath());
+            }
+        }
     }
 
     private void runOrThrow(ProcessBuilder basePb, String[] cmd) throws IOException, InterruptedException {
