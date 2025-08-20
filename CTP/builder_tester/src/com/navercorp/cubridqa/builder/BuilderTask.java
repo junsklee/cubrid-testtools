@@ -767,30 +767,85 @@ public class BuilderTask {
                 os.write(testRequest.toString().getBytes());
             }
             
-            // Read response (handle non-2xx by reading error stream)
+            // Read response - check if it's multipart or JSON
             int httpStatus = conn.getResponseCode();
-            taskLogger.info("Tester response HTTP " + httpStatus + " for '" + testName + "' on " + host + ":" + port);
-            StringBuilder response = new StringBuilder();
-            InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream();
-            if (is != null) {
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        response.append(line);
+            String contentType = conn.getHeaderField("Content-Type");
+            taskLogger.info("Tester response HTTP " + httpStatus + " for '" + testName + "' on " + host + ":" + port + " (Content-Type: " + contentType + ")");
+            
+            JSONObject responseJson = null;
+            Map<String, byte[]> logFiles = new HashMap<>();
+            
+            if (contentType != null && contentType.startsWith("multipart/form-data")) {
+                // Parse multipart response
+                String boundary = null;
+                String[] parts = contentType.split(";");
+                for (String part : parts) {
+                    part = part.trim();
+                    if (part.startsWith("boundary=")) {
+                        boundary = part.substring(9);
+                        if (boundary.startsWith("\"") && boundary.endsWith("\"")) {
+                            boundary = boundary.substring(1, boundary.length() - 1);
+                        }
+                        break;
                     }
                 }
-            }
-            // Log tester response payload for visibility into pass/fail and metadata
-            try {
-                String payload = response.length() == 0 ? "{}" : response.toString();
-                taskLogger.info("Tester response payload for '" + testName + "' on " + host + ":" + port + ": " + payload);
-            } catch (Exception ignore) { }
-            JSONObject responseJson;
-            try {
-                responseJson = new JSONObject(response.length() == 0 ? "{}" : response.toString());
-            } catch (Exception parseEx) {
-                responseJson = new JSONObject().put("status", httpStatus >= 200 && httpStatus < 300 ? "unknown" : "execution_error")
-                                              .put("message", "Tester returned HTTP " + httpStatus);
+                
+                if (boundary != null) {
+                    // Read the entire response body
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    try (InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream()) {
+                        if (is != null) {
+                            byte[] buffer = new byte[8192];
+                            int bytesRead;
+                            while ((bytesRead = is.read(buffer)) != -1) {
+                                baos.write(buffer, 0, bytesRead);
+                            }
+                        }
+                    }
+                    
+                    // Parse multipart data
+                    MultipartHelper.MultipartRequest multipartData = parseMultipartResponse(baos.toByteArray(), boundary);
+                    
+                    // Extract JSON response
+                    String jsonResponse = multipartData.getField("response");
+                    if (jsonResponse != null) {
+                        responseJson = new JSONObject(jsonResponse);
+                    }
+                    
+                    // Extract log files
+                    for (Map.Entry<String, MultipartHelper.MultipartRequest.FileData> entry : multipartData.getFiles().entrySet()) {
+                        String fieldName = entry.getKey();
+                        MultipartHelper.MultipartRequest.FileData fileData = entry.getValue();
+                        logFiles.put(fileData.fileName, fileData.content);
+                    }
+                    
+                    taskLogger.info("Received multipart response with " + logFiles.size() + " log files");
+                }
+            } else {
+                // Parse regular JSON response (backward compatibility)
+                StringBuilder response = new StringBuilder();
+                InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream();
+                if (is != null) {
+                    try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            response.append(line);
+                        }
+                    }
+                }
+                
+                // Log tester response payload for visibility
+                try {
+                    String payload = response.length() == 0 ? "{}" : response.toString();
+                    taskLogger.info("Tester response payload for '" + testName + "' on " + host + ":" + port + ": " + payload);
+                } catch (Exception ignore) { }
+                
+                try {
+                    responseJson = new JSONObject(response.length() == 0 ? "{}" : response.toString());
+                } catch (Exception parseEx) {
+                    responseJson = new JSONObject().put("status", httpStatus >= 200 && httpStatus < 300 ? "unknown" : "execution_error")
+                                                  .put("message", "Tester returned HTTP " + httpStatus);
+                }
             }
             // If tester returned non-2xx, mark as execution_error unless a status is provided
             if (httpStatus < 200 || httpStatus >= 300) {
@@ -818,7 +873,47 @@ public class BuilderTask {
                 result.put("attempts", responseJson.getInt("attempts"));
             }
             
-            // Handle multiple attempt logs from tester (new feature for remote testers)
+            // Save log files received via multipart
+            if (!logFiles.isEmpty()) {
+                try {
+                    if (requestId != null && config.isRequestGroupingEnabled()) {
+                        String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                        
+                        taskLogger.info("Saving " + logFiles.size() + " log files from multipart response");
+                        
+                        Path lastLogPath = null;
+                        for (Map.Entry<String, byte[]> entry : logFiles.entrySet()) {
+                            String fileName = entry.getKey();
+                            byte[] content = entry.getValue();
+                            
+                            Path logFile = Paths.get(testsDir, fileName);
+                            Files.write(logFile, content);
+                            lastLogPath = logFile;
+                            
+                            taskLogger.info("Saved log file: " + logFile.toString() + " (" + content.length + " bytes)");
+                        }
+                        
+                        // Set logPath to the last log file for backward compatibility
+                        if (lastLogPath != null) {
+                            result.put("logPath", lastLogPath.toString());
+                        }
+                    }
+                } catch (Exception e) {
+                    taskLogger.warning("Failed to save multipart log files: " + e.getMessage());
+                }
+            }
+            // Handle attempt log metadata from JSON response
+            else if (responseJson.has("attemptLogMetadata")) {
+                try {
+                    JSONArray metadata = responseJson.getJSONArray("attemptLogMetadata");
+                    taskLogger.info("Received metadata for " + metadata.length() + " attempt logs");
+                    // Store metadata for report generation
+                    result.put("attemptLogMetadata", metadata);
+                } catch (Exception e) {
+                    taskLogger.warning("Failed to process attempt log metadata: " + e.getMessage());
+                }
+            }
+            // Handle multiple attempt logs from tester (old JSON-embedded format for backward compatibility)
             if (responseJson.has("allAttemptLogs")) {
                 try {
                     if (requestId != null && config.isRequestGroupingEnabled()) {
@@ -1105,5 +1200,80 @@ public class BuilderTask {
         } catch (Exception e) {
             taskLogger.warning("Failed to create cached build log: " + e.getMessage());
         }
+    }
+    
+    /**
+     * Parse multipart response data
+     */
+    private MultipartHelper.MultipartRequest parseMultipartResponse(byte[] data, String boundary) throws IOException {
+        MultipartHelper.MultipartRequest request = new MultipartHelper.MultipartRequest();
+        String boundaryDelimiter = "--" + boundary;
+        
+        // Convert to string for easier parsing (assuming ISO-8859-1 for binary safety)
+        String dataStr = new String(data, "ISO-8859-1");
+        String[] parts = dataStr.split(boundaryDelimiter);
+        
+        for (String part : parts) {
+            if (part.isEmpty() || part.equals("--\r\n") || part.equals("--")) {
+                continue;
+            }
+            
+            // Find the double CRLF that separates headers from content
+            int headerEnd = part.indexOf("\r\n\r\n");
+            if (headerEnd == -1) {
+                continue;
+            }
+            
+            String headers = part.substring(0, headerEnd);
+            String contentStr = part.substring(headerEnd + 4);
+            
+            // Remove trailing CRLF
+            if (contentStr.endsWith("\r\n")) {
+                contentStr = contentStr.substring(0, contentStr.length() - 2);
+            }
+            
+            // Parse headers
+            String fieldName = null;
+            String fileName = null;
+            
+            String[] headerLines = headers.split("\r\n");
+            for (String header : headerLines) {
+                if (header.toLowerCase().startsWith("content-disposition:")) {
+                    // Parse Content-Disposition header
+                    String[] dispositionParts = header.split(";");
+                    for (String disPart : dispositionParts) {
+                        disPart = disPart.trim();
+                        if (disPart.startsWith("name=")) {
+                            fieldName = extractQuotedValue(disPart.substring(5));
+                        } else if (disPart.startsWith("filename=")) {
+                            fileName = extractQuotedValue(disPart.substring(9));
+                        }
+                    }
+                }
+            }
+            
+            if (fieldName != null) {
+                if (fileName != null) {
+                    // It's a file
+                    request.addFile(fieldName, fileName, contentStr.getBytes("ISO-8859-1"));
+                } else {
+                    // It's a regular field
+                    request.addField(fieldName, contentStr);
+                }
+            }
+        }
+        
+        return request;
+    }
+    
+    /**
+     * Extract value from quoted string
+     */
+    private String extractQuotedValue(String value) {
+        value = value.trim();
+        if (value.startsWith("\"") && value.endsWith("\"")) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 }

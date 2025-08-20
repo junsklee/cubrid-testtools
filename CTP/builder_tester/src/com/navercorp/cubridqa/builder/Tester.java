@@ -14,6 +14,7 @@ import com.sun.net.httpserver.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
+import com.navercorp.cubridqa.builder.impl.MattermostSender;
 
 /**
  * Tester - Receives test requests from Builder and executes tests
@@ -128,6 +129,7 @@ public class Tester {
             }
 
             JSONObject responsePayload = null;
+            List<Path> logFilesToSend = new ArrayList<>();
             int httpStatus = 200;
 
             try {
@@ -155,6 +157,16 @@ public class Tester {
 
                 // Run test with retry using request logger
                 responsePayload = runTestWithRetry(request, requestLogger);
+                
+                // Extract log files to send
+                if (responsePayload.has("attemptLogFiles")) {
+                    Object logFilesObj = responsePayload.get("attemptLogFiles");
+                    if (logFilesObj instanceof List) {
+                        logFilesToSend = (List<Path>) logFilesObj;
+                    }
+                    responsePayload.remove("attemptLogFiles");
+                }
+                
                 httpStatus = 200;
 
             } catch (Exception e) {
@@ -176,10 +188,26 @@ public class Tester {
                 httpStatus = 500;
             }
 
-            exchange.getResponseHeaders().set("Content-Type", "application/json");
             try {
-                sendResponse(exchange, httpStatus, responsePayload.toString());
-                logger.info("Sent response: " + responsePayload.toString());
+                // Check if we should send multipart response (when we have log files)
+                if (!logFilesToSend.isEmpty()) {
+                    // Prepare files map for multipart sending
+                    Map<String, Path> files = new HashMap<>();
+                    for (int i = 0; i < logFilesToSend.size(); i++) {
+                        Path logFile = logFilesToSend.get(i);
+                        String fieldName = "log_attempt_" + (i + 1);
+                        files.put(fieldName, logFile);
+                    }
+                    
+                    // Send multipart response with JSON and log files
+                    MultipartHelper.sendMultipartResponse(exchange, httpStatus, responsePayload, files);
+                    logger.info("Sent multipart response with " + files.size() + " log files: " + responsePayload.toString());
+                } else {
+                    // Send regular JSON response (backward compatibility or no logs)
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    sendResponse(exchange, httpStatus, responsePayload.toString());
+                    logger.info("Sent JSON response: " + responsePayload.toString());
+                }
             } catch (IOException ioe) {
                 String msg = ioe.getMessage() == null ? "" : ioe.getMessage();
                 if (isClientAbort(ioe) || msg.contains("insufficient bytes written")) {
@@ -197,12 +225,14 @@ public class Tester {
     /**
      * Run a test with retry logic. Retries on FAIL, EXECUTION_ERROR, and ENVIRONMENT_ERROR.
      * Returns immediately for PASS or STARTED (keepAlive mode) or for BUILD_ERROR.
+     * Now collects log file paths instead of content for multipart sending.
      */
     private JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
         // retry_count is number of retries; total attempts = 1 + retries. If 0 (default), run once with no retries.
         int totalAttempts = 1 + Math.max(0, config.getTestRetryCount());
         JSONObject lastResult = null;
-        JSONArray allAttemptLogs = new JSONArray(); // Collect logs from all attempts
+        List<Path> attemptLogFiles = new ArrayList<>(); // Collect log file paths from all attempts
+        JSONArray attemptLogMetadata = new JSONArray(); // Metadata about each attempt for JSON response
         
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
             if (totalAttempts > 1) {
@@ -216,21 +246,27 @@ public class Tester {
             lastResult = runTest(requestWithAttempt, testLogger);
             String status = lastResult.optString("status", "");
             
-            // Collect log information for this attempt if available
-            if (lastResult.has("logContent") && lastResult.has("logFileName")) {
-                JSONObject attemptLog = new JSONObject();
-                attemptLog.put("attempt", attempt);
-                attemptLog.put("logContent", lastResult.getString("logContent"));
-                attemptLog.put("logFileName", lastResult.getString("logFileName"));
-                attemptLog.put("logTruncated", lastResult.optBoolean("logTruncated", false));
-                attemptLog.put("status", status);
-                allAttemptLogs.put(attemptLog);
+            // Collect log file path for this attempt if available
+            if (lastResult.has("logFilePath")) {
+                Path logPath = Paths.get(lastResult.getString("logFilePath"));
+                attemptLogFiles.add(logPath);
+                
+                // Add metadata for JSON response (without actual content)
+                JSONObject attemptMeta = new JSONObject();
+                attemptMeta.put("attempt", attempt);
+                attemptMeta.put("logFileName", lastResult.optString("logFileName", logPath.getFileName().toString()));
+                attemptMeta.put("status", status);
+                attemptLogMetadata.put(attemptMeta);
+                
+                // Remove the log file path from result to avoid exposing internal paths
+                lastResult.remove("logFilePath");
             }
             
             // For keepAlive=true Docker runs, we get 'started' — no further retries
             if ("started".equalsIgnoreCase(status)) {
                 lastResult.put("attempts", attempt);
-                addMultipleLogsToResult(lastResult, allAttemptLogs);
+                lastResult.put("attemptLogFiles", attemptLogFiles);
+                lastResult.put("attemptLogMetadata", attemptLogMetadata);
                 return lastResult;
             }
             if (TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
@@ -240,7 +276,8 @@ public class Tester {
                     lastResult.put("flaky", true);
                     testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
                 }
-                addMultipleLogsToResult(lastResult, allAttemptLogs);
+                lastResult.put("attemptLogFiles", attemptLogFiles);
+                lastResult.put("attemptLogMetadata", attemptLogMetadata);
                 return lastResult;
             }
             
@@ -252,7 +289,8 @@ public class Tester {
             if (!shouldRetry) {
                 // Don't retry on BUILD_ERROR or unknown statuses
                 lastResult.put("attempts", attempt);
-                addMultipleLogsToResult(lastResult, allAttemptLogs);
+                lastResult.put("attemptLogFiles", attemptLogFiles);
+                lastResult.put("attemptLogMetadata", attemptLogMetadata);
                 return lastResult;
             }
             
@@ -262,12 +300,14 @@ public class Tester {
             }
             // Last attempt, return as is with attempts
             lastResult.put("attempts", attempt);
-            addMultipleLogsToResult(lastResult, allAttemptLogs);
+            lastResult.put("attemptLogFiles", attemptLogFiles);
+            lastResult.put("attemptLogMetadata", attemptLogMetadata);
             return lastResult;
         }
         // Safety fallback
         JSONObject fallbackResult = lastResult != null ? lastResult : new JSONObject().put("status", TestStatus.EXECUTION_ERROR.getValue()).put("message", "No result");
-        addMultipleLogsToResult(fallbackResult, allAttemptLogs);
+        fallbackResult.put("attemptLogFiles", attemptLogFiles);
+        fallbackResult.put("attemptLogMetadata", attemptLogMetadata);
         return fallbackResult;
     }
 
@@ -557,8 +597,8 @@ public class Tester {
         String dockerOutput = outputGobbler.getOutput();
         testLogger.info("Docker test completed with exit code: " + exitCode);
 
-        // Persist full docker output for diagnostics and prepare for sending back to Builder
-        String logContent = dockerOutput; // Store log content to include in response
+        // Persist full docker output for diagnostics
+        Path logFilePath = null;
         String logFileName = null;
         try {
             String requestId = RequestContext.getRequestId();
@@ -572,9 +612,9 @@ public class Tester {
                 } else {
                     logFileName = String.format("docker_%s_%s.%d.log", commitShort, safeTestName, attemptNumber);
                 }
-                Path logFile = Paths.get(testsDir, logFileName);
-                Files.write(logFile, dockerOutput.getBytes("UTF-8"));
-                testLogger.info("Saved full docker test log to: " + logFile.toString());
+                logFilePath = Paths.get(testsDir, logFileName);
+                Files.write(logFilePath, dockerOutput.getBytes("UTF-8"));
+                testLogger.info("Saved full docker test log to: " + logFilePath.toString());
             }
         } catch (Exception ignore) {
             // Swallow logging persistence issues; primary result below still returned
@@ -599,8 +639,8 @@ public class Tester {
                  .put("execution_mode", "docker")
                  .put("timestamp", System.currentTimeMillis());
              
-             // Add log content to response
-             addLogToResponse(response, logContent, logFileName);
+             // Add log file path to response for multipart sending
+             addLogFilePathToResponse(response, logFilePath, logFileName);
              
              if (executionTime != null) {
                  response.put("execution_time", executionTime);
@@ -818,6 +858,7 @@ public class Tester {
         // Combine output and error for log content
         String directLogContent = "=== STDOUT ===\n" + testOutput + "\n\n=== STDERR ===\n" + testError;
         String directLogFileName = null;
+        Path directLogFilePath = null;
         
         // Save logs to file
         try {
@@ -832,9 +873,9 @@ public class Tester {
                 } else {
                     directLogFileName = String.format("direct_%s_%s.%d.log", commitShortForLog, safeTestName, attemptNumber);
                 }
-                Path logFile = Paths.get(testsDir, directLogFileName);
-                Files.write(logFile, directLogContent.getBytes("UTF-8"));
-                testLogger.info("Saved direct test log to: " + logFile.toString());
+                directLogFilePath = Paths.get(testsDir, directLogFileName);
+                Files.write(directLogFilePath, directLogContent.getBytes("UTF-8"));
+                testLogger.info("Saved direct test log to: " + directLogFilePath.toString());
             }
         } catch (Exception ignore) {
             // Swallow logging persistence issues
@@ -849,7 +890,7 @@ public class Tester {
                 .put("message", "Test script execution error")
                 .put("test", testName)
                 .put("exit_code", exitCode);
-            addLogToResponse(response, directLogContent, directLogFileName);
+            addLogFilePathToResponse(response, directLogFilePath, directLogFileName);
             return response;
         }
         
@@ -866,7 +907,7 @@ public class Tester {
                 response.put("status", TestStatus.EXECUTION_ERROR.getValue())
                        .put("message", "Could not determine test result");
             }
-            addLogToResponse(response, directLogContent, directLogFileName);
+            addLogFilePathToResponse(response, directLogFilePath, directLogFileName);
             return response;
         }
         
@@ -875,7 +916,7 @@ public class Tester {
             .put("message", "No result file generated")
             .put("test", testName)
             .put("exit_code", exitCode);
-        addLogToResponse(response, directLogContent, directLogFileName);
+        addLogFilePathToResponse(response, directLogFilePath, directLogFileName);
         return response;
     }
     
@@ -1373,6 +1414,8 @@ public class Tester {
         testLogger.info("Docker test completed with exit code: " + exitCode);
         
         // Save output log
+        Path dockerOptLogFilePath = null;
+        String dockerOptLogFileName = null;
         try {
             String requestId = RequestContext.getRequestId();
             if (requestId != null && config.isRequestGroupingEnabled()) {
@@ -1380,10 +1423,10 @@ public class Tester {
                 String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
                 // Include attempt number in the log file name for uniqueness
                 int attemptNumber = request.optInt("attemptNumber", 1);
-                String logFileName = generateDockerOptLogFileName(commitShort, testName, attemptNumber);
-                Path logFile = Paths.get(testsDir, logFileName);
-                Files.write(logFile, dockerOutput.getBytes("UTF-8"));
-                testLogger.info("Saved optimized Docker test log to: " + logFile);
+                dockerOptLogFileName = generateDockerOptLogFileName(commitShort, testName, attemptNumber);
+                dockerOptLogFilePath = Paths.get(testsDir, dockerOptLogFileName);
+                Files.write(dockerOptLogFilePath, dockerOutput.getBytes("UTF-8"));
+                testLogger.info("Saved optimized Docker test log to: " + dockerOptLogFilePath);
             }
         } catch (Exception ignore) {}
         
@@ -1410,10 +1453,8 @@ public class Tester {
                     .put("execution_mode", "docker_optimized")
                     .put("timestamp", System.currentTimeMillis());
                 
-                // Add log content to response
-                int attemptNumber = request.optInt("attemptNumber", 1);
-                String logFileName = generateDockerOptLogFileName(commitShort, testName, attemptNumber);
-                addLogToResponse(response, dockerOutput, logFileName);
+                // Add log file path to response
+                addLogFilePathToResponse(response, dockerOptLogFilePath, dockerOptLogFileName);
                 return response;
             } else if (isFailed) {
                 JSONObject response = new JSONObject()
@@ -1424,10 +1465,8 @@ public class Tester {
                     .put("execution_mode", "docker_optimized")
                     .put("timestamp", System.currentTimeMillis());
                 
-                // Add log content to response
-                int attemptNumber = request.optInt("attemptNumber", 1);
-                String logFileName = generateDockerOptLogFileName(commitShort, testName, attemptNumber);
-                addLogToResponse(response, dockerOutput, logFileName);
+                // Add log file path to response
+                addLogFilePathToResponse(response, dockerOptLogFilePath, dockerOptLogFileName);
                 return response;
             }
         }
@@ -1442,9 +1481,8 @@ public class Tester {
                 .put("execution_mode", "docker_optimized")
                 .put("timestamp", System.currentTimeMillis());
             
-            // Add log content to response
-            String logFileName = String.format("docker_opt_%s_%s.log", commitShort, testName.replaceAll("[^a-zA-Z0-9_.-]", "_"));
-            addLogToResponse(response, dockerOutput, logFileName);
+            // Add log file path to response
+            addLogFilePathToResponse(response, dockerOptLogFilePath, dockerOptLogFileName);
             return response;
         } else {
             JSONObject response = new JSONObject()
@@ -1456,9 +1494,8 @@ public class Tester {
                 .put("exit_code", exitCode)
                 .put("timestamp", System.currentTimeMillis());
             
-            // Add log content to response
-            String logFileName = String.format("docker_opt_%s_%s.log", commitShort, testName.replaceAll("[^a-zA-Z0-9_.-]", "_"));
-            addLogToResponse(response, dockerOutput, logFileName);
+            // Add log file path to response
+            addLogFilePathToResponse(response, dockerOptLogFilePath, dockerOptLogFileName);
             return response;
         }
     }
@@ -1928,24 +1965,35 @@ public class Tester {
     }
     
     /**
-     * Add multiple attempt logs to the result for remote tester scenarios
+     * Helper method to add log file path to response JSON for multipart sending
+     * Also stores minimal metadata about the log for the JSON response
      */
-    private void addMultipleLogsToResult(JSONObject result, JSONArray allAttemptLogs) {
-        if (allAttemptLogs.length() > 0) {
-            // Add all attempt logs for remote tester scenarios
-            result.put("allAttemptLogs", allAttemptLogs);
-            
-            // Keep the single logContent/logFileName for backward compatibility
-            // Use the last attempt's log as the primary log
-            JSONObject lastAttemptLog = allAttemptLogs.getJSONObject(allAttemptLogs.length() - 1);
-            result.put("logContent", lastAttemptLog.getString("logContent"));
-            result.put("logFileName", lastAttemptLog.getString("logFileName"));
-            result.put("logTruncated", lastAttemptLog.optBoolean("logTruncated", false));
+    private void addLogFilePathToResponse(JSONObject response, Path logFilePath, String logFileName) {
+        if (logFilePath == null || !Files.exists(logFilePath)) {
+            return;
+        }
+        
+        // Store the file path for multipart sending
+        response.put("logFilePath", logFilePath.toString());
+        
+        // Store just the filename for metadata
+        if (logFileName != null) {
+            response.put("logFileName", logFileName);
+        } else {
+            response.put("logFileName", logFilePath.getFileName().toString());
+        }
+        
+        // Add file size for metadata
+        try {
+            long fileSize = Files.size(logFilePath);
+            response.put("logFileSize", fileSize);
+        } catch (IOException e) {
+            // Ignore
         }
     }
     
     /**
-     * Helper method to add log content to response JSON
+     * Helper method to add log content to response JSON (DEPRECATED - for backward compatibility only)
      * Truncates large logs to avoid overwhelming the network
      */
     private void addLogToResponse(JSONObject response, String logContent, String logFileName) {
