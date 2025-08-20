@@ -521,13 +521,21 @@ public class Tester {
         List<String> dockerCommand = new ArrayList<>();
         dockerCommand.add("docker");
         dockerCommand.add("run");
+        // Limit container log growth to prevent host disk exhaustion
+        dockerCommand.add("--log-driver");
+        dockerCommand.add("json-file");
+        dockerCommand.add("--log-opt");
+        dockerCommand.add("max-size=50m");
+        dockerCommand.add("--log-opt");
+        dockerCommand.add("max-file=3");
         if (keepAlive) {
             dockerCommand.add("-d");
-            dockerCommand.add("--name");
-            dockerCommand.add(containerName);
         } else {
             dockerCommand.add("--rm");
         }
+        // Always name the container so we can manage it on timeout/failure
+        dockerCommand.add("--name");
+        dockerCommand.add(containerName);
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
@@ -587,6 +595,8 @@ public class Tester {
         if (!completed) {
             process.destroyForcibly();
             testLogger.severe("Docker test timeout");
+            // Attempt to stop and remove the container if it's still running
+            safeDockerKillAndRemove(containerName, testLogger);
             return new JSONObject()
                 .put("status", TestStatus.EXECUTION_ERROR.getValue())
                 .put("message", "Docker test timeout after 30 minutes")
@@ -1330,13 +1340,21 @@ public class Tester {
         List<String> dockerCommand = new ArrayList<>();
         dockerCommand.add("docker");
         dockerCommand.add("run");
+        // Limit container log growth to prevent host disk exhaustion
+        dockerCommand.add("--log-driver");
+        dockerCommand.add("json-file");
+        dockerCommand.add("--log-opt");
+        dockerCommand.add("max-size=50m");
+        dockerCommand.add("--log-opt");
+        dockerCommand.add("max-file=3");
         if (keepAlive) {
             dockerCommand.add("-d");
-            dockerCommand.add("--name");
-            dockerCommand.add(containerName);
         } else {
             dockerCommand.add("--rm");
         }
+        // Always name the container so we can manage it on timeout/failure
+        dockerCommand.add("--name");
+        dockerCommand.add(containerName);
         
         // Performance optimizations
         dockerCommand.add("--init");
@@ -1402,6 +1420,8 @@ public class Tester {
         if (!completed) {
             process.destroyForcibly();
             testLogger.severe("Docker test timeout");
+            // Attempt to stop and remove the container if it's still running
+            safeDockerKillAndRemove(containerName, testLogger);
             return new JSONObject()
                 .put("status", TestStatus.EXECUTION_ERROR.getValue())
                 .put("message", "Docker test timeout after 30 minutes")
@@ -1973,6 +1993,18 @@ public class Tester {
         int ec = runAndExitCode(basePb, cmd);
         if (ec != 0) {
             throw new IOException("Command failed (" + ec + "): " + String.join(" ", cmd));
+        }
+    }
+
+    private void safeDockerKillAndRemove(String containerName, Logger log) {
+        try {
+            new ProcessBuilder("docker", "rm", "-f", containerName)
+                .redirectErrorStream(true)
+                .start()
+                .waitFor();
+            log.info("Cleaned up container: " + containerName);
+        } catch (Exception e) {
+            log.warning("Failed to cleanup container '" + containerName + "': " + e.getMessage());
         }
     }
 
