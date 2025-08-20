@@ -932,6 +932,62 @@
             document.getElementById('detailModal').style.display = 'block';
         }
         
+        // Helper function to get all log files for a test
+        async function getTestLogFiles(requestId, testName) {
+            try {
+                const testResponse = await fetch(`/api/logs/${requestId}/tests`);
+                if (testResponse.ok) {
+                    const testFiles = await testResponse.json();
+                    
+                    // Extract just the script name
+                    const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+                    const extractedTestName = testScript.replace('.sh', '');
+                    const safeTestName = extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                    
+                    // Find all log files for this test
+                    return testFiles.filter(file => 
+                        file.includes(safeTestName) && file.endsWith('.log')
+                    );
+                }
+            } catch (error) {
+                console.error('Error getting test log files:', error);
+            }
+            return [];
+        }
+        
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+        
+        // Helper function to get all test log files for a test
+        async function getTestLogFiles(requestId, testName) {
+            try {
+                const testResponse = await fetch(`/api/logs/${requestId}/tests`);
+                if (testResponse.ok) {
+                    const testFiles = await testResponse.json();
+                    const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+                    const extractedTestName = testScript.replace('.sh', '');
+                    const safeTestName = extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                    
+                    // Find all log files that match this test
+                    return testFiles.filter(file => 
+                        file.includes(safeTestName) && file.endsWith('.log')
+                    );
+                }
+            } catch (error) {
+                console.error('Error getting test log files:', error);
+            }
+            return [];
+        }
+        
         // View test log for specific test and commit
         async function viewTestLog(testName, commit) {
             const requestId = '{{REQUEST_ID}}';
@@ -989,11 +1045,29 @@
                     // If we found the specific file for this commit, but there are other logs for this test
                     if (testLogFile && allLogFiles.length > 1) {
                         // Show options for all available log files for this test
-                        showMultipleLogOptions(testName, commitShort, allLogFiles, requestId);
+                        // Find the test data for metadata
+                        let testData = null;
+                        for (const testCommit in testResults) {
+                            const testGroup = testResults[testCommit][testName];
+                            if (testGroup) {
+                                testData = testGroup.find(r => r.commit.startsWith(commitShort));
+                                if (testData) break;
+                            }
+                        }
+                        showMultipleLogOptions(testName, commitShort, allLogFiles, requestId, testData);
                         return;
                     } else if (!testLogFile && allLogFiles.length > 0) {
                         // No exact match found, but we have some logs for this test
-                        showMultipleLogOptions(testName, commitShort, allLogFiles, requestId);
+                        // Find the test data for metadata
+                        let testData = null;
+                        for (const testCommit in testResults) {
+                            const testGroup = testResults[testCommit][testName];
+                            if (testGroup) {
+                                testData = testGroup.find(r => r.commit.startsWith(commitShort));
+                                if (testData) break;
+                            }
+                        }
+                        showMultipleLogOptions(testName, commitShort, allLogFiles, requestId, testData);
                         return;
                     }
                     
@@ -1079,8 +1153,17 @@
         }
         
         // Show multiple log file options for tests across commits and attempts
-        function showMultipleLogOptions(testName, clickedCommitShort, logFiles, requestId) {
+        function showMultipleLogOptions(testName, clickedCommitShort, logFiles, requestId, testData) {
             const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+            
+            // Get attempt metadata if available
+            const attemptMetadata = {};
+            if (testData && testData.attemptLogMetadata) {
+                testData.attemptLogMetadata.forEach(meta => {
+                    const key = meta.logFileName;
+                    attemptMetadata[key] = meta.status;
+                });
+            }
             
             // Parse and group log files by commit and attempt
             const logGroups = {};
@@ -1094,7 +1177,10 @@
                     if (!logGroups[commit]) {
                         logGroups[commit] = [];
                     }
-                    logGroups[commit].push({ file, attempt });
+                    
+                    // Get actual status from metadata or use unknown
+                    const status = attemptMetadata[file] || 'unknown';
+                    logGroups[commit].push({ file, attempt, status });
                 }
             });
             
@@ -1118,21 +1204,36 @@
                 if (isClickedCommit) content += ' <span style="font-size: 0.8rem;">(clicked)</span>';
                 content += '</h4>';
                 
-                logGroups[commit].forEach(({ file, attempt }) => {
-                    const isFirstAttempt = attempt === 1;
-                    const isFinalAttempt = attempt === logGroups[commit].length;
+                logGroups[commit].forEach(({ file, attempt, status }) => {
+                    // Determine color based on actual status
+                    let borderColor = '#6b7280'; // gray for unknown
+                    let bgColor = '#f9fafb';
+                    let textColor = '#374151';
+                    let statusText = '';
+                    
+                    if (status === 'pass') {
+                        borderColor = '#10b981'; // green
+                        bgColor = '#f0fdf4';
+                        textColor = '#166534';
+                        statusText = ' <span style="color: #10b981;">(Pass)</span>';
+                    } else if (status === 'fail') {
+                        borderColor = '#ef4444'; // red
+                        bgColor = '#fef2f2';
+                        textColor = '#991b1b';
+                        statusText = ' <span style="color: #ef4444;">(Fail)</span>';
+                    } else if (status === 'execution_error' || status === 'environment_error') {
+                        borderColor = '#f59e0b'; // orange
+                        bgColor = '#fffbeb';
+                        textColor = '#92400e';
+                        statusText = ' <span style="color: #f59e0b;">(' + status.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) + ')</span>';
+                    }
                     
                     content += '<div style="margin-bottom: 0.5rem;">';
-                    content += '<button onclick="loadSpecificTestLog(\'' + requestId + '\', \'' + file + '\', \'' + testName + '\', \'' + commit + '\', ' + attempt + ')" ';
-                    content += 'style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid ' + (isFirstAttempt ? '#ef4444' : '#10b981') + '; ';
-                    content += 'background: ' + (isFirstAttempt ? '#fef2f2' : '#f0fdf4') + '; color: ' + (isFirstAttempt ? '#991b1b' : '#166534') + '; ';
+                    content += '<button onclick="loadSpecificTestLog(\'' + requestId + '\', \'' + file + '\', \'' + testName + '\', \'' + commit + '\', ' + attempt + ', \'' + status + '\')" ';
+                    content += 'style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid ' + borderColor + '; ';
+                    content += 'background: ' + bgColor + '; color: ' + textColor + '; ';
                     content += 'border-radius: 0.25rem; cursor: pointer; text-align: left; font-family: monospace; font-size: 0.85rem;">';
-                    content += '<strong>Attempt ' + attempt + '</strong>';
-                    if (isFirstAttempt && logGroups[commit].length > 1) {
-                        content += ' <span style="color: #ef4444;">(Failure)</span>';
-                    } else if (isFinalAttempt && logGroups[commit].length > 1) {
-                        content += ' <span style="color: #10b981;">(Success)</span>';
-                    }
+                    content += '<strong>Attempt ' + attempt + '</strong>' + statusText;
                     content += '<br><span style="font-size: 0.75rem; opacity: 0.7;">' + file + '</span>';
                     content += '</button>';
                     content += '</div>';
@@ -1142,8 +1243,8 @@
             });
             
             content += '<p style="margin-top: 1rem; font-size: 0.9rem; color: #6b7280;">';
-            content += '<strong>Note:</strong> First attempts typically show failures, later attempts show retry behavior. ';
-            content += 'Each commit may have different execution results.';
+            content += '<strong>Note:</strong> Status shown is the actual test result for each attempt. ';
+            content += 'Tests may pass, fail, or encounter execution errors.';
             content += '</p>';
             content += '</div>';
             
@@ -1153,21 +1254,64 @@
         }
         
         // Load specific test log file
-        async function loadSpecificTestLog(requestId, fileName, testName, commitShort, attemptNum) {
+        async function loadSpecificTestLog(requestId, fileName, testName, commitShort, attemptNum, status) {
             try {
                 const response = await fetch(`/api/log/${requestId}/tests/${fileName}`);
                 if (response.ok) {
                     const logContent = await response.text();
                     const testScript = testName.substring(testName.lastIndexOf('/') + 1);
                     
+                    // Determine status color and text
+                    let statusBadge = '';
+                    if (status === 'pass') {
+                        statusBadge = '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #10b981; color: white; border-radius: 0.25rem; font-size: 0.85rem;">PASS</span>';
+                    } else if (status === 'fail') {
+                        statusBadge = '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #ef4444; color: white; border-radius: 0.25rem; font-size: 0.85rem;">FAIL</span>';
+                    } else if (status === 'execution_error' || status === 'environment_error') {
+                        statusBadge = '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #f59e0b; color: white; border-radius: 0.25rem; font-size: 0.85rem;">' + status.replace('_', ' ').toUpperCase() + '</span>';
+                    } else {
+                        statusBadge = '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #6b7280; color: white; border-radius: 0.25rem; font-size: 0.85rem;">UNKNOWN</span>';
+                    }
+                    
                     let content = '<div style="padding: 1.5rem;">';
-                    content += '<h3>Test Log: ' + testScript + ' @ ' + commitShort + ' (Attempt ' + attemptNum + ')</h3>';
+                    content += '<h3>Test Log: ' + testScript + ' @ ' + commitShort + ' (Attempt ' + attemptNum + ') ' + statusBadge + '</h3>';
                     content += '<div style="margin-bottom: 1rem;">';
+                    
+                    // Get all log files for this test to pass to back button
+                    const allLogFiles = await getTestLogFiles(requestId, testName);
+                    
+                    // Find the test data for metadata
+                    let testData = null;
+                    for (const commit in testResults) {
+                        const testGroup = testResults[commit][testName];
+                        if (testGroup) {
+                            testData = testGroup.find(r => r.commit.startsWith(commitShort));
+                            if (testData) break;
+                        }
+                    }
+                    
                     content += '<button onclick="showMultipleLogOptions(\'' + testName + '\', \'' + commitShort + '\', ' + 
-                               JSON.stringify(fileName.includes('.2.') ? [fileName.replace('.2.', '.'), fileName] : [fileName]) + ', \'' + requestId + '\')" ';
+                               JSON.stringify(allLogFiles) + ', \'' + requestId + '\', ' + JSON.stringify(testData) + ')" ';
                     content += 'style="padding: 0.5rem 1rem; border: 1px solid #d1d5db; background: #f9fafb; border-radius: 0.25rem; cursor: pointer;">';
-                    content += '< Back';
+                    content += '← Back to Log List';
                     content += '</button>';
+                    content += '</div>';
+                    content += '<pre style="background: #1f2937; color: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.85rem; line-height: 1.5;">';
+                    content += escapeHtml(logContent);
+                    content += '</pre>';
+                    content += '</div>';
+                    
+                    document.getElementById('modalTitle').textContent = 'Test Execution Log';
+                    document.getElementById('modalBody').innerHTML = content;
+                    document.getElementById('detailModal').style.display = 'block';
+                } else {
+                    alert('Log file not found');
+                }
+            } catch (error) {
+                console.error('Error loading test log:', error);
+                alert('Error loading test log.');
+            }
+        }
                     content += '</div>';
                     content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
                     content += logContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1196,7 +1340,52 @@
             
             allAttemptLogs.forEach((attemptLog, index) => {
                 const attemptNum = attemptLog.attempt;
-                const isFirstAttempt = attemptNum === 1;
+                const status = attemptLog.status || 'unknown';
+                
+                // Determine color based on actual status
+                let borderColor = '#6b7280'; // gray for unknown
+                let bgColor = '#f9fafb';
+                let textColor = '#374151';
+                let statusText = '';
+                
+                if (status === 'pass') {
+                    borderColor = '#10b981'; // green
+                    bgColor = '#f0fdf4';
+                    textColor = '#166534';
+                    statusText = ' <span style="color: #10b981;">(Pass)</span>';
+                } else if (status === 'fail') {
+                    borderColor = '#ef4444'; // red
+                    bgColor = '#fef2f2';
+                    textColor = '#991b1b';
+                    statusText = ' <span style="color: #ef4444;">(Fail)</span>';
+                } else if (status === 'execution_error' || status === 'environment_error') {
+                    borderColor = '#f59e0b'; // orange
+                    bgColor = '#fffbeb';
+                    textColor = '#92400e';
+                    statusText = ' <span style="color: #f59e0b;">(' + status.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) + ')</span>';
+                }
+                
+                content += '<div style="margin-bottom: 0.5rem;">';
+                content += '<button onclick="showEmbeddedLog(\'' + testName + '\', \'' + commitShort + '\', ' + index + ', ' + 
+                           JSON.stringify(allAttemptLogs).replace(/"/g, '&quot;') + ')" ';
+                content += 'style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid ' + borderColor + '; ';
+                content += 'background: ' + bgColor + '; color: ' + textColor + '; ';
+                content += 'border-radius: 0.25rem; cursor: pointer; text-align: left; font-family: monospace; font-size: 0.85rem;">';
+                content += '<strong>Attempt ' + attemptNum + '</strong>' + statusText;
+                content += '<br><span style="font-size: 0.75rem; opacity: 0.7;">File: ' + attemptLog.logFileName + '</span>';
+                if (attemptLog.logTruncated) {
+                    content += '<br><span style="font-size: 0.75rem; color: #f59e0b;">⚠ Log truncated</span>';
+                }
+                content += '</button>';
+                content += '</div>';
+            });
+            
+            content += '</div>';
+            
+            document.getElementById('modalTitle').textContent = 'Multiple Test Logs Available';
+            document.getElementById('modalBody').innerHTML = content;
+            document.getElementById('detailModal').style.display = 'block';
+        }
                 const isFinalAttempt = attemptNum === allAttemptLogs.length;
                 const status = attemptLog.status || 'unknown';
                 
