@@ -292,6 +292,10 @@ public class BuilderTask {
                         taskLogger.info("Using cached build for commit " + normalizedCommit);
                         builtPackages.put(commit, cachedPackage);
                         progress.put(commit, 100); // Complete
+                        
+                        // Create build log for cached build
+                        createCachedBuildLog(commit, cachedPackage, "memory cache");
+                        
                         return null;
                     }
 
@@ -302,6 +306,10 @@ public class BuilderTask {
                         builtPackages.put(commit, diskPackage);
                         buildCache.put(cacheKey, diskPackage);
                         progress.put(commit, 100); // Complete
+                        
+                        // Create build log for cached build
+                        createCachedBuildLog(commit, diskPackage, "disk cache");
+                        
                         return null;
                     }
                     
@@ -810,8 +818,42 @@ public class BuilderTask {
                 result.put("attempts", responseJson.getInt("attempts"));
             }
             
-            // Handle log content from tester
-            if (responseJson.has("logContent")) {
+            // Handle multiple attempt logs from tester (new feature for remote testers)
+            if (responseJson.has("allAttemptLogs")) {
+                try {
+                    if (requestId != null && config.isRequestGroupingEnabled()) {
+                        String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                        JSONArray allAttemptLogs = responseJson.getJSONArray("allAttemptLogs");
+                        
+                        taskLogger.info("Received " + allAttemptLogs.length() + " attempt logs from remote tester");
+                        
+                        for (int i = 0; i < allAttemptLogs.length(); i++) {
+                            JSONObject attemptLog = allAttemptLogs.getJSONObject(i);
+                            String logContent = attemptLog.getString("logContent");
+                            String logFileName = attemptLog.getString("logFileName");
+                            boolean logTruncated = attemptLog.optBoolean("logTruncated", false);
+                            int attemptNum = attemptLog.getInt("attempt");
+                            
+                            Path logFile = Paths.get(testsDir, logFileName);
+                            Files.write(logFile, logContent.getBytes("UTF-8"));
+                            
+                            taskLogger.info("Saved attempt " + attemptNum + " log to: " + logFile.toString() + 
+                                           (logTruncated ? " (truncated)" : ""));
+                        }
+                        
+                        // Set logPath to the final attempt for backward compatibility
+                        if (allAttemptLogs.length() > 0) {
+                            JSONObject lastAttemptLog = allAttemptLogs.getJSONObject(allAttemptLogs.length() - 1);
+                            String lastFileName = lastAttemptLog.getString("logFileName");
+                            result.put("logPath", Paths.get(testsDir, lastFileName).toString());
+                        }
+                    }
+                } catch (Exception e) {
+                    taskLogger.warning("Failed to save multiple attempt logs: " + e.getMessage());
+                }
+            }
+            // Handle single log content from tester (backward compatibility)
+            else if (responseJson.has("logContent")) {
                 String logContent = responseJson.getString("logContent");
                 String logFileName = responseJson.optString("logFileName", null);
                 boolean logTruncated = responseJson.optBoolean("logTruncated", false);
@@ -1032,5 +1074,36 @@ public class BuilderTask {
             progressJson.put(entry.getKey(), entry.getValue());
         }
         return progressJson;
+    }
+    
+    /**
+     * Create a build log entry for cached builds to maintain consistent log structure
+     */
+    private void createCachedBuildLog(String commit, String packagePath, String cacheType) {
+        try {
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String buildsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "builds");
+                String buildLogFile = String.format("build_%s.log", commit.substring(0, 7));
+                Path logFile = Paths.get(buildsDir, buildLogFile);
+                
+                // Create build log content for cached build
+                StringBuilder logContent = new StringBuilder();
+                logContent.append("Build retrieved from ").append(cacheType).append("\n");
+                logContent.append("Commit: ").append(commit).append("\n");
+                logContent.append("Package: ").append(packagePath).append("\n");
+                logContent.append("Timestamp: ").append(new java.util.Date()).append("\n");
+                logContent.append("Status: CACHED (no rebuild required)\n");
+                
+                if (new File(packagePath).exists()) {
+                    logContent.append("Package size: ").append(new File(packagePath).length()).append(" bytes\n");
+                }
+                
+                Files.write(logFile, logContent.toString().getBytes("UTF-8"));
+                taskLogger.info("Created build log for cached build: " + logFile.toString());
+            }
+        } catch (Exception e) {
+            taskLogger.warning("Failed to create cached build log: " + e.getMessage());
+        }
     }
 }

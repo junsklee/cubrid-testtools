@@ -12,6 +12,7 @@ import java.util.logging.*;
 import java.util.concurrent.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
+import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
 
 /**
@@ -201,6 +202,8 @@ public class Tester {
         // retry_count is number of retries; total attempts = 1 + retries. If 0 (default), run once with no retries.
         int totalAttempts = 1 + Math.max(0, config.getTestRetryCount());
         JSONObject lastResult = null;
+        JSONArray allAttemptLogs = new JSONArray(); // Collect logs from all attempts
+        
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
             if (totalAttempts > 1) {
                 testLogger.info("Running test attempt " + attempt + "/" + totalAttempts);
@@ -212,9 +215,22 @@ public class Tester {
             
             lastResult = runTest(requestWithAttempt, testLogger);
             String status = lastResult.optString("status", "");
+            
+            // Collect log information for this attempt if available
+            if (lastResult.has("logContent") && lastResult.has("logFileName")) {
+                JSONObject attemptLog = new JSONObject();
+                attemptLog.put("attempt", attempt);
+                attemptLog.put("logContent", lastResult.getString("logContent"));
+                attemptLog.put("logFileName", lastResult.getString("logFileName"));
+                attemptLog.put("logTruncated", lastResult.optBoolean("logTruncated", false));
+                attemptLog.put("status", status);
+                allAttemptLogs.put(attemptLog);
+            }
+            
             // For keepAlive=true Docker runs, we get 'started' — no further retries
             if ("started".equalsIgnoreCase(status)) {
                 lastResult.put("attempts", attempt);
+                addMultipleLogsToResult(lastResult, allAttemptLogs);
                 return lastResult;
             }
             if (TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
@@ -224,6 +240,7 @@ public class Tester {
                     lastResult.put("flaky", true);
                     testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
                 }
+                addMultipleLogsToResult(lastResult, allAttemptLogs);
                 return lastResult;
             }
             
@@ -235,6 +252,7 @@ public class Tester {
             if (!shouldRetry) {
                 // Don't retry on BUILD_ERROR or unknown statuses
                 lastResult.put("attempts", attempt);
+                addMultipleLogsToResult(lastResult, allAttemptLogs);
                 return lastResult;
             }
             
@@ -244,10 +262,13 @@ public class Tester {
             }
             // Last attempt, return as is with attempts
             lastResult.put("attempts", attempt);
+            addMultipleLogsToResult(lastResult, allAttemptLogs);
             return lastResult;
         }
         // Safety fallback
-        return lastResult != null ? lastResult : new JSONObject().put("status", TestStatus.EXECUTION_ERROR.getValue()).put("message", "No result");
+        JSONObject fallbackResult = lastResult != null ? lastResult : new JSONObject().put("status", TestStatus.EXECUTION_ERROR.getValue()).put("message", "No result");
+        addMultipleLogsToResult(fallbackResult, allAttemptLogs);
+        return fallbackResult;
     }
 
     private class HealthCheckHandler implements HttpHandler {
@@ -1357,8 +1378,10 @@ public class Tester {
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                Path logFile = Paths.get(testsDir, 
-                    String.format("docker_opt_%s_%s.log", commitShort, safeTestName));
+                // Include attempt number in the log file name for uniqueness
+                int attemptNumber = request.optInt("attemptNumber", 1);
+                String logFileName = generateDockerOptLogFileName(commitShort, testName, attemptNumber);
+                Path logFile = Paths.get(testsDir, logFileName);
                 Files.write(logFile, dockerOutput.getBytes("UTF-8"));
                 testLogger.info("Saved optimized Docker test log to: " + logFile);
             }
@@ -1379,35 +1402,52 @@ public class Tester {
                               resultContent.toUpperCase().contains("FAIL");
             
             if (isPassed && !isFailed) {
-                return new JSONObject()
+                JSONObject response = new JSONObject()
                     .put("status", TestStatus.PASS.getValue())
                     .put("test", testName)
                     .put("commit", commit)
                     .put("commitShort", commitShort)
                     .put("execution_mode", "docker_optimized")
                     .put("timestamp", System.currentTimeMillis());
+                
+                // Add log content to response
+                int attemptNumber = request.optInt("attemptNumber", 1);
+                String logFileName = generateDockerOptLogFileName(commitShort, testName, attemptNumber);
+                addLogToResponse(response, dockerOutput, logFileName);
+                return response;
             } else if (isFailed) {
-                return new JSONObject()
+                JSONObject response = new JSONObject()
                     .put("status", TestStatus.FAIL.getValue())
                     .put("test", testName)
                     .put("commit", commit)
                     .put("commitShort", commitShort)
                     .put("execution_mode", "docker_optimized")
                     .put("timestamp", System.currentTimeMillis());
+                
+                // Add log content to response
+                int attemptNumber = request.optInt("attemptNumber", 1);
+                String logFileName = generateDockerOptLogFileName(commitShort, testName, attemptNumber);
+                addLogToResponse(response, dockerOutput, logFileName);
+                return response;
             }
         }
         
         // Check exit code
         if (exitCode == 0) {
-            return new JSONObject()
+            JSONObject response = new JSONObject()
                 .put("status", TestStatus.PASS.getValue())
                 .put("test", testName)
                 .put("commit", commit)
                 .put("commitShort", commitShort)
                 .put("execution_mode", "docker_optimized")
                 .put("timestamp", System.currentTimeMillis());
+            
+            // Add log content to response
+            String logFileName = String.format("docker_opt_%s_%s.log", commitShort, testName.replaceAll("[^a-zA-Z0-9_.-]", "_"));
+            addLogToResponse(response, dockerOutput, logFileName);
+            return response;
         } else {
-            return new JSONObject()
+            JSONObject response = new JSONObject()
                 .put("status", TestStatus.FAIL.getValue())
                 .put("test", testName)
                 .put("commit", commit)
@@ -1415,6 +1455,11 @@ public class Tester {
                 .put("execution_mode", "docker_optimized")
                 .put("exit_code", exitCode)
                 .put("timestamp", System.currentTimeMillis());
+            
+            // Add log content to response
+            String logFileName = String.format("docker_opt_%s_%s.log", commitShort, testName.replaceAll("[^a-zA-Z0-9_.-]", "_"));
+            addLogToResponse(response, dockerOutput, logFileName);
+            return response;
         }
     }
     
@@ -1868,6 +1913,35 @@ public class Tester {
     private String escapeShell(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "'\\''");
+    }
+    
+    /**
+     * Generate docker optimized log filename with attempt number for uniqueness
+     */
+    private String generateDockerOptLogFileName(String commitShort, String testName, int attemptNumber) {
+        String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+        if (attemptNumber == 1) {
+            return String.format("docker_opt_%s_%s.log", commitShort, safeTestName);
+        } else {
+            return String.format("docker_opt_%s_%s.%d.log", commitShort, safeTestName, attemptNumber);
+        }
+    }
+    
+    /**
+     * Add multiple attempt logs to the result for remote tester scenarios
+     */
+    private void addMultipleLogsToResult(JSONObject result, JSONArray allAttemptLogs) {
+        if (allAttemptLogs.length() > 0) {
+            // Add all attempt logs for remote tester scenarios
+            result.put("allAttemptLogs", allAttemptLogs);
+            
+            // Keep the single logContent/logFileName for backward compatibility
+            // Use the last attempt's log as the primary log
+            JSONObject lastAttemptLog = allAttemptLogs.getJSONObject(allAttemptLogs.length() - 1);
+            result.put("logContent", lastAttemptLog.getString("logContent"));
+            result.put("logFileName", lastAttemptLog.getString("logFileName"));
+            result.put("logTruncated", lastAttemptLog.optBoolean("logTruncated", false));
+        }
     }
     
     /**

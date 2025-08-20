@@ -56,8 +56,11 @@ public class Builder {
         // Add report handler for viewing test results
         try {
             String logDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log";
-            this.server.createContext("/report", new com.navercorp.cubridqa.builder.report.ReportHandler(logDir));
-            this.server.createContext("/callback", new com.navercorp.cubridqa.builder.report.ReportHandler(logDir));
+            com.navercorp.cubridqa.builder.report.ReportHandler reportHandler = new com.navercorp.cubridqa.builder.report.ReportHandler(logDir);
+            this.server.createContext("/report", reportHandler);
+            this.server.createContext("/callback", reportHandler);
+            this.server.createContext("/api/log/", reportHandler);
+            this.server.createContext("/api/logs/", reportHandler);
         } catch (IOException e) {
             logger.warning("Failed to initialize report handler: " + e.getMessage());
         }

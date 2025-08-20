@@ -87,7 +87,18 @@ public class ReportHandler implements HttpHandler {
     
     private void handleReportView(HttpExchange exchange) throws IOException {
         try {
-            // Parse query parameters to get request ID
+            String path = exchange.getRequestURI().getPath();
+            
+            // Handle API endpoints for log access
+            if (path.startsWith("/api/log/")) {
+                handleLogFileAPI(exchange);
+                return;
+            } else if (path.startsWith("/api/logs/")) {
+                handleLogListAPI(exchange);
+                return;
+            }
+            
+            // Handle report viewing
             String query = exchange.getRequestURI().getQuery();
             if (query == null || !query.startsWith("id=")) {
                 // List available reports
@@ -221,5 +232,89 @@ public class ReportHandler implements HttpHandler {
         
         exchange.getResponseHeaders().set("Content-Type", "application/json");
         sendResponse(exchange, code, error.toString());
+    }
+    
+    /**
+     * Handle API endpoint to retrieve specific log files
+     * URL format: /api/log/<requestId>/<logType>/<fileName>
+     */
+    private void handleLogFileAPI(HttpExchange exchange) throws IOException {
+        try {
+            String path = exchange.getRequestURI().getPath();
+            String[] parts = path.split("/");
+            
+            if (parts.length < 6) {
+                sendErrorResponse(exchange, 400, "Invalid log file path format");
+                return;
+            }
+            
+            String requestId = parts[3];
+            String logType = parts[4];
+            String fileName = parts[5];
+            
+            // Validate log type
+            if (!"builds".equals(logType) && !"tests".equals(logType)) {
+                sendErrorResponse(exchange, 400, "Invalid log type. Must be 'builds' or 'tests'");
+                return;
+            }
+            
+            Path logFile = Paths.get(logBaseDir, "requests", requestId, logType, fileName);
+            
+            if (Files.exists(logFile)) {
+                String content = new String(Files.readAllBytes(logFile), "UTF-8");
+                exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8");
+                sendResponse(exchange, 200, content);
+            } else {
+                sendErrorResponse(exchange, 404, "Log file not found: " + fileName);
+            }
+            
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Error retrieving log file", e);
+            sendErrorResponse(exchange, 500, "Internal server error: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Handle API endpoint to list available log files
+     * URL format: /api/logs/<requestId>/<logType>
+     */
+    private void handleLogListAPI(HttpExchange exchange) throws IOException {
+        try {
+            String path = exchange.getRequestURI().getPath();
+            String[] parts = path.split("/");
+            
+            if (parts.length < 5) {
+                sendErrorResponse(exchange, 400, "Invalid log list path format");
+                return;
+            }
+            
+            String requestId = parts[3];
+            String logType = parts[4];
+            
+            // Validate log type
+            if (!"builds".equals(logType) && !"tests".equals(logType)) {
+                sendErrorResponse(exchange, 400, "Invalid log type. Must be 'builds' or 'tests'");
+                return;
+            }
+            
+            Path logDir = Paths.get(logBaseDir, "requests", requestId, logType);
+            
+            JSONArray files = new JSONArray();
+            if (Files.exists(logDir) && Files.isDirectory(logDir)) {
+                try (java.util.stream.Stream<Path> stream = Files.list(logDir)) {
+                    stream.filter(Files::isRegularFile)
+                          .map(p -> p.getFileName().toString())
+                          .sorted()
+                          .forEach(files::put);
+                }
+            }
+            
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            sendResponse(exchange, 200, files.toString());
+            
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Error listing log files", e);
+            sendErrorResponse(exchange, 500, "Internal server error: " + e.getMessage());
+        }
     }
 }

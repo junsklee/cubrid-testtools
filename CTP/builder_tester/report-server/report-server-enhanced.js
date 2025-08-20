@@ -30,9 +30,9 @@ async function ensureDirectories() {
     const requestsDir = path.join(LOG_BASE_DIR, 'requests');
     try {
         await fs.mkdir(requestsDir, { recursive: true });
-        console.log(`✓ Log directory ready: ${requestsDir}`);
+        console.log(`Log directory ready: ${requestsDir}`);
     } catch (err) {
-        console.error(`✗ Failed to create log directory: ${err.message}`);
+        console.error(`Failed to create log directory: ${err.message}`);
     }
 }
 
@@ -282,9 +282,9 @@ function generateReportHTML(data, requestId) {
                 <div><strong>Commits:</strong> <span id="totalCommits">-</span></div>
             </div>
             <div class="action-buttons">
-                <button class="btn" onclick="viewBuildLogs()">📋 View Build Logs</button>
-                <button class="btn" onclick="exportJSON()">💾 Export JSON</button>
-                <button class="btn" onclick="exportCSV()">📊 Export CSV</button>
+                <button class="btn" onclick="viewBuildLogs()">View Build Logs</button>
+                <button class="btn" onclick="exportJSON()">Export JSON</button>
+                <button class="btn" onclick="exportCSV()">Export CSV</button>
             </div>
         </div>        
         <div class="stats-grid">
@@ -523,9 +523,9 @@ function generateReportHTML(data, requestId) {
                         statusText = result.flaky ? '🔄 FLAKY(' + result.attempts + ')' : '✅ PASS';
                     } else if (result.status === 'fail') {
                         statusClass = 'result-fail';
-                        statusText = '❌ FAIL';
+                        statusText = 'FAIL';
                     } else if (result.status === 'build_failed') {
-                        statusText = '🔨 BUILD';
+                        statusText = 'BUILD';
                     }
                     
                     cell.innerHTML = '<span class="' + statusClass + '" onclick="showExecutionLog(\'' + 
@@ -738,7 +738,7 @@ function generateReportHTML(data, requestId) {
                             const commitShort = file.replace('build_', '').replace('.log', '');
                             logsContent += '<div style="margin-bottom: 1rem;">';
                             logsContent += '<button class="btn" onclick="loadBuildLog(\'' + file + '\')">';
-                            logsContent += '📋 Build Log - Commit ' + commitShort + '</button>';
+                            logsContent += 'Build Log - Commit ' + commitShort + '</button>';
                             logsContent += '</div>';
                         });
                     }
@@ -918,14 +918,14 @@ async function handleRequest(req, res) {
                     reportHtml
                 );
                 
-                console.log('✓ Saved report: ' + requestId);
+                console.log('Saved report: ' + requestId);
                 
                 // Return HTML report as response
                 res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
                 res.end(reportHtml);
                 
             } catch (err) {
-                console.error('✗ Error handling callback: ' + err.message);
+                console.error('Error handling callback: ' + err.message);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: err.message }));
             }
@@ -989,7 +989,7 @@ async function handleRequest(req, res) {
                 listHtml += '.timestamp { opacity: 0.8; font-size: 0.9rem; }';
                 listHtml += '</style></head><body>';
                 listHtml += '<div class="container">';
-                listHtml += '<h1>📊 Enhanced Test Report Viewer</h1>';
+                listHtml += '<h1>Enhanced Test Report Viewer</h1>';
                 listHtml += '<div class="report-list">';
                 
                 if (reports.length === 0) {
@@ -1042,7 +1042,7 @@ async function startServer() {
         console.log('║  Health:   http://localhost:' + PORT + '/health        ║');
         console.log('╚════════════════════════════════════════════════╝');
         console.log('');
-        console.log('✨ Enhanced features:');
+        console.log('Enhanced features:');
         console.log('  • View build logs for each commit');
         console.log('  • Click test names to see test details');
         console.log('  • Click PASS/FAIL cells to view execution logs');

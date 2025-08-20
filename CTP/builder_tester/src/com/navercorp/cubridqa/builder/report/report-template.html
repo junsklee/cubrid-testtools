@@ -198,11 +198,28 @@
             font-family: 'Courier New', monospace;
             font-size: 0.9rem;
             color: #4b5563;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .test-name:hover {
+            color: #667eea;
+            text-decoration: underline;
         }
         
         .result-cell {
             text-align: center;
             font-weight: 500;
+        }
+        
+        .result-cell span {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .result-cell span:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         
         .result-pass {
@@ -344,6 +361,50 @@
             .controls { flex-direction: column; }
             .search-box { width: 100%; }
         }
+        
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 1rem;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);
+        }
+        
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #6b7280;
+        }
+        
+        .close-btn:hover {
+            color: #374151;
+        }
     </style>
     </head>
 <body>
@@ -430,8 +491,20 @@
     </div>
     
     <div class="export-buttons">
+        <button class="export-btn" onclick="viewBuildLogs()" title="View Build Logs">Build Logs</button>
         <button class="export-btn" onclick="exportJSON()" title="Export as JSON">JSON</button>
         <button class="export-btn" onclick="exportCSV()" title="Export as CSV">CSV</button>
+    </div>
+    
+    <!-- Modal for viewing details -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">Test Details</h2>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <div id="modalBody"></div>
+        </div>
     </div>
     
     <script>
@@ -638,6 +711,7 @@
             const testCell = document.createElement('td');
             testCell.className = 'test-name';
             testCell.textContent = testName;
+            testCell.onclick = () => viewTestDetails(testName);
             row.appendChild(testCell);
             commits.forEach(commit => {
                 const cell = document.createElement('td');
@@ -666,7 +740,7 @@
                     case 'environment_error':
                     case 'error': statusClass = 'result-error'; statusText = 'ERROR'; break;
                 }
-                cell.innerHTML = "<span class=\"" + statusClass + "\">" + statusText + "</span>";
+                cell.innerHTML = "<span class=\"" + statusClass + "\" onclick=\"viewTestLog('" + testName + "', '" + commit + "')\">" + statusText + "</span>";
                 row.appendChild(cell);
             });
             const failCountCell = document.createElement('td');
@@ -730,6 +804,463 @@
             const a = document.createElement('a');
             a.href = url; a.download = "test-results-{{REQUEST_ID}}.csv"; document.body.appendChild(a);
             a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        }
+        
+        // Enhanced log viewing functions
+        function closeModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+        
+        // View build logs
+        async function viewBuildLogs() {
+            const requestId = '{{REQUEST_ID}}';
+            try {
+                const response = await fetch(`/api/logs/${requestId}/builds`);
+                if (response.ok) {
+                    const files = await response.json();
+                    let content = '<div style="padding: 1.5rem;">';
+                    content += '<h3>Build Logs</h3>';
+                    
+                    if (files.length === 0) {
+                        content += '<p>No build logs available.</p>';
+                    } else {
+                        files.forEach(file => {
+                            const commitShort = file.replace('build_', '').replace('.log', '');
+                            content += '<div style="margin-bottom: 1rem;">';
+                            content += '<button class="export-btn" onclick="loadBuildLog(\'' + file + '\')" style="border-radius: 0.5rem; padding: 0.5rem 1rem;">';
+                            content += 'Build Log - Commit ' + commitShort + '</button>';
+                            content += '</div>';
+                        });
+                    }
+                    
+                    content += '</div>';
+                    document.getElementById('modalTitle').textContent = 'Build Logs';
+                    document.getElementById('modalBody').innerHTML = content;
+                    document.getElementById('detailModal').style.display = 'block';
+                } else {
+                    alert('Failed to load build logs.');
+                }
+            } catch (error) {
+                console.error('Error loading build logs:', error);
+                alert('Error loading build logs.');
+            }
+        }
+        
+        // Load specific build log
+        async function loadBuildLog(fileName) {
+            const requestId = '{{REQUEST_ID}}';
+            try {
+                const response = await fetch(`/api/log/${requestId}/builds/${fileName}`);
+                if (response.ok) {
+                    const logContent = await response.text();
+                    let content = '<div style="padding: 1.5rem;">';
+                    content += '<h3>Build Log: ' + fileName + '</h3>';
+                    content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap;">';
+                    content += logContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    content += '</pre>';
+                    content += '</div>';
+                    
+                    document.getElementById('modalTitle').textContent = 'Build Log';
+                    document.getElementById('modalBody').innerHTML = content;
+                } else {
+                    alert('Failed to load build log.');
+                }
+            } catch (error) {
+                console.error('Error loading build log:', error);
+                alert('Error loading build log.');
+            }
+        }
+        
+        // View test details modal
+        function viewTestDetails(testName) {
+            const verdict = getTestVerdict(testName);
+            const failCount = calculateFailCount(testName);
+            
+            // Extract script name for display
+            const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+            
+            let content = '<div style="padding: 1.5rem;">';
+            content += '<h3>Test Details: ' + testScript + '</h3>';
+            content += '<p style="font-size: 0.9em; color: #6b7280; margin-bottom: 1rem;"><strong>Full Path:</strong> ' + testName + '</p>';
+            content += '<div style="margin-bottom: 1rem;">';
+            content += '<p><strong>Verdict:</strong> <span class="verdict ' + verdict.class + '">' + verdict.text + '</span></p>';
+            content += '<p><strong>Failed Count:</strong> ' + failCount + ' out of ' + commits.length + ' commits</p>';
+            content += '</div>';
+            
+            content += '<h4>Results by Commit:</h4>';
+            content += '<table style="width: 100%; border-collapse: collapse; margin-top: 1rem;">';
+            content += '<tr style="background: #f3f4f6;"><th style="padding: 0.5rem; border: 1px solid #e5e7eb;">Commit</th><th style="padding: 0.5rem; border: 1px solid #e5e7eb;">Status</th><th style="padding: 0.5rem; border: 1px solid #e5e7eb;">Actions</th></tr>';
+            
+            commits.forEach(commit => {
+                const resultData = processedData[testName][commit];
+                let status, isFlaky = false, attempts = 1;
+                
+                if (typeof resultData === 'object' && resultData.status) {
+                    status = resultData.status;
+                    isFlaky = resultData.flaky || false;
+                    attempts = resultData.attempts || 1;
+                } else {
+                    status = resultData || 'error';
+                }
+                
+                let statusClass = 'result-skip';
+                let statusText = 'N/A';
+                switch(status) {
+                    case 'pass': 
+                        statusClass = isFlaky ? 'result-flaky' : 'result-pass';
+                        statusText = isFlaky ? 'FLAKY(' + attempts + ')' : 'PASS';
+                        break;
+                    case 'fail': statusClass = 'result-fail'; statusText = 'FAIL'; break;
+                    case 'build_failed': statusClass = 'result-error'; statusText = 'BUILD'; break;
+                    case 'execution_error':
+                    case 'environment_error':
+                    case 'error': statusClass = 'result-error'; statusText = 'ERROR'; break;
+                }
+                
+                content += '<tr>';
+                content += '<td style="padding: 0.5rem; border: 1px solid #e5e7eb; font-family: monospace;">' + commit.substring(0, 7) + '</td>';
+                content += '<td style="padding: 0.5rem; border: 1px solid #e5e7eb; text-align: center;"><span class="' + statusClass + '">' + statusText + '</span></td>';
+                content += '<td style="padding: 0.5rem; border: 1px solid #e5e7eb; text-align: center;"><button onclick="viewTestLog(\'' + testName + '\', \'' + commit + '\')" style="padding: 0.25rem 0.5rem; border: none; background: #667eea; color: white; border-radius: 0.25rem; cursor: pointer;">View Log</button></td>';
+                content += '</tr>';
+            });
+            
+            content += '</table>';
+            content += '</div>';
+            
+            document.getElementById('modalTitle').textContent = 'Test Case Details';
+            document.getElementById('modalBody').innerHTML = content;
+            document.getElementById('detailModal').style.display = 'block';
+        }
+        
+        // View test log for specific test and commit
+        async function viewTestLog(testName, commit) {
+            const requestId = '{{REQUEST_ID}}';
+            const commitShort = commit.substring(0, 7);
+            
+            try {
+                // Try to get test logs first
+                const testResponse = await fetch(`/api/logs/${requestId}/tests`);
+                if (testResponse.ok) {
+                    const testFiles = await testResponse.json();
+                    
+                    // Extract just the script name like the Builder does: testPath -> testScript -> testName
+                    const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+                    const extractedTestName = testScript.replace('.sh', '');
+                    const safeTestName = extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                    
+                    // Try multiple log file patterns (docker_opt, docker, direct, test)
+                    const logPatterns = [
+                        `docker_opt_${commitShort}_${safeTestName}`,
+                        `docker_${commitShort}_${safeTestName}`,
+                        `direct_${commitShort}_${safeTestName}`,
+                        `test_${commitShort}_${safeTestName}`
+                    ];
+                    
+                    let testLogFile = null;
+                    for (const pattern of logPatterns) {
+                        // Look for exact match or with attempt number (.2.log, .3.log, etc.)
+                        const matchingFile = testFiles.find(file => 
+                            file.startsWith(pattern + '.log') || 
+                            file.match(new RegExp(`^${pattern}\\.\\d+\\.log$`))
+                        );
+                        if (matchingFile) {
+                            testLogFile = matchingFile;
+                            break;
+                        }
+                    }
+                    
+                    // If we have multiple attempts, find all relevant log files
+                    if (!testLogFile) {
+                        // Fallback: find any file that contains the test name and commit
+                        const candidateFiles = testFiles.filter(file => 
+                            file.includes(safeTestName) && file.includes(commitShort) && file.endsWith('.log')
+                        );
+                        if (candidateFiles.length > 0) {
+                            testLogFile = candidateFiles[0]; // Will be handled by showMultipleLogOptions
+                        }
+                    }
+                    
+                    // Check if we have multiple log files for this test (different attempts across all commits)
+                    const allLogFiles = testFiles.filter(file => {
+                        // Include files that match the test name, regardless of commit
+                        return file.includes(safeTestName) && file.endsWith('.log');
+                    });
+                    
+                    // If we found the specific file for this commit, but there are other logs for this test
+                    if (testLogFile && allLogFiles.length > 1) {
+                        // Show options for all available log files for this test
+                        showMultipleLogOptions(testName, commitShort, allLogFiles, requestId);
+                        return;
+                    } else if (!testLogFile && allLogFiles.length > 0) {
+                        // No exact match found, but we have some logs for this test
+                        showMultipleLogOptions(testName, commitShort, allLogFiles, requestId);
+                        return;
+                    }
+                    
+                    if (testLogFile) {
+                        const logResponse = await fetch(`/api/log/${requestId}/tests/${testLogFile}`);
+                        if (logResponse.ok) {
+                            const logContent = await logResponse.text();
+                            let content = '<div style="padding: 1.5rem;">';
+                            content += '<h3>Test Log: ' + testName + ' @ ' + commitShort + '</h3>';
+                            content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
+                            content += logContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                            content += '</pre>';
+                            content += '</div>';
+                            
+                            document.getElementById('modalTitle').textContent = 'Test Execution Log';
+                            document.getElementById('modalBody').innerHTML = content;
+                            document.getElementById('detailModal').style.display = 'block';
+                            return;
+                        }
+                    }
+                }
+                
+                // Check if multiple attempt logs are embedded in the JSON result (for remote testers)
+                const resultData = processedData[testName][commit];
+                if (resultData && typeof resultData === 'object' && resultData.allAttemptLogs) {
+                    // Show multiple embedded logs from remote tester
+                    showEmbeddedMultipleLogs(testName, commitShort, resultData.allAttemptLogs);
+                    return;
+                }
+                // Check if single log content is embedded in the JSON result (for remote testers)
+                else if (resultData && typeof resultData === 'object' && resultData.logContent) {
+                    let content = '<div style="padding: 1.5rem;">';
+                    content += '<h3>Test Log: ' + testName + ' @ ' + commitShort + '</h3>';
+                    content += '<p style="color: #f59e0b; margin-bottom: 1rem;"><strong>Note:</strong> Log from remote tester (embedded in JSON response)</p>';
+                    content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
+                    content += resultData.logContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    content += '</pre>';
+                    if (resultData.logTruncated) {
+                        content += '<p style="color: #f59e0b; font-size: 0.9rem; margin-top: 0.5rem;"><em>Note: Log was truncated for network transfer</em></p>';
+                    }
+                    content += '</div>';
+                    
+                    document.getElementById('modalTitle').textContent = 'Test Execution Log';
+                    document.getElementById('modalBody').innerHTML = content;
+                    document.getElementById('detailModal').style.display = 'block';
+                    return;
+                }
+                
+                // Fallback: show test result information
+                let content = '<div style="padding: 1.5rem;">';
+                content += '<h3>Test Result: ' + testName + ' @ ' + commitShort + '</h3>';
+                content += '<p>Test log not available. This might be because:</p>';
+                content += '<ul style="margin-left: 2rem; margin-top: 1rem;">';
+                content += '<li>The test was executed with docker_optimized mode and log transfer is not yet implemented</li>';
+                content += '<li>The log file was not created or has been cleaned up</li>';
+                content += '<li>The test failed during build phase</li>';
+                content += '</ul>';
+                
+                // Show what we do know about this result
+                if (resultData) {
+                    content += '<div style="margin-top: 1rem; padding: 1rem; background: #f3f4f6; border-radius: 0.5rem;">';
+                    content += '<h4>Available Information:</h4>';
+                    if (typeof resultData === 'object') {
+                        content += '<p><strong>Status:</strong> ' + resultData.status + '</p>';
+                        if (resultData.flaky) content += '<p><strong>Flaky:</strong> Yes (passed after ' + resultData.attempts + ' attempts)</p>';
+                        if (resultData.attempts > 1) content += '<p><strong>Attempts:</strong> ' + resultData.attempts + '</p>';
+                    } else {
+                        content += '<p><strong>Status:</strong> ' + resultData + '</p>';
+                    }
+                    content += '</div>';
+                }
+                
+                content += '</div>';
+                
+                document.getElementById('modalTitle').textContent = 'Test Information';
+                document.getElementById('modalBody').innerHTML = content;
+                document.getElementById('detailModal').style.display = 'block';
+                
+            } catch (error) {
+                console.error('Error loading test log:', error);
+                alert('Error loading test log.');
+            }
+        }
+        
+        // Show multiple log file options for tests across commits and attempts
+        function showMultipleLogOptions(testName, clickedCommitShort, logFiles, requestId) {
+            const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+            
+            // Parse and group log files by commit and attempt
+            const logGroups = {};
+            logFiles.forEach(file => {
+                // Extract commit and attempt from filename (e.g., docker_opt_b8505c4_cbrd_25894.2.log)
+                const match = file.match(/.*_([a-f0-9]{7})_.*?(?:\.(\d+))?\.log$/);
+                if (match) {
+                    const commit = match[1];
+                    const attempt = match[2] ? parseInt(match[2]) : 1;
+                    
+                    if (!logGroups[commit]) {
+                        logGroups[commit] = [];
+                    }
+                    logGroups[commit].push({ file, attempt });
+                }
+            });
+            
+            // Sort commits and attempts
+            Object.keys(logGroups).forEach(commit => {
+                logGroups[commit].sort((a, b) => a.attempt - b.attempt);
+            });
+            
+            let content = '<div style="padding: 1.5rem;">';
+            content += '<h3>Test Execution Logs: ' + testScript + '</h3>';
+            content += '<p style="margin-bottom: 1rem;">Multiple execution logs found across commits and attempts:</p>';
+            
+            // Group by commit
+            Object.keys(logGroups).sort().forEach(commit => {
+                const isClickedCommit = commit === clickedCommitShort;
+                content += '<div style="margin-bottom: 1.5rem; padding: 1rem; border: 2px solid ' + 
+                          (isClickedCommit ? '#667eea' : '#e5e7eb') + '; border-radius: 0.5rem; background: ' +
+                          (isClickedCommit ? '#f0f4ff' : '#f9fafb') + ';">';
+                content += '<h4 style="margin: 0 0 0.75rem 0; color: ' + (isClickedCommit ? '#1e40af' : '#374151') + ';">';
+                content += 'Commit ' + commit;
+                if (isClickedCommit) content += ' <span style="font-size: 0.8rem;">(clicked)</span>';
+                content += '</h4>';
+                
+                logGroups[commit].forEach(({ file, attempt }) => {
+                    const isFirstAttempt = attempt === 1;
+                    const isFinalAttempt = attempt === logGroups[commit].length;
+                    
+                    content += '<div style="margin-bottom: 0.5rem;">';
+                    content += '<button onclick="loadSpecificTestLog(\'' + requestId + '\', \'' + file + '\', \'' + testName + '\', \'' + commit + '\', ' + attempt + ')" ';
+                    content += 'style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid ' + (isFirstAttempt ? '#ef4444' : '#10b981') + '; ';
+                    content += 'background: ' + (isFirstAttempt ? '#fef2f2' : '#f0fdf4') + '; color: ' + (isFirstAttempt ? '#991b1b' : '#166534') + '; ';
+                    content += 'border-radius: 0.25rem; cursor: pointer; text-align: left; font-family: monospace; font-size: 0.85rem;">';
+                    content += '<strong>Attempt ' + attempt + '</strong>';
+                    if (isFirstAttempt && logGroups[commit].length > 1) {
+                        content += ' <span style="color: #ef4444;">(Failure)</span>';
+                    } else if (isFinalAttempt && logGroups[commit].length > 1) {
+                        content += ' <span style="color: #10b981;">(Success)</span>';
+                    }
+                    content += '<br><span style="font-size: 0.75rem; opacity: 0.7;">' + file + '</span>';
+                    content += '</button>';
+                    content += '</div>';
+                });
+                
+                content += '</div>';
+            });
+            
+            content += '<p style="margin-top: 1rem; font-size: 0.9rem; color: #6b7280;">';
+            content += '<strong>Note:</strong> First attempts typically show failures, later attempts show retry behavior. ';
+            content += 'Each commit may have different execution results.';
+            content += '</p>';
+            content += '</div>';
+            
+            document.getElementById('modalTitle').textContent = 'Multiple Test Logs Available';
+            document.getElementById('modalBody').innerHTML = content;
+            document.getElementById('detailModal').style.display = 'block';
+        }
+        
+        // Load specific test log file
+        async function loadSpecificTestLog(requestId, fileName, testName, commitShort, attemptNum) {
+            try {
+                const response = await fetch(`/api/log/${requestId}/tests/${fileName}`);
+                if (response.ok) {
+                    const logContent = await response.text();
+                    const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+                    
+                    let content = '<div style="padding: 1.5rem;">';
+                    content += '<h3>Test Log: ' + testScript + ' @ ' + commitShort + ' (Attempt ' + attemptNum + ')</h3>';
+                    content += '<div style="margin-bottom: 1rem;">';
+                    content += '<button onclick="showMultipleLogOptions(\'' + testName + '\', \'' + commitShort + '\', ' + 
+                               JSON.stringify(fileName.includes('.2.') ? [fileName.replace('.2.', '.'), fileName] : [fileName]) + ', \'' + requestId + '\')" ';
+                    content += 'style="padding: 0.5rem 1rem; border: 1px solid #d1d5db; background: #f9fafb; border-radius: 0.25rem; cursor: pointer;">';
+                    content += '< Back';
+                    content += '</button>';
+                    content += '</div>';
+                    content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
+                    content += logContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    content += '</pre>';
+                    content += '</div>';
+                    
+                    document.getElementById('modalTitle').textContent = 'Test Execution Log (Attempt ' + attemptNum + ')';
+                    document.getElementById('modalBody').innerHTML = content;
+                } else {
+                    alert('Failed to load log file: ' + fileName);
+                }
+            } catch (error) {
+                console.error('Error loading specific test log:', error);
+                alert('Error loading log file.');
+            }
+        }
+        
+        // Show embedded multiple logs from remote tester JSON payload
+        function showEmbeddedMultipleLogs(testName, commitShort, allAttemptLogs) {
+            const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+            
+            let content = '<div style="padding: 1.5rem;">';
+            content += '<h3>Test Execution Logs: ' + testScript + ' @ ' + commitShort + '</h3>';
+            content += '<p style="color: #f59e0b; margin-bottom: 1rem;"><strong>Note:</strong> Multiple logs from remote tester (embedded in JSON response)</p>';
+            content += '<p style="margin-bottom: 1rem;">Select an attempt to view:</p>';
+            
+            allAttemptLogs.forEach((attemptLog, index) => {
+                const attemptNum = attemptLog.attempt;
+                const isFirstAttempt = attemptNum === 1;
+                const isFinalAttempt = attemptNum === allAttemptLogs.length;
+                const status = attemptLog.status || 'unknown';
+                
+                content += '<div style="margin-bottom: 0.75rem;">';
+                content += '<button onclick="showEmbeddedLog(\'' + testName + '\', \'' + commitShort + '\', ' + index + ', ' + JSON.stringify(allAttemptLogs).replace(/"/g, '&quot;') + ')" ';
+                content += 'style="width: 100%; padding: 0.75rem; border: 2px solid ' + (isFirstAttempt ? '#ef4444' : '#10b981') + '; ';
+                content += 'background: ' + (isFirstAttempt ? '#fef2f2' : '#f0fdf4') + '; color: ' + (isFirstAttempt ? '#991b1b' : '#166534') + '; ';
+                content += 'border-radius: 0.5rem; cursor: pointer; text-align: left; font-family: monospace; font-size: 0.9rem;">';
+                content += '<strong>Attempt ' + attemptNum + '</strong> - ' + status.toUpperCase();
+                if (isFirstAttempt && allAttemptLogs.length > 1) {
+                    content += ' <span style="color: #ef4444;">(Failure)</span>';
+                } else if (isFinalAttempt && allAttemptLogs.length > 1) {
+                    content += ' <span style="color: #10b981;">(Success)</span>';
+                }
+                content += '<br><span style="font-size: 0.8rem; opacity: 0.8;">' + attemptLog.logFileName + '</span>';
+                if (attemptLog.logTruncated) {
+                    content += ' <span style="color: #f59e0b;">(truncated)</span>';
+                }
+                content += '</button>';
+                content += '</div>';
+            });
+            
+            content += '<p style="margin-top: 1rem; font-size: 0.9rem; color: #6b7280;">';
+            content += '<strong>Note:</strong> These logs were transferred from remote tester via JSON payload. ';
+            content += 'First attempts typically show failures, later attempts show retry behavior.';
+            content += '</p>';
+            content += '</div>';
+            
+            document.getElementById('modalTitle').textContent = 'Multiple Embedded Test Logs';
+            document.getElementById('modalBody').innerHTML = content;
+            document.getElementById('detailModal').style.display = 'block';
+        }
+        
+        // Show specific embedded log content
+        function showEmbeddedLog(testName, commitShort, logIndex, allAttemptLogs) {
+            const attemptLog = allAttemptLogs[logIndex];
+            const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+            
+            let content = '<div style="padding: 1.5rem;">';
+            content += '<h3>Test Log: ' + testScript + ' @ ' + commitShort + ' (Attempt ' + attemptLog.attempt + ')</h3>';
+            content += '<p style="color: #f59e0b; margin-bottom: 1rem;"><strong>Note:</strong> Log from remote tester (embedded in JSON)</p>';
+            content += '<div style="margin-bottom: 1rem;">';
+            content += '<button onclick="showEmbeddedMultipleLogs(\'' + testName + '\', \'' + commitShort + '\', ' + JSON.stringify(allAttemptLogs).replace(/"/g, '&quot;') + ')" ';
+            content += 'style="padding: 0.5rem 1rem; border: 1px solid #d1d5db; background: #f9fafb; border-radius: 0.25rem; cursor: pointer;">';
+            content += '← Back to All Attempts</button>';
+            content += '</div>';
+            content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
+            content += attemptLog.logContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            content += '</pre>';
+            if (attemptLog.logTruncated) {
+                content += '<p style="color: #f59e0b; font-size: 0.9rem; margin-top: 0.5rem;"><em>Note: Log was truncated for network transfer</em></p>';
+            }
+            content += '</div>';
+            
+            document.getElementById('modalTitle').textContent = 'Test Execution Log (Attempt ' + attemptLog.attempt + ')';
+            document.getElementById('modalBody').innerHTML = content;
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailModal');
+            if (event.target === modal) {
+                closeModal();
+            }
         }
     </script>
 </body>
