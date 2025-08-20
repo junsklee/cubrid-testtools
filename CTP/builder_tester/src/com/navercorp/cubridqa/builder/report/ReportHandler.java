@@ -160,7 +160,7 @@ public class ReportHandler implements HttpHandler {
                     if (Files.exists(reportFile)) {
                         html.append("<div class='report-item'>");
                         html.append("<a href='/report?id=").append(dirName).append("'>");
-                        html.append("📁 ").append(dirName).append("</a>");
+                        html.append("&#x1F4C1; ").append(dirName).append("</a>");
                         try {
                             html.append("<span class='timestamp'>")
                                 .append(Files.getLastModifiedTime(reportFile).toString())

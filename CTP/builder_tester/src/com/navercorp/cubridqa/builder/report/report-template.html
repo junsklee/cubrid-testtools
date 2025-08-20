@@ -531,22 +531,20 @@
                     const status = result.status || 'error';
                     const flaky = result.flaky || false;
                     const attempts = result.attempts || 1;
+                    const attemptLogMetadata = result.attemptLogMetadata || null;
                     
                     commitSet.add(commit);
                     if (!testGroups[test]) {
                         testGroups[test] = {};
                     }
                     
-                    // Store full result object if it has extra info, otherwise just status
-                    if (flaky || attempts > 1) {
-                        testGroups[test][commit] = {
-                            status: status,
-                            flaky: flaky,
-                            attempts: attempts
-                        };
-                    } else {
-                        testGroups[test][commit] = status;
-                    }
+                    // Always store full result object to preserve attemptLogMetadata
+                    testGroups[test][commit] = {
+                        status: status,
+                        flaky: flaky,
+                        attempts: attempts,
+                        attemptLogMetadata: attemptLogMetadata
+                    };
                 });
             }
             commits = Array.from(commitSet).sort();
@@ -1118,18 +1116,27 @@
                 if (isClickedCommit) content += ' <span style="font-size: 0.8rem;">(clicked)</span>';
                 content += '</h4>';
                 
+                // Get attempt metadata for this commit if available
+                const metadata = getAttemptMetadata(testName, commit);
+                
                 logGroups[commit].forEach(({ file, attempt }) => {
-                    // Use neutral colors since we don't know the actual status from filename alone
-                    const borderColor = '#6b7280';
-                    const bgColor = '#f9fafb';
-                    const textColor = '#374151';
+                    // Try to find status from metadata
+                    let status = 'unknown';
+                    if (metadata) {
+                        const attemptData = metadata.find(m => m.attempt === attempt);
+                        if (attemptData && attemptData.status) {
+                            status = attemptData.status;
+                        }
+                    }
+                    
+                    const colors = getStatusColors(status);
                     
                     content += '<div style="margin-bottom: 0.5rem;">';
                     content += '<button onclick="loadSpecificTestLog(\'' + requestId + '\', \'' + file + '\', \'' + testName + '\', \'' + commit + '\', ' + attempt + ')" ';
-                    content += 'style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid ' + borderColor + '; ';
-                    content += 'background: ' + bgColor + '; color: ' + textColor + '; ';
+                    content += 'style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid ' + colors.border + '; ';
+                    content += 'background: ' + colors.background + '; color: ' + colors.text + '; ';
                     content += 'border-radius: 0.25rem; cursor: pointer; text-align: left; font-family: monospace; font-size: 0.85rem;">';
-                    content += '<strong>Attempt ' + attempt + '</strong>';
+                    content += formatStatusText(status, attempt);
                     content += '<br><span style="font-size: 0.75rem; opacity: 0.7;">' + file + '</span>';
                     content += '</button>';
                     content += '</div>';
@@ -1160,9 +1167,9 @@
                     let content = '<div style="padding: 1.5rem;">';
                     content += '<h3>Test Log: ' + testScript + ' @ ' + commitShort + ' (Attempt ' + attemptNum + ')</h3>';
                     content += '<div style="margin-bottom: 1rem;">';
-                    content += '<button onclick="showMultipleLogOptions(\'' + testName + '\', \'' + commitShort + '\', [], \'' + requestId + '\')" ';
+                    content += '<button onclick="goBackToLogOptions(\'' + testName + '\', \'' + commitShort + '\', \'' + requestId + '\')" ';
                     content += 'style="padding: 0.5rem 1rem; border: 1px solid #d1d5db; background: #f9fafb; border-radius: 0.25rem; cursor: pointer;">';
-                    content += '< Back';
+                    content += '&larr; Back';
                     content += '</button>';
                     content += '</div>';
                     content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
@@ -1181,6 +1188,72 @@
             }
         }
         
+        // Helper function to get status colors based on actual test result
+        function getStatusColors(status) {
+            const statusLower = status.toLowerCase();
+            switch (statusLower) {
+                case 'pass':
+                    return { border: '#10b981', background: '#f0fdf4', text: '#166534' };
+                case 'fail':
+                    return { border: '#ef4444', background: '#fef2f2', text: '#991b1b' };
+                case 'execution_error':
+                case 'environment_error':
+                case 'error':
+                    return { border: '#f59e0b', background: '#fefbf2', text: '#92400e' };
+                default:
+                    return { border: '#6b7280', background: '#f9fafb', text: '#374151' };
+            }
+        }
+        
+        // Helper function to format status text without emojis
+        function formatStatusText(status, attemptNum) {
+            return 'Attempt ' + attemptNum + ' - ' + status.toUpperCase();
+        }
+        
+        // Helper function to get attempt metadata for a specific test and commit
+        function getAttemptMetadata(testName, commitShort) {
+            if (processedData && processedData[testName]) {
+                // Find the full commit hash that starts with the short hash
+                const fullCommit = Object.keys(processedData[testName]).find(c => c.startsWith(commitShort));
+                if (fullCommit && processedData[testName][fullCommit]) {
+                    const result = processedData[testName][fullCommit];
+                    if (result.attemptLogMetadata && Array.isArray(result.attemptLogMetadata)) {
+                        return result.attemptLogMetadata;
+                    }
+                }
+            }
+            return null;
+        }
+        
+        // Enhanced back navigation that maintains context
+        async function goBackToLogOptions(testName, clickedCommitShort, requestId) {
+            try {
+                // Get all log files for this test
+                const testResponse = await fetch(`/api/logs/${requestId}/tests`);
+                if (testResponse.ok) {
+                    const testFiles = await testResponse.json();
+                    
+                    // Extract just the script name
+                    const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+                    const extractedTestName = testScript.replace('.sh', '');
+                    const safeTestName = extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                    
+                    // Find all log files for this test
+                    const allLogFiles = testFiles.filter(file => 
+                        file.includes(safeTestName) && file.endsWith('.log')
+                    );
+                    
+                    showMultipleLogOptions(testName, clickedCommitShort, allLogFiles, requestId);
+                } else {
+                    console.error('Failed to load test files');
+                    showMultipleLogOptions(testName, clickedCommitShort, [], requestId);
+                }
+            } catch (error) {
+                console.error('Error in back navigation:', error);
+                showMultipleLogOptions(testName, clickedCommitShort, [], requestId);
+            }
+        }
+        
         // Show embedded multiple logs from remote tester JSON payload
         function showEmbeddedMultipleLogs(testName, commitShort, allAttemptLogs) {
             const testScript = testName.substring(testName.lastIndexOf('/') + 1);
@@ -1193,19 +1266,14 @@
             allAttemptLogs.forEach((attemptLog, index) => {
                 const attemptNum = attemptLog.attempt;
                 const status = attemptLog.status || 'unknown';
-                const isPass = status.toLowerCase() === 'pass';
-                
-                // Determine colors based on actual status, not attempt number
-                const borderColor = isPass ? '#10b981' : '#ef4444';
-                const bgColor = isPass ? '#f0fdf4' : '#fef2f2';
-                const textColor = isPass ? '#166534' : '#991b1b';
+                const colors = getStatusColors(status);
                 
                 content += '<div style="margin-bottom: 0.75rem;">';
                 content += '<button onclick="showEmbeddedLog(\'' + testName + '\', \'' + commitShort + '\', ' + index + ', ' + JSON.stringify(allAttemptLogs).replace(/"/g, '&quot;') + ')" ';
-                content += 'style="width: 100%; padding: 0.75rem; border: 2px solid ' + borderColor + '; ';
-                content += 'background: ' + bgColor + '; color: ' + textColor + '; ';
+                content += 'style="width: 100%; padding: 0.75rem; border: 2px solid ' + colors.border + '; ';
+                content += 'background: ' + colors.background + '; color: ' + colors.text + '; ';
                 content += 'border-radius: 0.5rem; cursor: pointer; text-align: left; font-family: monospace; font-size: 0.9rem;">';
-                content += '<strong>Attempt ' + attemptNum + '</strong> - ' + status.toUpperCase();
+                content += formatStatusText(status, attemptNum);
                 content += '<br><span style="font-size: 0.8rem; opacity: 0.8;">' + attemptLog.logFileName + '</span>';
                 if (attemptLog.logTruncated) {
                     content += ' <span style="color: #f59e0b;">(truncated)</span>';
@@ -1236,7 +1304,7 @@
             content += '<div style="margin-bottom: 1rem;">';
             content += '<button onclick="showEmbeddedMultipleLogs(\'' + testName + '\', \'' + commitShort + '\', ' + JSON.stringify(allAttemptLogs).replace(/"/g, '&quot;') + ')" ';
             content += 'style="padding: 0.5rem 1rem; border: 1px solid #d1d5db; background: #f9fafb; border-radius: 0.25rem; cursor: pointer;">';
-            content += '← Back to All Attempts</button>';
+            content += '&larr; Back</button>';
             content += '</div>';
             content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
             content += attemptLog.logContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');

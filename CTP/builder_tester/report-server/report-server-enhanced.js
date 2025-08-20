@@ -274,7 +274,7 @@ function generateReportHTML(data, requestId) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🧪 CUBRID Test Results</h1>
+            <h1>CUBRID Test Results</h1>
             <div class="metadata">
                 <div><strong>Request ID:</strong> ${requestId}</div>
                 <div><strong>Generated:</strong> ${timestamp}</div>
@@ -1043,10 +1043,10 @@ async function startServer() {
         console.log('╚════════════════════════════════════════════════╝');
         console.log('');
         console.log('Enhanced features:');
-        console.log('  • View build logs for each commit');
-        console.log('  • Click test names to see test details');
-        console.log('  • Click PASS/FAIL cells to view execution logs');
-        console.log('  • Support for flaky test logs with multiple attempts');
+        console.log('  - View build logs for each commit');
+        console.log('  - Click test names to see test details');
+        console.log('  - Click PASS/FAIL cells to view execution logs');
+        console.log('  - Support for flaky test logs with multiple attempts');
         console.log('');
         console.log('Press Ctrl+C to stop the server');
     });
