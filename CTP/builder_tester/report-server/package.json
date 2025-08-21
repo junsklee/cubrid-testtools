@@ -1,22 +1,29 @@
 {
   "name": "cubrid-test-report-server",
-  "version": "2.0.0",
-  "description": "Enhanced interactive test report viewer with log viewing capabilities for CUBRID Builder-Tester",
-  "main": "report-server.js",
+  "version": "3.0.0",
+  "description": "Fully integrated interactive dashboard and report viewer for CUBRID Builder-Tester with GitHub integration",
+  "main": "report-server-integrated.js",
   "scripts": {
-    "start": "node report-server.js",
-    "start:custom": "node report-server.js 8091"
+    "start": "node report-server-integrated.js",
+    "start:original": "node report-server.js",
+    "start:integrated": "node report-server-integrated.js",
+    "start:custom": "node report-server-integrated.js 8091",
+    "dev": "BUILDER_HOST=localhost BUILDER_PORT=8089 node report-server-integrated.js"
   },
   "keywords": [
     "cubrid",
     "test",
     "report",
     "visualization",
-    "logs"
+    "dashboard",
+    "builder",
+    "tester",
+    "github"
   ],
   "author": "CUBRID QA Team",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=14.0.0"
-  }
+  },
+  "dependencies": {}
 }
