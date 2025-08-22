@@ -51,18 +51,13 @@ cat <<EOF | curl -X POST "http://${BUILDER_HOST}:${BUILDER_PORT}/build" \
 {
   "commits": ["911e5d3561156d0b3ad2043a6d5a00dbc937c994", "6407e0769f8426cb2ead1d47f127bb0876f9c37d"],
   "tests": [
-    "shell/_05_addition/cubridsus1961/cases/cubridsus1961.sh",
-    "shell/_06_issues/_12_2h/bug_bts_9521_1/cases/bug_bts_9521_1.sh",
-    "shell/_06_issues/_17_1h/cbrd_20867/cases/cbrd_20867.sh",
-    "shell/_06_issues/_25_1h/cbrd_26020/cases/cbrd_26020.sh",
     "shell/_28_features_844/issue_10984_query_profiling/_03_mixed_test/_07_show_columns/cases/_07_show_columns.sh",
     "shell/_08_shard/_50_cubridsus/bug_bts_10130/cases/bug_bts_10130.sh",
-    "shell/_10_plcsql/bug_fix/cbrd_25894/cases/cbrd_25894.sh",
-    "shell/_38_fig/cbrd_24882/vacuumdb/cases/vacuumdb.sh"
+    "shell/_10_plcsql/bug_fix/cbrd_25894/cases/cbrd_25894.sh"
   ],
   "callbackUrl": "http://localhost:8089/callback",
   "workerIps": ["localhost", "192.168.1.15:8090"],
-  "buildType": "debug"
+  "buildType": "release"
 }
 EOF
 
