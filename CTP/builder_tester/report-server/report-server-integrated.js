@@ -595,6 +595,28 @@ async function handleRequest(req, res) {
             return;
         }
 
+        // Serve root-level logs like builder.log
+        if (pathname.startsWith('/api/log-root/') && req.method === 'GET') {
+            const parts = pathname.split('/').filter(Boolean); // [api, log-root, <reqId>, <file>]
+            if (parts.length >= 4) {
+                const requestId = parts[2];
+                const fileName = parts.slice(3).join('/');
+                try {
+                    const fsPath = require('path').join(LOG_BASE_DIR, 'requests', requestId, fileName);
+                    const content = await fs.readFile(fsPath, 'utf8');
+                    res.writeHead(200, { 'Content-Type': 'text/plain; charset=UTF-8' });
+                    res.end(content);
+                } catch (e) {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Root log file not found' }));
+                }
+            } else {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Invalid path' }));
+            }
+            return;
+        }
+
         if (pathname.startsWith('/api/logs/') && req.method === 'GET') {
             const parts = pathname.split('/').filter(Boolean); // [api, logs, <reqId>, <type>]
             if (parts.length >= 4) {
@@ -1153,11 +1175,8 @@ function generateReportHTML(data, requestId) {
         function renderTable() {
             const headerRow = document.getElementById('tableHeader');
             const tbody = document.getElementById('tableBody');
-            
-            // Clear and add commit columns
             while (headerRow.children.length > 1) headerRow.removeChild(headerRow.children[1]);
             tbody.innerHTML = '';
-            
             commits.forEach(commit => {
                 const th = document.createElement('th');
                 th.style.textAlign = 'center';
@@ -1165,35 +1184,25 @@ function generateReportHTML(data, requestId) {
                 th.title = commit;
                 headerRow.insertBefore(th, headerRow.children[headerRow.children.length - 2]);
             });
-            
-            // Add test rows
             Object.keys(processedData).sort().forEach(test => {
                 const row = document.createElement('tr');
                 const verdict = getTestVerdict(test);
                 const failCount = calculateFailCount(test);
-                
-                // Test name - clickable to show details
                 const testCell = document.createElement('td');
-                testCell.innerHTML = '<span class="test-name" onclick="showTestDetails(\'' + 
-                    test.replace(/'/g, "\\'") + '\')">' + test + '</span>';
+                testCell.innerHTML = '<span class="test-name" data-test="' + encodeURIComponent(test) + '">' + test + '</span>';
                 row.appendChild(testCell);
-                
-                // Commit results - clickable to show logs
                 commits.forEach(commit => {
                     const cell = document.createElement('td');
                     cell.className = 'result-cell';
                     cell.style.textAlign = 'center';
-                    
                     const result = processedData[test][commit];
                     if (!result) {
                         cell.innerHTML = '<span class="result-error">N/A</span>';
                         row.appendChild(cell);
                         return;
                     }
-                    
                     let statusClass = 'result-error';
                     let statusText = 'ERROR';
-                    
                     if (result.status === 'pass') {
                         statusClass = result.flaky ? 'result-flaky' : 'result-pass';
                         statusText = result.flaky ? 'FLAKY(' + result.attempts + ')' : 'PASS';
@@ -1203,26 +1212,31 @@ function generateReportHTML(data, requestId) {
                     } else if (result.status === 'build_failed') {
                         statusText = 'BUILD';
                     }
-                    
-                    cell.innerHTML = '<span class="' + statusClass + '" onclick="showExecutionLog(\'' + 
-                        test.replace(/'/g, "\\'") + '\', \'" + commit + "\')">' + statusText + '</span>';
+                    cell.innerHTML = '<span class="' + statusClass + ' result-action" data-test="' + encodeURIComponent(test) + '" data-commit="' + commit + '">' + statusText + '</span>';
                     row.appendChild(cell);
                 });
-                
-                // Fail count
                 const failCountCell = document.createElement('td');
                 failCountCell.style.fontWeight = 'bold';
-                failCountCell.style.color = failCount === 0 ? '#065f46' : 
-                                           failCount === commits.length ? '#991b1b' : '#92400e';
+                failCountCell.style.color = failCount === 0 ? '#065f46' : (failCount === commits.length ? '#991b1b' : '#92400e');
                 failCountCell.textContent = failCount;
                 row.appendChild(failCountCell);
-                
-                // Verdict
                 const verdictCell = document.createElement('td');
                 verdictCell.innerHTML = '<span class="verdict ' + verdict.class + '">' + verdict.text + '</span>';
                 row.appendChild(verdictCell);
-                
                 tbody.appendChild(row);
+            });
+            Array.prototype.forEach.call(document.querySelectorAll('.test-name'), function(el){
+                el.addEventListener('click', function(){
+                    var t = decodeURIComponent(el.getAttribute('data-test'));
+                    showTestDetails(t);
+                });
+            });
+            Array.prototype.forEach.call(document.querySelectorAll('.result-action'), function(el){
+                el.addEventListener('click', function(){
+                    var t = decodeURIComponent(el.getAttribute('data-test'));
+                    var c = el.getAttribute('data-commit');
+                    showExecutionLog(t, c);
+                });
             });
         }        
         // Modal functions
@@ -1406,9 +1420,15 @@ function generateReportHTML(data, requestId) {
                 if (response.ok) {
                     const files = await response.json();
                     let logsContent = '<div class="file-list">';
+
+                    // Root logs quick access
+                    logsContent += '<div style="margin-bottom: 1rem;">';
+                    logsContent += '<button class="btn" onclick="loadRootLog(\'builder.log\')">Open Main builder.log</button> ';
+                    logsContent += '<button class="btn" style="margin-left:.5rem" onclick="loadRootLog(\'tester.log\')">Open Main tester.log</button>';
+                    logsContent += '</div>';
                     
                     if (files.length === 0) {
-                        logsContent = '<p>No build logs available.</p>';
+                        logsContent += '<p>No build logs available.</p>';
                     } else {
                         files.forEach(file => {
                             const commitShort = file.replace('build_', '').replace('.log', '');
@@ -1445,6 +1465,25 @@ function generateReportHTML(data, requestId) {
                 }
             } catch (error) {
                 alert('Error loading build log: ' + error.message);
+            }
+        }
+
+        // Load root-level log (e.g., builder.log, tester.log)
+        async function loadRootLog(fileName) {
+            try {
+                const response = await fetch('/api/log-root/' + requestId + '/' + fileName);
+                if (response.ok) {
+                    const logContent = await response.text();
+                    const content = '<div class="log-section">' +
+                                   '<h3 class="log-section-title">' + fileName + '</h3>' +
+                                   '<div class="log-viewer">' + escapeHtml(logContent || '(empty)') + '</div>' +
+                                   '</div>';
+                    showModal(fileName, content);
+                } else {
+                    alert('Failed to load ' + fileName);
+                }
+            } catch (error) {
+                alert('Error loading ' + fileName + ': ' + error.message);
             }
         }
         
