@@ -90,12 +90,17 @@ curl http://localhost:8090/health
 ## APIs
 
 ### Builder (port 8089)
-- POST `/build` – Accepts `{ commits[], tests[], callbackUrl, workerIp, buildType }`, responds with `{ status, taskId }`
+- POST `/build` – Accepts `{ commits[], tests[], callbackUrl, workerIp, buildType, runMode?, minRuns?, maxRuns? }`, responds with `{ status, taskId }`
 - GET `/status` – Returns running task(s)
 - GET `/health`
 - GET `/report` – View test result reports (lists all reports)
 - GET `/report?id=req_xxx` – View specific test report
 - POST `/callback` – Receive test results and generate interactive HTML report
+
+#### New Build Request Parameters
+- `runMode`: Test execution mode - "until-pass", "until-fail", or "fixed-runs" (optional)
+- `minRuns`: Minimum number of test attempts (optional, default from config)
+- `maxRuns`: Maximum number of test attempts (optional, default from config)
 
 Concurrency:
 - Builds: limited by `max_concurrent_builds`
@@ -240,23 +245,40 @@ The Builder-Tester system includes an interactive web-based report viewer for an
 
 ### Features
 - **Interactive Reports**: View test results grouped by test case with pass/fail status for each commit
+- **Enhanced Log Viewing**: 
+  - Multi-attempt log display with clickable status indicators (✅ Pass, ❌ Fail, ⚠️ Other)
+  - Build logs with proper line break formatting
+  - Execution logs with automatic path resolution using attemptLogMetadata
+  - Test details modal with comprehensive per-commit information
 - **Automated Verdict Analysis**: Automatically determines failure patterns:
   - `Pass: Not reproduced` - No failures across commits
   - `Bug or Revise: Caused by <commit>` - Single commit failure
   - `Pre-existing Failure` - Failures across all commits
   - `Unstable: Fails intermittently` - Partial failures
-  - `Flaky: Passed after X attempts` - Tests that pass after retries
+  - `Flaky: Inconsistent results across attempts` - Mixed pass/fail results (unified across all run modes)
   - `Error: Test execution failed` - Tests with execution/environment errors
 - **Statistics Dashboard**: Visual KPIs showing pass rate, failed tests, unstable tests, error tests, and flaky tests
 - **Export Options**: Download results as JSON or CSV
 
-### Flaky Test Detection
+### Unified Test Execution & Flaky Detection
 
-The system automatically detects flaky tests when retry functionality is enabled:
-- Tests that fail initially but pass on retry are marked as "flaky"
-- The number of attempts required for the test to pass is recorded
-- Flaky tests are displayed with a special verdict and visual indicator
-- Test logs preserve both failed and successful attempt outputs
+The system now supports unified test execution semantics with configurable run modes:
+
+#### Run Modes (configured in `builder.conf`)
+- **until-pass**: Run tests until they pass or max_runs reached
+- **until-fail**: Run tests until they fail or max_runs reached
+- **fixed-runs**: Always run exactly min_runs to max_runs times
+
+#### Configuration Parameters
+- `run_mode`: Execution mode (until-pass, until-fail, fixed-runs)
+- `min_runs`: Minimum number of test attempts (default: 1)
+- `max_runs`: Maximum number of test attempts (default: 3)
+
+#### Flaky Test Detection
+- **Unified Logic**: Flaky detection works consistently across all run modes
+- **Result-Based**: A test is flaky if it has mixed pass/fail results across attempts
+- **Multi-Attempt Display**: Tests show as PASS(3), FAIL(3), or FLAKY(3) indicating attempt count
+- **Comprehensive Logging**: All attempt logs are preserved and accessible via the report interface
 
 ### Using the Report Viewer
 

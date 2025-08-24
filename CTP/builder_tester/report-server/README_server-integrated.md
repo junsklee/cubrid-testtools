@@ -28,11 +28,16 @@ This is a fully integrated web dashboard for the CUBRID Builder-Tester system. I
   - Configure callback URL
   - Set custom timeout and retry counts
 
-### 📊 System Monitoring
+### 📊 System Monitoring & Enhanced Reporting
 - **Builder Health Check**: View builder status, version, active tasks, and configuration
 - **Tester Health Check**: Check any tester node's status and capabilities
 - **Real-time Build Status**: Monitor build progress with live updates
-- **Test Result Visualization**: View detailed test reports
+- **Advanced Test Result Visualization**: 
+  - Interactive test reports with unified execution semantics support
+  - Multi-attempt log display for PASS(3), FAIL(3), FLAKY(3) results
+  - Enhanced modals with comprehensive test details
+  - Proper log formatting with line breaks and status indicators
+  - Unified flaky test detection across all run modes
 
 ### 🎨 Modern UI/UX
 - Dark mode theme with glassmorphic design
@@ -89,13 +94,27 @@ The server reads configuration from `../conf/builder.conf` if available.
 - `GET /health` - Report server health check
 
 ### API Endpoints
+
+#### Dashboard Endpoints
+- `GET /` - Main dashboard interface
+- `GET /reports` - View all test reports
+- `GET /report?id=<req_id>` - View specific report
+- `GET /health` - Report server health check
+
+#### External API Proxies
 - `GET /api/github/commits?page=<n>` - Fetch commits from GitHub
 - `GET /api/github/validate/<sha>` - Validate commit SHA
-- `POST /api/builder/build` - Submit build request
+- `POST /api/builder/build` - Submit build request (supports new unified execution parameters)
 - `GET /api/builder/status?taskId=<id>` - Get build status
 - `GET /api/builder/health` - Builder health check
 - `GET /api/tester/health?ip=<ip:port>` - Tester health check
-- `POST /callback` - Receive test results
+
+#### Report & Log Endpoints
+- `POST /callback` - Receive test results and generate reports
+- `GET /api/log/<req_id>/tests/<filename>` - Get specific test execution log
+- `GET /api/logs/<req_id>/tests` - List available test logs
+- `GET /api/logs/<req_id>/builds` - List available build logs
+- `GET /api/log-root/<req_id>/<filename>` - Get system logs (builder.log, tester.log)
 
 ## Usage Examples
 
