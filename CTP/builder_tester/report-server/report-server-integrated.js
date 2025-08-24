@@ -842,7 +842,13 @@ function generateReportHTML(data, requestId) {
             color: #374151; 
             background: #f3f4f6; 
         }
-        td { padding: 1rem; border-bottom: 1px solid #e5e7eb; }
+        td { 
+            padding: 1rem; 
+            border-bottom: 1px solid #e5e7eb; 
+            word-wrap: break-word;
+            max-width: 400px;
+            vertical-align: middle;
+        }
         .test-name {
             font-family: monospace;
             cursor: pointer;
@@ -932,6 +938,8 @@ function generateReportHTML(data, requestId) {
             overflow-x: auto;
             max-height: 500px;
             overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         .log-section {
             margin-bottom: 1.5rem;
@@ -1064,12 +1072,29 @@ function generateReportHTML(data, requestId) {
                     commitSet.add(commit);
                     if (!testGroups[test]) testGroups[test] = {};
                     
+                    // Determine if this is a flaky test by checking for inconsistent results across attempts
+                    // A test is flaky if it has mixed pass/fail results across attempts, regardless of run mode
+                    const runMode = result.runMode || 'until-pass';
+                    let isFlaky = false;
+                    
+                    if (result.attemptLogMetadata && result.attemptLogMetadata.length > 1) {
+                        // Check if there are mixed results (some pass, some fail)
+                        const statuses = result.attemptLogMetadata.map(meta => meta.status);
+                        const hasPass = statuses.includes('pass');
+                        const hasFail = statuses.includes('fail');
+                        
+                        // Flaky if there are both passes and fails across attempts
+                        isFlaky = hasPass && hasFail;
+                    }
+                    
                     testGroups[test][commit] = {
                         status: status,
-                        flaky: flaky,
+                        flaky: isFlaky,
                         attempts: attempts,
+                        runMode: runMode,
                         logPath: logPath,
-                        message: result.message || ''
+                        message: result.message || '',
+                        attemptLogMetadata: result.attemptLogMetadata || []
                     };
                 });
             }
@@ -1116,17 +1141,21 @@ function generateReportHTML(data, requestId) {
             // Check for flaky test first
             let hasFlaky = false;
             let maxAttempts = 1;
+            let runMode = 'until-pass'; // default
             
             commits.forEach(commit => {
                 const result = processedData[testName][commit];
-                if (result && result.flaky) {
-                    hasFlaky = true;
-                    if (result.attempts > maxAttempts) maxAttempts = result.attempts;
+                if (result) {
+                    if (result.flaky) {
+                        hasFlaky = true;
+                        if (result.attempts > maxAttempts) maxAttempts = result.attempts;
+                    }
+                    if (result.runMode) runMode = result.runMode;
                 }
             });
             
             if (hasFlaky) {
-                return { text: 'Flaky: Passed after ' + maxAttempts + ' attempts', class: 'verdict-flaky' };
+                return { text: 'Flaky: Inconsistent results across ' + maxAttempts + ' attempts', class: 'verdict-flaky' };
             }
             
             // Check for errors
@@ -1175,9 +1204,25 @@ function generateReportHTML(data, requestId) {
         function renderTable() {
             const headerRow = document.getElementById('tableHeader');
             const tbody = document.getElementById('tableBody');
-            while (headerRow.children.length > 1) headerRow.removeChild(headerRow.children[1]);
+            
+            if (!headerRow || !tbody) {
+                return;
+            }
+            
+            if (commits.length === 0 || Object.keys(processedData).length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3">No test results found</td></tr>';
+                return;
+            }
+            
+            // Clear existing commit columns but keep "Test Case", "Fail Num", "Verdict"
+            while (headerRow.children.length > 3) {
+                headerRow.removeChild(headerRow.children[1]);
+            }
+            
             tbody.innerHTML = '';
-            commits.forEach(commit => {
+            
+            // Insert commit headers between "Test Case" and "Fail Num" columns
+            commits.forEach((commit, index) => {
                 const th = document.createElement('th');
                 th.style.textAlign = 'center';
                 th.innerHTML = commit.substring(0, 7);
@@ -1204,11 +1249,20 @@ function generateReportHTML(data, requestId) {
                     let statusClass = 'result-error';
                     let statusText = 'ERROR';
                     if (result.status === 'pass') {
-                        statusClass = result.flaky ? 'result-flaky' : 'result-pass';
-                        statusText = result.flaky ? 'FLAKY(' + result.attempts + ')' : 'PASS';
+                        if (result.flaky) {
+                            statusClass = 'result-flaky';
+                            statusText = 'FLAKY(' + result.attempts + ')';
+                        } else if (result.attempts > 1) {
+                            // Multiple attempts but not flaky (likely fixed-runs mode)
+                            statusClass = 'result-pass';
+                            statusText = 'PASS(' + result.attempts + ')';
+                        } else {
+                            statusClass = 'result-pass';
+                            statusText = 'PASS';
+                        }
                     } else if (result.status === 'fail') {
                         statusClass = 'result-fail';
-                        statusText = 'FAIL';
+                        statusText = result.attempts > 1 ? 'FAIL(' + result.attempts + ')' : 'FAIL';
                     } else if (result.status === 'build_failed') {
                         statusText = 'BUILD';
                     }
@@ -1285,8 +1339,7 @@ function generateReportHTML(data, requestId) {
                         content += '<p style="color: #6b7280; margin-top: 0.5rem;">' + result.message + '</p>';
                     }
                     
-                    content += '<button class="btn" style="margin-top: 0.5rem;" onclick="showExecutionLog(\'' + 
-                              testName.replace(/'/g, "\\'") + '\', \'" + commit + "\')">View Execution Log</button>';
+                    content += '<button class="btn view-execution-log" style="margin-top: 0.5rem;" data-test="' + encodeURIComponent(testName) + '" data-commit="' + commit + '">View Execution Log</button>';
                     content += '</div>';
                 }
             });
@@ -1301,6 +1354,15 @@ function generateReportHTML(data, requestId) {
             content += '</div>';
             
             showModal('Test Details: ' + testName, content);
+            
+            // Add event listeners for view-execution-log buttons
+            Array.prototype.forEach.call(document.querySelectorAll('.view-execution-log'), function(btn){
+                btn.addEventListener('click', function(){
+                    var testName = decodeURIComponent(btn.getAttribute('data-test'));
+                    var commit = btn.getAttribute('data-commit');
+                    showExecutionLog(testName, commit);
+                });
+            });
             
             // Load test files asynchronously
             loadTestFiles(testName);
@@ -1340,24 +1402,69 @@ function generateReportHTML(data, requestId) {
         // Load execution log via API
         async function loadExecutionLog(testName, commit) {
             try {
-                const safeTestName = testName.replace(/[^a-zA-Z0-9_.-]/g, '_');
-                const commitShort = commit.substring(0, 7);
-                
-                // Try different log file patterns
-                const patterns = [
-                    'docker_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log',
-                    'direct_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log',
-                    'test_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log'
-                ];
-                
+                const result = processedData[testName][commit];
                 let logFound = false;
-                for (const pattern of patterns) {
-                    const response = await fetch('/api/log/' + requestId + '/tests/' + pattern);
-                    if (response.ok) {
-                        const logContent = await response.text();
-                        document.getElementById('logContent').textContent = logContent;
+                
+                // First try to use the actual log filenames from attemptLogMetadata
+                if (result.attemptLogMetadata && result.attemptLogMetadata.length > 0) {
+                    // Check if multiple attempts exist
+                    if (result.attemptLogMetadata.length > 1) {
+                        // Show list of all available attempts
+                        let content = '<p>Available log files for all attempts:</p><div class="file-list">';
+                        for (const metadata of result.attemptLogMetadata) {
+                            if (metadata.logFileName) {
+                                const statusIcon = metadata.status === 'pass' ? '✅' : metadata.status === 'fail' ? '❌' : '⚠️';
+                                content += '<a href="#" class="file-link load-specific-log" data-filename="' + encodeURIComponent(metadata.logFileName) + '">';
+                                content += statusIcon + ' Attempt ' + metadata.attempt + ': ' + metadata.logFileName + '</a>';
+                            }
+                        }
+                        content += '</div>';
+                        document.getElementById('logContent').innerHTML = content;
+                        
+                        // Add event listeners for load-specific-log links
+                        Array.prototype.forEach.call(document.querySelectorAll('.load-specific-log'), function(link){
+                            link.addEventListener('click', function(e){
+                                e.preventDefault();
+                                var fileName = decodeURIComponent(link.getAttribute('data-filename'));
+                                loadSpecificLog(fileName);
+                                return false;
+                            });
+                        });
                         logFound = true;
-                        break;
+                    } else {
+                        // Single attempt - load directly
+                        const metadata = result.attemptLogMetadata[0];
+                        if (metadata.logFileName) {
+                            const response = await fetch('/api/log/' + requestId + '/tests/' + metadata.logFileName);
+                            if (response.ok) {
+                                const logContent = await response.text();
+                                document.getElementById('logContent').textContent = logContent;
+                                logFound = true;
+                            }
+                        }
+                    }
+                }
+                
+                // If not found, try pattern-based approach
+                if (!logFound) {
+                    const safeTestName = testName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                    const commitShort = commit.substring(0, 7);
+                    
+                    const patterns = [
+                        'docker_opt_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log',
+                        'docker_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log',
+                        'direct_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log',
+                        'test_' + commitShort + '_' + safeTestName.split('/').pop().replace('.sh', '') + '.log'
+                    ];
+                    
+                    for (const pattern of patterns) {
+                        const response = await fetch('/api/log/' + requestId + '/tests/' + pattern);
+                        if (response.ok) {
+                            const logContent = await response.text();
+                            document.getElementById('logContent').textContent = logContent;
+                            logFound = true;
+                            break;
+                        }
                     }
                 }
                 
@@ -1374,11 +1481,20 @@ function generateReportHTML(data, requestId) {
                             // Show list of available logs
                             let content = '<p>Available log files:</p><div class="file-list">';
                             relevantFiles.forEach(file => {
-                                content += '<a href="#" class="file-link" onclick="loadSpecificLog(\'' + 
-                                          file + '\'); return false;">' + file + '</a>';
+                                content += '<a href="#" class="file-link load-specific-log" data-filename="' + encodeURIComponent(file) + '">' + file + '</a>';
                             });
                             content += '</div>';
                             document.getElementById('logContent').innerHTML = content;
+                            
+                            // Add event listeners for load-specific-log links
+                            Array.prototype.forEach.call(document.querySelectorAll('.load-specific-log'), function(link){
+                                link.addEventListener('click', function(e){
+                                    e.preventDefault();
+                                    var fileName = decodeURIComponent(link.getAttribute('data-filename'));
+                                    loadSpecificLog(fileName);
+                                    return false;
+                                });
+                            });
                         } else {
                             document.getElementById('logContent').textContent = 'No log file found for this execution.';
                         }
@@ -1423,8 +1539,8 @@ function generateReportHTML(data, requestId) {
 
                     // Root logs quick access
                     logsContent += '<div style="margin-bottom: 1rem;">';
-                    logsContent += '<button class="btn" onclick="loadRootLog(\'builder.log\')">Open Main builder.log</button> ';
-                    logsContent += '<button class="btn" style="margin-left:.5rem" onclick="loadRootLog(\'tester.log\')">Open Main tester.log</button>';
+                    logsContent += '<button class="btn load-root-log" data-filename="builder.log">Open Main builder.log</button> ';
+                    logsContent += '<button class="btn load-root-log" style="margin-left:.5rem" data-filename="tester.log">Open Main tester.log</button>';
                     logsContent += '</div>';
                     
                     if (files.length === 0) {
@@ -1433,7 +1549,7 @@ function generateReportHTML(data, requestId) {
                         files.forEach(file => {
                             const commitShort = file.replace('build_', '').replace('.log', '');
                             logsContent += '<div style="margin-bottom: 1rem;">';
-                            logsContent += '<button class="btn" onclick="loadBuildLog(\'' + file + '\')">';
+                            logsContent += '<button class="btn load-build-log" data-filename="' + encodeURIComponent(file) + '">';
                             logsContent += 'Build Log - Commit ' + commitShort + '</button>';
                             logsContent += '</div>';
                         });
@@ -1441,6 +1557,22 @@ function generateReportHTML(data, requestId) {
                     
                     logsContent += '</div>';
                     document.getElementById('buildLogsSection').innerHTML = logsContent;
+                    
+                    // Add event listeners for load-build-log buttons
+                    Array.prototype.forEach.call(document.querySelectorAll('.load-build-log'), function(btn){
+                        btn.addEventListener('click', function(){
+                            var fileName = decodeURIComponent(btn.getAttribute('data-filename'));
+                            loadBuildLog(fileName);
+                        });
+                    });
+                    
+                    // Add event listeners for load-root-log buttons
+                    Array.prototype.forEach.call(document.querySelectorAll('.load-root-log'), function(btn){
+                        btn.addEventListener('click', function(){
+                            var fileName = btn.getAttribute('data-filename');
+                            loadRootLog(fileName);
+                        });
+                    });
                 } else {
                     document.getElementById('buildLogsSection').innerHTML = '<p>Failed to load build logs.</p>';
                 }
