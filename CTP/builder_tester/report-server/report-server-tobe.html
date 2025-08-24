@@ -958,7 +958,7 @@
                 .then(res => res.json())
                 .then(data => {
                     if (data.ip) {
-                        workers = [`${data.ip} (localhost)`];
+                        workers = [`${data.ip}`];
                         renderWorkers();
                     }
                 })
