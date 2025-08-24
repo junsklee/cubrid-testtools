@@ -225,20 +225,37 @@ public class Tester {
     }
     
     /**
-     * Run a test with retry logic. Retries on FAIL, EXECUTION_ERROR, and ENVIRONMENT_ERROR.
-     * Returns immediately for PASS or STARTED (keepAlive mode) or for BUILD_ERROR.
+     * Runs a test with configurable retry/repeat logic based on run_mode.
      * Now collects log file paths instead of content for multipart sending.
      */
     private JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
-        // retry_count is number of retries; total attempts = 1 + retries. If 0 (default), run once with no retries.
-        int totalAttempts = 1 + Math.max(0, config.getTestRetryCount());
+        // Get retry parameters from request (sent by Builder) or use defaults
+        int retryCount = request.optInt("retryCount", 0);
+        String runMode = request.optString("runMode", "until-pass").toLowerCase();
+        
+        // Validate run mode
+        if (!runMode.equals("until-pass") && !runMode.equals("until-fail") && !runMode.equals("fixed-runs")) {
+            testLogger.warning("Invalid run_mode '" + runMode + "' in request. Using default 'until-pass'");
+            runMode = "until-pass";
+        }
+        
+        // Calculate total attempts based on run mode
+        int totalAttempts;
+        if (runMode.equals("fixed-runs")) {
+            totalAttempts = Math.max(1, retryCount); // At least 1 run
+        } else {
+            totalAttempts = 1 + Math.max(0, retryCount); // Initial run + retries
+        }
+        
         JSONObject lastResult = null;
         List<Path> attemptLogFiles = new ArrayList<>(); // Collect log file paths from all attempts
         JSONArray attemptLogMetadata = new JSONArray(); // Metadata about each attempt for JSON response
         
+        testLogger.info("Starting test execution with mode '" + runMode + "', retryCount=" + retryCount + ", totalAttempts=" + totalAttempts);
+        
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
             if (totalAttempts > 1) {
-                testLogger.info("Running test attempt " + attempt + "/" + totalAttempts);
+                testLogger.info("Running test attempt " + attempt + "/" + totalAttempts + " (mode: " + runMode + ")");
             }
             
             // Add attempt number to request for logging purposes
@@ -271,46 +288,69 @@ public class Tester {
                 lastResult.put("attemptLogMetadata", attemptLogMetadata);
                 return lastResult;
             }
-            if (TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
-                lastResult.put("attempts", attempt);
-                // Mark as flaky if it passed after retries
-                if (attempt > 1) {
-                    lastResult.put("flaky", true);
-                    testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
-                }
-                lastResult.put("attemptLogFiles", attemptLogFiles);
-                lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                return lastResult;
-            }
             
-            // Retry on FAIL, EXECUTION_ERROR, and ENVIRONMENT_ERROR
-            boolean shouldRetry = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
+            // Handle different run modes
+            if (runMode.equals("until-pass")) {
+                // Original behavior: stop on first pass
+                if (TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
+                    lastResult.put("attempts", attempt);
+                    // Mark as flaky if it passed after retries
+                    if (attempt > 1) {
+                        lastResult.put("flaky", true);
+                        testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
+                    }
+                    lastResult.put("attemptLogFiles", attemptLogFiles);
+                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                    return lastResult;
+                }
+                
+                // Continue retrying on failures
+                if (attempt < totalAttempts) {
+                    testLogger.info("Test " + status + " on attempt " + attempt + ", retrying...");
+                }
+                
+            } else if (runMode.equals("until-fail")) {
+                // Reproduce mode: stop on first failure
+                boolean isFail = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
                                 TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
                                 TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status);
-            
-            if (!shouldRetry) {
-                // Don't retry on BUILD_ERROR or unknown statuses
-                lastResult.put("attempts", attempt);
-                lastResult.put("attemptLogFiles", attemptLogFiles);
-                lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                return lastResult;
+                
+                if (isFail) {
+                    lastResult.put("attempts", attempt);
+                    testLogger.info("Test failed on attempt " + attempt + " (reproduce mode)");
+                    lastResult.put("attemptLogFiles", attemptLogFiles);
+                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                    return lastResult;
+                }
+                
+                // Continue trying to reproduce failure
+                if (attempt < totalAttempts) {
+                    testLogger.info("Test " + status + " on attempt " + attempt + ", continuing to reproduce failure...");
+                }
+                
+            } else if (runMode.equals("fixed-runs")) {
+                // Fixed runs mode: run exactly totalAttempts times
+                testLogger.info("Completed run " + attempt + "/" + totalAttempts + " with status: " + status);
+                // Continue to next run unless this was the last one
             }
-            
-            if (attempt < totalAttempts) {
-                testLogger.info("Test " + status + " on attempt " + attempt + ", retrying...");
-                continue;
-            }
-            // Last attempt, return as is with attempts
-            lastResult.put("attempts", attempt);
-            lastResult.put("attemptLogFiles", attemptLogFiles);
-            lastResult.put("attemptLogMetadata", attemptLogMetadata);
-            return lastResult;
         }
-        // Safety fallback
-        JSONObject fallbackResult = lastResult != null ? lastResult : new JSONObject().put("status", TestStatus.EXECUTION_ERROR.getValue()).put("message", "No result");
-        fallbackResult.put("attemptLogFiles", attemptLogFiles);
-        fallbackResult.put("attemptLogMetadata", attemptLogMetadata);
-        return fallbackResult;
+        
+        // All attempts completed
+        lastResult.put("attempts", totalAttempts);
+        lastResult.put("attemptLogFiles", attemptLogFiles);
+        lastResult.put("attemptLogMetadata", attemptLogMetadata);
+        lastResult.put("runMode", runMode);
+        
+        // Add summary for different modes
+        if (runMode.equals("until-fail") && !TestStatus.FAIL.getValue().equalsIgnoreCase(lastResult.optString("status", ""))) {
+            testLogger.info("Test did not fail after " + totalAttempts + " attempts (reproduce mode)");
+            lastResult.put("summary", "Could not reproduce failure after " + totalAttempts + " attempts");
+        } else if (runMode.equals("fixed-runs")) {
+            testLogger.info("Completed all " + totalAttempts + " fixed runs");
+            lastResult.put("summary", "Completed " + totalAttempts + " runs");
+        }
+        
+        return lastResult;
     }
 
     private class HealthCheckHandler implements HttpHandler {

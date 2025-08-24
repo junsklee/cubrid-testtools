@@ -8,6 +8,7 @@ const https = require('https');
 const fs = require('fs').promises;
 const path = require('path');
 const url = require('url');
+const os = require('os');
 
 const PORT = process.argv[2] || 8091;
 const BUILDER_HOST = process.env.BUILDER_HOST || 'localhost';
@@ -20,6 +21,22 @@ const LOG_BASE_DIR = path.join(
 
 // Modern UI template path
 const TOBE_HTML_PATH = path.join(__dirname, 'report-server-tobe.html');
+
+// Get the local IP address
+function getLocalIpAddress() {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            // Skip internal (loopback) and non-IPv4 addresses
+            if (!iface.internal && iface.family === 'IPv4') {
+                return iface.address;
+            }
+        }
+    }
+    return '127.0.0.1'; // Fallback to localhost if no external IP found
+}
+
+const LOCAL_IP = getLocalIpAddress();
 
 // Load the modern dashboard UI and inject an override script tag
 async function getDashboardHtml() {
@@ -344,6 +361,13 @@ async function handleRequest(req, res) {
       '</div>';\n    container.appendChild(card);\n    document.getElementById('refreshReportsBtn').onclick = loadReports;\n  }\n\n  async function loadReports(){\n    var list = document.getElementById('reportsList');\n    if (!list) return;\n    list.innerHTML = '<div class="spinner"></div>';\n    try {\n      var res = await fetch('/reports');\n      var html = await res.text();\n      var matches = html.match(/href=\"\\/report\\?id=([^\"]+)\"/g) || [];\n      var ids = matches.map(function(m){ var s = m.match(/id=([^\"]+)/); return s ? s[1] : ''; }).filter(Boolean);\n      if (ids.length === 0) { list.innerHTML = '<p style="color: var(--text-secondary);">No reports available</p>'; return; }\n      list.innerHTML = '';\n      ids.forEach(function(id){\n        var item = document.createElement('div');\n        item.className = 'info-item';\n        var label = document.createElement('div'); label.className = 'info-label'; label.textContent = 'Report ID';\n        var value = document.createElement('div'); value.className = 'info-value'; value.textContent = id;\n        var actions = document.createElement('div'); actions.style.marginTop = '.5rem';\n        var btn = document.createElement('button'); btn.className = 'control-btn'; btn.textContent = 'Open';\n        btn.onclick = function(){\n          var f = document.getElementById('reportFrame');\n          var c = document.getElementById('reportEmbed');\n          f.src = '/dashboard/report?id=' + encodeURIComponent(id);\n          c.style.display = 'block';\n        };\n        actions.appendChild(btn);\n        item.appendChild(label);\n        item.appendChild(value);\n        item.appendChild(actions);\n        list.appendChild(item);\n      });\n    } catch (e) {\n      list.innerHTML = '<p style="color: var(--error);">Failed to load reports</p>';\n    }\n  }\n\n  document.addEventListener('DOMContentLoaded', function(){ addReportsSection(); loadReports(); });\n})();\n`;
             res.writeHead(200, { 'Content-Type': 'application/javascript' });
             res.end(script);
+            return;
+        }
+
+        // Local IP endpoint
+        if (pathname === '/api/local-ip' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ip: LOCAL_IP, hostname: os.hostname() }));
             return;
         }
 

@@ -22,6 +22,15 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `build_timeout_minutes` (int): Per-build timeout (default 180)
 - `build_cache_size` (int): Max cached builds (default 20)
 - `docker_host_root` (path): Host dir for `/work` and Gradle cache binds (default `~/docker-work`)
+### Test execution configuration
+- `run_mode` (string): How tests are executed (default `until-pass`)
+  - `until-pass`: Run up to retry_count attempts or until first success
+  - `until-fail`: Run repeatedly until first failure (reproduce mode)
+  - `fixed-runs`: Run exactly retry_count times regardless of pass/fail
+- `retry_count` (int): Number of retries/repeats for tests (default 0)
+  - For `until-pass`: Maximum retries after initial failure
+  - For `until-fail`: Maximum attempts to find a failure
+  - For `fixed-runs`: Exact number of times to run the test
 ### Ccache configuration
 - `ccache_enabled` (bool): Enable compiler cache (default true)
 - `ccache_dir` (path): Cache directory (default `~/ccache`)

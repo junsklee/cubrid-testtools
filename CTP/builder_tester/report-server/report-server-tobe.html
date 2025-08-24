@@ -856,8 +856,19 @@
                     
                     <div class="form-group">
                         <label class="form-label">Retry Count</label>
-                        <input type="number" class="form-input" id="retryCount" value="3">
+                        <input type="number" class="form-input" id="retryCount" value="2" min="0">
+                        <small style="color: var(--text-secondary); font-size: 0.875rem;">Configured in builder.conf</small>
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Run Mode</label>
+                    <select class="form-select" id="runMode" style="width: 100%; padding: 0.75rem; background: var(--background); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary);">
+                        <option value="until-pass">Until Pass - Stop on first success (default)</option>
+                        <option value="until-fail">Until Fail - Stop on first failure (reproduce mode)</option>
+                        <option value="fixed-runs">Fixed Runs - Run exactly retry_count times</option>
+                    </select>
+                    <small style="color: var(--text-secondary); font-size: 0.875rem;">Test execution strategy (configured in builder.conf)</small>
                 </div>
 
                 <div class="form-group">
@@ -931,12 +942,26 @@
         let commits = [];
         let selectedCommits = new Set();
         let commitMode = 'select';
-        let workers = ['localhost'];
+        let workers = [];  // Initialize empty, will be populated on load
         let currentPage = 1;
         let isLoadingCommits = false;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
+            // Get and set default worker IP
+            fetch('/api/local-ip')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.ip) {
+                        workers = [`${data.ip} (localhost)`];
+                        renderWorkers();
+                    }
+                })
+                .catch(() => {
+                    workers = ['localhost'];
+                    renderWorkers();
+                });
+            
             loadCommits();
             setupEventListeners();
         });
@@ -1121,8 +1146,8 @@
             showToast('Loaded sample test cases', 'success');
         }
 
-        // Add worker
-        function addWorker() {
+        // Add worker with health check validation
+        async function addWorker() {
             const input = document.getElementById('newWorkerInput');
             const workerIp = input.value.trim();
             
@@ -1136,10 +1161,25 @@
                 return;
             }
             
-            workers.push(workerIp);
-            renderWorkers();
-            input.value = '';
-            showToast(`Added worker: ${workerIp}`, 'success');
+            // Health check validation
+            showToast('Checking worker health...', 'info');
+            try {
+                const response = await fetch(`/api/tester/health?ip=${encodeURIComponent(workerIp)}`);
+                if (!response.ok) {
+                    throw new Error('Worker is not responsive');
+                }
+                const data = await response.json();
+                if (data.error || data.status !== 'healthy') {
+                    throw new Error('Worker health check failed');
+                }
+                
+                workers.push(workerIp);
+                renderWorkers();
+                input.value = '';
+                showToast(`Added worker: ${workerIp}`, 'success');
+            } catch (error) {
+                showToast(`Cannot add worker ${workerIp}: ${error.message}`, 'error');
+            }
         }
 
         // Remove worker
@@ -1248,7 +1288,8 @@
                     workerIps: workers,
                     buildType: document.getElementById('buildType').value,
                     timeout: parseInt(document.getElementById('timeout').value),
-                    retryCount: parseInt(document.getElementById('retryCount').value)
+                    retryCount: parseInt(document.getElementById('retryCount').value),
+                    runMode: document.getElementById('runMode').value
                 };
                 
                 // Add environment variables if provided

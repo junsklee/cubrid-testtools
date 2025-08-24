@@ -32,7 +32,8 @@ public class BuilderConfig {
     private static final String MAX_REQUEST_LOGS = "max_request_logs";
     private static final String MAX_TAR_FILES = "max_tar_files";
     private static final String ENABLE_REQUEST_GROUPING = "enable_request_grouping";
-    private static final String RETRY_COUNT = "retry_count"; // Tester: number of times to retry a failed test
+    private static final String RETRY_COUNT = "retry_count"; // Builder: number of times to retry/repeat a test
+    private static final String RUN_MODE = "run_mode"; // Builder: test execution mode (until-pass, until-fail, fixed-runs)
     private static final String TEST_READ_TIMEOUT_MINUTES = "test_read_timeout_minutes"; // Tester: HTTP read timeout for /test
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String CCACHE_ENABLED = "ccache_enabled";
@@ -220,8 +221,12 @@ public class BuilderConfig {
     }
     
     /**
-     * Number of retries for a failed test (minimum 0). Total attempts = 1 + retry_count.
-     * Only used by Tester; default is 0 when not specified in tester.conf.
+     * Number of retries/repeats for a test (minimum 0).
+     * Behavior depends on run_mode:
+     * - until-pass: Maximum retries after initial failure (total attempts = 1 + retry_count)
+     * - until-fail: Maximum attempts to find a failure
+     * - fixed-runs: Exact number of times to run the test
+     * Now configured in builder.conf; default is 0 when not specified.
      */
     public int getTestRetryCount() {
         int value;
@@ -231,6 +236,23 @@ public class BuilderConfig {
             value = 0;
         }
         return Math.max(0, value);
+    }
+
+    /**
+     * Test execution mode that determines how tests are run.
+     * - until-pass: Run up to retry_count attempts or until first success (default)
+     * - until-fail: Run repeatedly until first failure (reproduce mode)
+     * - fixed-runs: Run exactly retry_count times regardless of pass/fail
+     * Configured in builder.conf; default is "until-pass" when not specified.
+     */
+    public String getRunMode() {
+        String mode = properties.getProperty(RUN_MODE, "until-pass").toLowerCase();
+        // Validate the mode
+        if (!mode.equals("until-pass") && !mode.equals("until-fail") && !mode.equals("fixed-runs")) {
+            System.err.println("Invalid run_mode '" + mode + "' in builder.conf. Using default 'until-pass'");
+            return "until-pass";
+        }
+        return mode;
     }
 
     /**

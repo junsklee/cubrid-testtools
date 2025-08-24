@@ -732,7 +732,9 @@ public class BuilderTask {
                 .put("commit", commit)  // Add full commit hash
                 .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))  // Add short commit
                 .put("expectedBuildVersion", commit.substring(0, 7))
-                .put("keepAlive", false);
+                .put("keepAlive", false)
+                .put("retryCount", config.getTestRetryCount())  // Send retry count from builder.conf
+                .put("runMode", config.getRunMode());  // Send run mode from builder.conf
             
             // Add request ID if available
             String requestId = RequestContext.getRequestId();
