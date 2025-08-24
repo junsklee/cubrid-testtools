@@ -855,9 +855,14 @@
                     </div>
                     
                     <div class="form-group">
-                        <label class="form-label">Retry Count</label>
-                        <input type="number" class="form-input" id="retryCount" value="2" min="0">
-                        <small style="color: var(--text-secondary); font-size: 0.875rem;">Configured in builder.conf</small>
+                        <label class="form-label">Min Runs</label>
+                        <input type="number" class="form-input" id="minRuns" value="1" min="1">
+                        <small style="color: var(--text-secondary); font-size: 0.875rem;">Lower bound (>= 1)</small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Max Runs</label>
+                        <input type="number" class="form-input" id="maxRuns" value="3" min="1">
+                        <small style="color: var(--text-secondary); font-size: 0.875rem;">Upper bound (>= min_runs)</small>
                     </div>
                 </div>
 
@@ -866,7 +871,7 @@
                     <select class="form-select" id="runMode" style="width: 100%; padding: 0.75rem; background: var(--background); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary);">
                         <option value="until-pass">Until Pass - Stop on first success (default)</option>
                         <option value="until-fail">Until Fail - Stop on first failure (reproduce mode)</option>
-                        <option value="fixed-runs">Fixed Runs - Run exactly retry_count times</option>
+                        <option value="fixed-runs">Fixed Runs - Run exactly max_runs times</option>
                     </select>
                     <small style="color: var(--text-secondary); font-size: 0.875rem;">Test execution strategy (configured in builder.conf)</small>
                 </div>
@@ -1288,8 +1293,9 @@
                     workerIps: workers,
                     buildType: document.getElementById('buildType').value,
                     timeout: parseInt(document.getElementById('timeout').value),
-                    retryCount: parseInt(document.getElementById('retryCount').value),
-                    runMode: document.getElementById('runMode').value
+                    runMode: document.getElementById('runMode').value,
+                    minRuns: parseInt(document.getElementById('minRuns').value),
+                    maxRuns: parseInt(document.getElementById('maxRuns').value)
                 };
                 
                 // Add environment variables if provided

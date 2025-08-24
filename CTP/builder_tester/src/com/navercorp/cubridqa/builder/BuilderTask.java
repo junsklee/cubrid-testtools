@@ -723,6 +723,23 @@ public class BuilderTask {
                 taskLogger.info("Using HTTP URL for remote tester " + workerIp + ": " + buildPackageRef);
             }
             
+            // Resolve run parameters with request-level overrides (camelCase or snake_case)
+            String runModeOverride = request.optString("runMode", request.optString("run_mode", config.getRunMode()));
+            int minRunsOverride = request.has("minRuns") ? request.optInt("minRuns", config.getMinRuns()) :
+                                  (request.has("min_runs") ? request.optInt("min_runs", config.getMinRuns()) : config.getMinRuns());
+            int maxRunsOverride = request.has("maxRuns") ? request.optInt("maxRuns", config.getMaxRuns()) :
+                                  (request.has("max_runs") ? request.optInt("max_runs", config.getMaxRuns()) : config.getMaxRuns());
+            Long timeBudgetOverride = null;
+            if (request.has("timeBudgetMs")) {
+                long tb = request.optLong("timeBudgetMs", -1);
+                if (tb >= 1) timeBudgetOverride = tb;
+            } else if (request.has("time_budget_ms")) {
+                long tb = request.optLong("time_budget_ms", -1);
+                if (tb >= 1) timeBudgetOverride = tb;
+            } else {
+                timeBudgetOverride = config.getTimeBudgetMs();
+            }
+
             JSONObject testRequest = new JSONObject()
                 .put("buildPackage", buildPackageRef)
                 .put("testPath", testPath)
@@ -733,8 +750,14 @@ public class BuilderTask {
                 .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))  // Add short commit
                 .put("expectedBuildVersion", commit.substring(0, 7))
                 .put("keepAlive", false)
-                .put("retryCount", config.getTestRetryCount())  // Send retry count from builder.conf
-                .put("runMode", config.getRunMode());  // Send run mode from builder.conf
+                .put("runMode", runModeOverride)
+                .put("minRuns", minRunsOverride)
+                .put("maxRuns", maxRunsOverride);
+
+            // Optional time budget
+            if (timeBudgetOverride != null) {
+                testRequest.put("timeBudgetMs", timeBudgetOverride);
+            }
             
             // Add request ID if available
             String requestId = RequestContext.getRequestId();

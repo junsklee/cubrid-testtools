@@ -32,8 +32,12 @@ public class BuilderConfig {
     private static final String MAX_REQUEST_LOGS = "max_request_logs";
     private static final String MAX_TAR_FILES = "max_tar_files";
     private static final String ENABLE_REQUEST_GROUPING = "enable_request_grouping";
-    private static final String RETRY_COUNT = "retry_count"; // Builder: number of times to retry/repeat a test
+    private static final String RETRY_COUNT = "retry_count"; // DEPRECATED v1: number of retries/repeats (kept for migration)
     private static final String RUN_MODE = "run_mode"; // Builder: test execution mode (until-pass, until-fail, fixed-runs)
+    // v2 unified run semantics
+    private static final String MIN_RUNS = "min_runs";
+    private static final String MAX_RUNS = "max_runs";
+    private static final String TIME_BUDGET_MS = "time_budget_ms";
     private static final String TEST_READ_TIMEOUT_MINUTES = "test_read_timeout_minutes"; // Tester: HTTP read timeout for /test
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String CCACHE_ENABLED = "ccache_enabled";
@@ -220,22 +224,82 @@ public class BuilderConfig {
         return Boolean.parseBoolean(properties.getProperty(OPTIMIZED_DOCKER_ENABLED, "true"));
     }
     
-    /**
-     * Number of retries/repeats for a test (minimum 0).
-     * Behavior depends on run_mode:
-     * - until-pass: Maximum retries after initial failure (total attempts = 1 + retry_count)
-     * - until-fail: Maximum attempts to find a failure
-     * - fixed-runs: Exact number of times to run the test
-     * Now configured in builder.conf; default is 0 when not specified.
-     */
-    public int getTestRetryCount() {
-        int value;
-        try {
-            value = Integer.parseInt(properties.getProperty(RETRY_COUNT, "0"));
-        } catch (NumberFormatException e) {
-            value = 0;
+    // ---- V2 unified config with migration from v1 (retry_count) ----
+    public String getRunMode() {
+        String mode = properties.getProperty(RUN_MODE, "until-pass").toLowerCase();
+        if (!mode.equals("until-pass") && !mode.equals("until-fail") && !mode.equals("fixed-runs")) {
+            System.err.println("Invalid run_mode '" + mode + "' in builder.conf. Using default 'until-pass'");
+            return "until-pass";
         }
-        return Math.max(0, value);
+        return mode;
+    }
+
+    public int getMinRuns() {
+        String mode = getRunMode();
+        Integer configured = parsePositiveInt(properties.getProperty(MIN_RUNS, null));
+        if (configured != null) {
+            return Math.max(1, configured);
+        }
+        // Migrate from v1 retry_count
+        int retry = getRetryCountForMigration();
+        if ("fixed-runs".equals(mode)) {
+            return Math.max(1, retry);
+        }
+        return 1; // until-pass / until-fail default lower bound
+    }
+
+    public int getMaxRuns() {
+        String mode = getRunMode();
+        Integer configured = parsePositiveInt(properties.getProperty(MAX_RUNS, null));
+        if (configured != null) {
+            return Math.max(1, configured);
+        }
+        // Migrate from v1 retry_count
+        int retry = getRetryCountForMigration();
+        if ("until-pass".equals(mode)) {
+            return 1 + Math.max(0, retry);
+        } else if ("until-fail".equals(mode)) {
+            int mr = Math.max(1, retry);
+            if (retry == 0) {
+                System.err.println("[config] WARNING: retry_count=0 no longer means unlimited; capped at 1. Use time_budget_ms or a large max_runs.");
+            }
+            return mr;
+        } else { // fixed-runs
+            int mr = Math.max(1, retry);
+            if (retry == 0) {
+                System.err.println("[config] WARNING: fixed-runs requires ≥1 run; upgraded to 1.");
+            }
+            return mr;
+        }
+    }
+
+    public Long getTimeBudgetMs() {
+        String v = properties.getProperty(TIME_BUDGET_MS, null);
+        if (v == null || v.trim().isEmpty() || v.trim().equalsIgnoreCase("null")) return null;
+        try {
+            long val = Long.parseLong(v.trim());
+            return val >= 1 ? val : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Integer parsePositiveInt(String v) {
+        if (v == null) return null;
+        try {
+            int i = Integer.parseInt(v.trim());
+            return i >= 1 ? i : 1;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private int getRetryCountForMigration() {
+        try {
+            return Math.max(0, Integer.parseInt(properties.getProperty(RETRY_COUNT, "0").trim()));
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     /**
@@ -245,15 +309,7 @@ public class BuilderConfig {
      * - fixed-runs: Run exactly retry_count times regardless of pass/fail
      * Configured in builder.conf; default is "until-pass" when not specified.
      */
-    public String getRunMode() {
-        String mode = properties.getProperty(RUN_MODE, "until-pass").toLowerCase();
-        // Validate the mode
-        if (!mode.equals("until-pass") && !mode.equals("until-fail") && !mode.equals("fixed-runs")) {
-            System.err.println("Invalid run_mode '" + mode + "' in builder.conf. Using default 'until-pass'");
-            return "until-pass";
-        }
-        return mode;
-    }
+    // Removed retry_count feature usage; callers must use min/max runs.
 
     /**
      * Tester-side preferred HTTP read timeout, in minutes, for Builder -> Tester /test calls.

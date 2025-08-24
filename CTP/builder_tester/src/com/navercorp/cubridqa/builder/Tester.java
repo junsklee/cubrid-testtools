@@ -229,127 +229,120 @@ public class Tester {
      * Now collects log file paths instead of content for multipart sending.
      */
     private JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
-        // Get retry parameters from request (sent by Builder) or use defaults
-        int retryCount = request.optInt("retryCount", 0);
+        // Unified execution semantics (v2): minRuns, maxRuns, optional timeBudgetMs
         String runMode = request.optString("runMode", "until-pass").toLowerCase();
-        
-        // Validate run mode
         if (!runMode.equals("until-pass") && !runMode.equals("until-fail") && !runMode.equals("fixed-runs")) {
             testLogger.warning("Invalid run_mode '" + runMode + "' in request. Using default 'until-pass'");
             runMode = "until-pass";
         }
-        
-        // Calculate total attempts based on run mode
-        int totalAttempts;
-        if (runMode.equals("fixed-runs")) {
-            totalAttempts = Math.max(1, retryCount); // At least 1 run
-        } else {
-            totalAttempts = 1 + Math.max(0, retryCount); // Initial run + retries
+
+        int minRuns = Math.max(1, request.optInt("minRuns", 1));
+        int maxRuns = Math.max(minRuns, request.optInt("maxRuns", minRuns));
+        Long timeBudgetMs = null;
+        if (request.has("timeBudgetMs")) {
+            long tb = request.optLong("timeBudgetMs", -1);
+            if (tb >= 1) timeBudgetMs = tb;
         }
-        
+
         JSONObject lastResult = null;
-        List<Path> attemptLogFiles = new ArrayList<>(); // Collect log file paths from all attempts
-        JSONArray attemptLogMetadata = new JSONArray(); // Metadata about each attempt for JSON response
-        
-        testLogger.info("Starting test execution with mode '" + runMode + "', retryCount=" + retryCount + ", totalAttempts=" + totalAttempts);
-        
-        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
-            if (totalAttempts > 1) {
-                testLogger.info("Running test attempt " + attempt + "/" + totalAttempts + " (mode: " + runMode + ")");
+        List<Path> attemptLogFiles = new ArrayList<>();
+        JSONArray attemptLogMetadata = new JSONArray();
+        long startTime = System.currentTimeMillis();
+        boolean sawFailureBeforePass = false;
+
+        testLogger.info("Starting test execution with mode '" + runMode + "', minRuns=" + minRuns + ", maxRuns=" + maxRuns + (timeBudgetMs != null ? ", timeBudgetMs=" + timeBudgetMs : ""));
+
+        int attempt = 0;
+        while (true) {
+            attempt++;
+            if (attempt > maxRuns) break; // Guard, should not happen due to checks after attempt
+
+            if (maxRuns > 1) {
+                testLogger.info("Running test attempt " + attempt + "/" + maxRuns + " (mode: " + runMode + ")");
             }
-            
-            // Add attempt number to request for logging purposes
+
             JSONObject requestWithAttempt = new JSONObject(request.toString());
             requestWithAttempt.put("attemptNumber", attempt);
-            
+
             lastResult = runTest(requestWithAttempt, testLogger);
             String status = lastResult.optString("status", "");
-            
-            // Collect log file path for this attempt if available
+
+            // Collect log file metadata
             if (lastResult.has("logFilePath")) {
                 Path logPath = Paths.get(lastResult.getString("logFilePath"));
                 attemptLogFiles.add(logPath);
-                
-                // Add metadata for JSON response (without actual content)
                 JSONObject attemptMeta = new JSONObject();
                 attemptMeta.put("attempt", attempt);
                 attemptMeta.put("logFileName", lastResult.optString("logFileName", logPath.getFileName().toString()));
                 attemptMeta.put("status", status);
                 attemptLogMetadata.put(attemptMeta);
-                
-                // Remove the log file path from result to avoid exposing internal paths
                 lastResult.remove("logFilePath");
             }
-            
-            // For keepAlive=true Docker runs, we get 'started' — no further retries
+
+            // Track failures to decide flakiness later
+            boolean isFailLike = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
+                                  TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
+                                  TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status);
+            if (isFailLike) {
+                sawFailureBeforePass = true;
+            }
+
+            // For keepAlive runs where tester returns 'started', end immediately
             if ("started".equalsIgnoreCase(status)) {
                 lastResult.put("attempts", attempt);
                 lastResult.put("attemptLogFiles", attemptLogFiles);
                 lastResult.put("attemptLogMetadata", attemptLogMetadata);
                 return lastResult;
             }
-            
-            // Handle different run modes
-            if (runMode.equals("until-pass")) {
-                // Original behavior: stop on first pass
-                if (TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
-                    lastResult.put("attempts", attempt);
-                    // Mark as flaky if it passed after retries
-                    if (attempt > 1) {
-                        lastResult.put("flaky", true);
-                        testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
-                    }
-                    lastResult.put("attemptLogFiles", attemptLogFiles);
-                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                    return lastResult;
-                }
-                
-                // Continue retrying on failures
-                if (attempt < totalAttempts) {
-                    testLogger.info("Test " + status + " on attempt " + attempt + ", retrying...");
-                }
-                
-            } else if (runMode.equals("until-fail")) {
-                // Reproduce mode: stop on first failure
-                boolean isFail = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
-                                TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
-                                TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status);
-                
-                if (isFail) {
-                    lastResult.put("attempts", attempt);
-                    testLogger.info("Test failed on attempt " + attempt + " (reproduce mode)");
-                    lastResult.put("attemptLogFiles", attemptLogFiles);
-                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                    return lastResult;
-                }
-                
-                // Continue trying to reproduce failure
-                if (attempt < totalAttempts) {
-                    testLogger.info("Test " + status + " on attempt " + attempt + ", continuing to reproduce failure...");
-                }
-                
-            } else if (runMode.equals("fixed-runs")) {
-                // Fixed runs mode: run exactly totalAttempts times
-                testLogger.info("Completed run " + attempt + "/" + totalAttempts + " with status: " + status);
-                // Continue to next run unless this was the last one
+
+            // Stop conditions (first true wins):
+            // 1) attempt == maxRuns
+            if (attempt >= maxRuns) break;
+
+            // 2) time_budget_ms reached
+            if (timeBudgetMs != null && (System.currentTimeMillis() - startTime) >= timeBudgetMs) {
+                testLogger.info("Time budget reached after attempt " + attempt + "; stopping");
+                break;
             }
+
+            // 3) until-pass early exit after minRuns on PASS
+            if (runMode.equals("until-pass") && attempt >= minRuns && TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
+                lastResult.put("attempts", attempt);
+                if (sawFailureBeforePass) {
+                    lastResult.put("flaky", true);
+                    testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
+                }
+                lastResult.put("attemptLogFiles", attemptLogFiles);
+                lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                return lastResult;
+            }
+
+            // 4) until-fail early exit after minRuns on FAIL-like
+            if (runMode.equals("until-fail") && attempt >= minRuns && isFailLike) {
+                lastResult.put("attempts", attempt);
+                testLogger.info("Test failed on attempt " + attempt + " (reproduce mode)");
+                lastResult.put("attemptLogFiles", attemptLogFiles);
+                lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                return lastResult;
+            }
+
+            // fixed-runs ignores early exits 3) & 4), continue to next attempt
         }
-        
-        // All attempts completed
-        lastResult.put("attempts", totalAttempts);
+
+        // Completed due to maxRuns or time budget
+        lastResult.put("attempts", Math.max(1, attempt));
         lastResult.put("attemptLogFiles", attemptLogFiles);
         lastResult.put("attemptLogMetadata", attemptLogMetadata);
         lastResult.put("runMode", runMode);
-        
-        // Add summary for different modes
+
         if (runMode.equals("until-fail") && !TestStatus.FAIL.getValue().equalsIgnoreCase(lastResult.optString("status", ""))) {
-            testLogger.info("Test did not fail after " + totalAttempts + " attempts (reproduce mode)");
-            lastResult.put("summary", "Could not reproduce failure after " + totalAttempts + " attempts");
+            testLogger.info("Test did not fail after " + attempt + " attempts (reproduce mode)");
+            lastResult.put("summary", "Could not reproduce failure after " + attempt + " attempts");
         } else if (runMode.equals("fixed-runs")) {
-            testLogger.info("Completed all " + totalAttempts + " fixed runs");
-            lastResult.put("summary", "Completed " + totalAttempts + " runs");
+            testLogger.info("Completed " + attempt + " run(s)");
+            lastResult.put("summary", "Completed " + attempt + " runs");
         }
-        
+
         return lastResult;
     }
 
@@ -369,8 +362,7 @@ public class Tester {
                     .put("workDir", config.getWorkDir())
                     .put("dockerEnabled", useDocker)
                     .put("maxConcurrentTests", Math.max(1, config.getMaxConcurrentTests()))
-                    .put("testReadTimeoutMinutes", config.getTestReadTimeoutMinutes())
-                    .put("retryCount", config.getTestRetryCount());
+                    .put("testReadTimeoutMinutes", config.getTestReadTimeoutMinutes());
                 
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 sendResponse(exchange, 200, healthResponse.toString());
@@ -2321,3 +2313,4 @@ public class Tester {
         }
     }
 }
+

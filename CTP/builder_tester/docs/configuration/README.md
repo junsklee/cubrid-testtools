@@ -24,13 +24,12 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `docker_host_root` (path): Host dir for `/work` and Gradle cache binds (default `~/docker-work`)
 ### Test execution configuration
 - `run_mode` (string): How tests are executed (default `until-pass`)
-  - `until-pass`: Run up to retry_count attempts or until first success
-  - `until-fail`: Run repeatedly until first failure (reproduce mode)
-  - `fixed-runs`: Run exactly retry_count times regardless of pass/fail
-- `retry_count` (int): Number of retries/repeats for tests (default 0)
-  - For `until-pass`: Maximum retries after initial failure
-  - For `until-fail`: Maximum attempts to find a failure
-  - For `fixed-runs`: Exact number of times to run the test
+  - `until-pass`: May stop early on first success after `min_runs`
+  - `until-fail`: May stop early on first failure after `min_runs`
+  - `fixed-runs`: Never stops early
+- `min_runs` (int ≥ 1): Lower bound on attempts
+- `max_runs` (int ≥ `min_runs`): Upper bound on attempts
+- `time_budget_ms` (int ≥ 1, optional): Additional early-stop condition
 ### Ccache configuration
 - `ccache_enabled` (bool): Enable compiler cache (default true)
 - `ccache_dir` (path): Cache directory (default `~/ccache`)
