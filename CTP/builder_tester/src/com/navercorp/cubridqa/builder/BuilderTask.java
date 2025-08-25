@@ -646,8 +646,8 @@ public class BuilderTask {
             File pkg = new File(found);
             File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
             if (!meta.exists()) {
-                taskLogger.info("No metadata found for cached build " + commitShort + ", accepting without validation");
-                return found; // no metadata, accept
+                taskLogger.warning("No metadata found for cached build " + commitShort + ", rejecting to ensure baseline consistency");
+                return null; // no metadata, reject to be safe
             }
             
             StringBuilder sb = new StringBuilder();
