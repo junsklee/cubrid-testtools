@@ -29,7 +29,75 @@ class ReportService {
             // Generate HTML report
             const html = this.generateReportHTML(data, requestId);
             
-            // Save HTML report            return { text: 'Flaky: Inconsistent results', class: 'verdict-flaky' };
+            // Save HTML report
+            await fileService.saveReport(requestId, html);
+            
+            return { success: true, requestId };
+        } catch (err) {
+            throw new Error(`Failed to process test results: ${err.message}`);
+        }
+    }
+
+    /**
+     * Get list of available reports
+     */
+    async getReportsList() {
+        try {
+            return await fileService.getReportsList();
+        } catch (err) {
+            throw new Error(`Failed to get reports list: ${err.message}`);
+        }
+    }
+
+    /**
+     * Get basic report template
+     */
+    getReportTemplate(data, requestId, timestamp, resultsJSON) {
+        return `<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Report - ${requestId}</title>
+    <link rel="stylesheet" href="/css/report.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Test Report - ${requestId}</h1>
+        <p>Generated: ${timestamp}</p>
+        <div id="report-content">
+            <!-- Report content will be rendered by JavaScript -->
+        </div>
+    </div>
+    <script>
+        const reportData = ${resultsJSON};
+        // Load report JavaScript
+        const script = document.createElement('script');
+        script.src = '/js/report.js';
+        document.head.appendChild(script);
+    </script>
+</body>
+</html>`;
+    }
+
+    /**
+     * Analyze test verdict based on results
+     */
+    analyzeVerdict(commits, results) {
+        let failCount = 0;
+        let hasError = false;
+        let hasFlaky = false;
+
+        for (const result of results) {
+            if (result.status === 'flaky') {
+                hasFlaky = true;
+            } else if (result.status === 'error' || result.status === 'execution_error') {
+                hasError = true;
+            } else if (result.status === 'fail') {
+                failCount++;
+            }
+        }
+
+        if (hasFlaky) {
+            return { text: 'Flaky: Inconsistent results', class: 'verdict-flaky' };
         }
         
         if (hasError) {

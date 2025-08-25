@@ -35,11 +35,11 @@ class BuilderController {
         try {
             const { taskId } = req.query;
             
-            if (!taskId) {
-                return res.status(400).json({ error: 'Task ID is required' });
+            // Build URL with optional taskId parameter
+            let builderUrl = `${config.builder.protocol}://${config.builder.host}:${config.builder.port}/status`;
+            if (taskId) {
+                builderUrl += `?taskId=${taskId}`;
             }
-            
-            const builderUrl = `${config.builder.protocol}://${config.builder.host}:${config.builder.port}/status?taskId=${taskId}`;
             
             const result = await proxyService.requestJson(builderUrl);
             res.status(result.statusCode).json(result.json);

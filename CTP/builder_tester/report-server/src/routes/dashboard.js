@@ -11,31 +11,31 @@ const fileService = require('../services/fileService');
 // Main dashboard
 router.get('/', async (req, res) => {
     try {
-        // Try to load the modern UI template
-        const tobeHtmlPath = config.paths.tobeHtml;
-        if (await fileService.fileExists(tobeHtmlPath)) {
-            let html = await fileService.readFile(tobeHtmlPath);
-            
-            // Inject configuration
-            const configScript = `
-<script>
-    window.SERVER_CONFIG = {
-        builderHost: '${config.builder.host}',
-        builderPort: ${config.builder.port},
-        reportPort: ${config.server.port},
-        localIp: '${config.server.localIp}'
-    };
-</script>`;
-            
-            html = html.replace('</head>', `${configScript}</head>`);
-            res.send(html);
-        } else {
-            // Fallback to basic dashboard
-            res.render('dashboard', { config });
-        }
+        // Use the modular EJS template with extracted components
+        res.render('dashboard', { config });
     } catch (err) {
         console.error('Error loading dashboard:', err);
         res.status(500).send('Error loading dashboard');
+    }
+});
+
+// Dashboard report view (from original integrated server)
+router.get('/dashboard/report', async (req, res) => {
+    try {
+        const { id } = req.query;
+        
+        if (!id) {
+            return res.status(400).send('<h1>Report ID is required</h1>');
+        }
+        
+        // This loads the same report functionality as /report but from dashboard context
+        const reportPath = fileService.getReportPath(id);
+        const reportHtml = await fileService.readFile(reportPath);
+        
+        res.send(reportHtml);
+    } catch (err) {
+        console.error('Error viewing dashboard report:', err);
+        res.status(404).send('<h1>Report not found</h1>');
     }
 });
 

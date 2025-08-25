@@ -16,9 +16,15 @@ class TesterController {
                 return res.status(400).json({ error: 'Tester IP is required' });
             }
             
-            const testerUrl = ip.startsWith('http://') || ip.startsWith('https://') 
-                ? `${ip}/health`
-                : `http://${ip}/health`;
+            // Default to port 8090 for tester if no port specified
+            let testerUrl;
+            if (ip.startsWith('http://') || ip.startsWith('https://')) {
+                testerUrl = `${ip}/health`;
+            } else if (ip.includes(':')) {
+                testerUrl = `http://${ip}/health`;
+            } else {
+                testerUrl = `http://${ip}:8090/health`;
+            }
             
             const result = await proxyService.requestJson(testerUrl);
             res.status(result.statusCode).json(result.json);

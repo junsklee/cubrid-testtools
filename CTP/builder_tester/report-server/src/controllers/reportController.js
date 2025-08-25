@@ -34,10 +34,14 @@ class ReportController {
     async getReportsList(req, res) {
         try {
             const reports = await reportService.getReportsList();
+            const config = require('../config');
             
-            // Generate HTML list
-            const html = this.generateReportsListHTML(reports);
-            res.send(html);
+            // Use EJS template for consistent styling
+            res.render('reports', { 
+                reports,
+                config,
+                title: 'Test Reports'
+            });
         } catch (err) {
             console.error('Error getting reports list:', err);
             res.status(500).send('<h1>Error loading reports</h1>');
@@ -87,27 +91,70 @@ class ReportController {
     }
 
     /**
-     * Generate reports list HTML
+     * List test logs for a request
      */
-    generateReportsListHTML(reports) {
-        const reportItems = reports.map(report => {
-            return `<li><a href="/report?id=${report.id}">${report.id} - ${report.modified.toISOString()}</a></li>`;
-        }).join('\n');
-        
-        return `<!DOCTYPE html>
-<html>
-<head>
-    <title>Test Reports</title>
-    <link rel="stylesheet" href="/css/reports.css">
-</head>
-<body>
-    <div class="container">
-        <h1>Test Reports</h1>
-        <ul>${reportItems}</ul>
-    </div>
-</body>
-</html>`;
+    async listTestLogs(req, res) {
+        try {
+            const { req_id } = req.params;
+            const logsPath = path.join(config.paths.requests, req_id, 'tests');
+            
+            if (!await fileService.fileExists(logsPath)) {
+                return res.status(404).json({ error: 'Logs directory not found' });
+            }
+            
+            const files = await fileService.listDirectory(logsPath);
+            const logFiles = files.filter(file => file.endsWith('.log'));
+            
+            res.json({ logs: logFiles });
+        } catch (err) {
+            console.error('Error listing test logs:', err);
+            res.status(500).json({ error: err.message });
+        }
     }
+
+    /**
+     * List build logs for a request
+     */
+    async listBuildLogs(req, res) {
+        try {
+            const { req_id } = req.params;
+            const logsPath = path.join(config.paths.requests, req_id, 'builds');
+            
+            if (!await fileService.fileExists(logsPath)) {
+                return res.status(404).json({ error: 'Logs directory not found' });
+            }
+            
+            const files = await fileService.listDirectory(logsPath);
+            const logFiles = files.filter(file => file.endsWith('.log'));
+            
+            res.json({ logs: logFiles });
+        } catch (err) {
+            console.error('Error listing build logs:', err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    /**
+     * Get root log file (builder.log, tester.log)
+     */
+    async getRootLog(req, res) {
+        try {
+            const { req_id, filename } = req.params;
+            
+            if (!req_id || !filename) {
+                return res.status(400).json({ error: 'Request ID and filename are required' });
+            }
+            
+            const logPath = path.join(config.paths.requests, req_id, filename);
+            const logContent = await fileService.readFile(logPath);
+            
+            res.type('text/plain').send(logContent);
+        } catch (err) {
+            console.error('Error getting root log:', err);
+            res.status(404).send('Log file not found');
+        }
+    }
+
 }
 
 module.exports = new ReportController();

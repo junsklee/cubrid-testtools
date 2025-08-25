@@ -1,47 +1,106 @@
 # CUBRID Test Report Server
 
-An interactive web-based report viewer for CUBRID Builder-Tester test results.
+A modern, modular web-based dashboard and report viewer for CUBRID Builder-Tester test results.
+
+## Architecture
+
+This is a **modular Express.js application** with clean separation of concerns:
+
+```
+report-server/
+├── src/
+│   ├── server.js           # Main application entry point
+│   ├── config/             # Configuration management
+│   ├── controllers/        # Request handlers (builder, github, report, tester)
+│   ├── middleware/         # Express middleware (cors, error handling)
+│   ├── routes/            # Route definitions (api, dashboard, reports)
+│   └── services/          # Business logic (file, github, proxy, report)
+├── views/                 # EJS templates (dashboard, reports, overrides)
+├── public/               # Static assets (CSS, JavaScript)
+└── package.json          # Dependencies and scripts
+```
 
 ## Features
 
-- **Callback Handler**: Receives test results via POST requests and automatically generates reports
-- **Interactive Visualization**: Groups test results by test case with pass/fail status per commit
-- **Multi-Attempt Log Display**: For tests with multiple attempts (PASS(3), FAIL(3), FLAKY(3)), shows clickable links to all attempt logs with status indicators
-- **Enhanced Log Viewing**: 
-  - Build logs with proper line break formatting
-  - Execution logs with automatic path resolution using attemptLogMetadata
-  - Test details modal with comprehensive information
-- **Verdict Analysis**: Automatically determines test failure patterns using unified semantics:
-  - Pass: Not reproduced (0 failures)
-  - Bug or Revise: Caused by specific commit (1 failure) 
-  - Pre-existing Failure: Likely not caused by listed commits (all failures)
-  - Unstable: Fails intermittently across commits (partial failures)
-  - Flaky: Mixed pass/fail results across attempts (regardless of run mode)
-  - Error: Test execution failed (execution/environment errors)
-- **Unified Test Execution Support**: Compatible with new run modes (until-pass, until-fail, fixed-runs)
-- **Statistics Dashboard**: Shows pass rate, failed tests, unstable tests, error tests, and flaky tests at a glance
-- **Export Options**: Download results as JSON or CSV (in the web interface)
+### 🎛️ **Interactive Dashboard**
+- **Modern Dark Theme UI**: Professional glassmorphism design with animated backgrounds
+- **Build Request Interface**: Submit test requests with commit selection and worker management
+- **GitHub Integration**: Browse and select commits directly from GitHub API
+- **Advanced Configuration**: Timeout settings, run modes, environment variables
+- **Real-time Status Monitoring**: Builder and tester health checks
+- **Recent Reports**: Quick access to latest test results
 
-## Installation
+### 📊 **Enhanced Report Viewer**
+- **Multi-Attempt Log Display**: For tests with multiple attempts (PASS(3), FAIL(3), FLAKY(3))
+- **Interactive Test Details**: Click test names for comprehensive information modals
+- **Build Log Viewing**: Proper formatting with line breaks for build logs
+- **Automatic Log Resolution**: Uses attemptLogMetadata for accurate log file paths
+- **Export Options**: Download results as JSON or CSV
 
-### Option 1: Standalone Node.js Server
+### 🔄 **Unified Test Execution Support**
+- **Run Modes**: until-pass, until-fail, fixed-runs
+- **Flaky Test Detection**: Unified logic across all run modes based on result consistency
+- **Multi-Worker Support**: Distribute tests across multiple tester nodes
+- **Callback Integration**: Automatic report generation on test completion
+
+### 📈 **Verdict Analysis System**
+Intelligent test failure pattern analysis:
+- **Pass**: Not reproduced (0 failures)
+- **Bug/Revise**: Caused by specific commit (1 failure)
+- **Pre-existing**: Likely not caused by listed commits (all failures)
+- **Unstable**: Fails intermittently across commits (partial failures)
+- **Flaky**: Mixed pass/fail results across attempts
+- **Error**: Test execution/environment failures
+
+## Quick Start
+
+### Installation & Setup
 
 ```bash
 cd report-server
-node report-server.js [port]
+npm install
 ```
 
-Default port is 8091. The server will create necessary log directories automatically.
+### Start the Server
 
-### Option 2: Integrated with Java Builder
+```bash
+# Development mode
+npm run dev
 
-The report functionality is also integrated into the main Builder service (port 8089):
-- `/report` - View reports
-- `/callback` - Receive results
+# Production mode
+npm start
+
+# Or run directly
+node src/server.js [port]
+```
+
+Default port is **8091**. The server creates log directories automatically.
+
+### Access the Application
+
+- **Dashboard**: http://localhost:8091/
+- **Reports**: http://localhost:8091/reports
+- **Health Check**: http://localhost:8091/health
 
 ## Usage
 
-### Sending Test Results
+### 1. Dashboard Interface
+
+Navigate to http://localhost:8091/ to access the modern dashboard:
+
+1. **Select Commits**: Browse GitHub commits or enter commit SHAs manually
+2. **Configure Tests**: Enter test case paths  
+3. **Set Workers**: Add tester node IPs with health validation
+4. **Advanced Options**: Configure timeouts, run modes, environment variables
+5. **Submit Request**: Send build request with automatic callback URL
+
+### 2. Monitoring & Reports
+
+- **Build Status**: Real-time monitoring of active builds
+- **Recent Reports**: Quick access to latest test results
+- **Report Viewer**: Detailed test analysis with interactive elements
+
+### 3. API Integration
 
 Configure your Builder to use the callback URL:
 
@@ -50,103 +109,93 @@ Configure your Builder to use the callback URL:
   "commits": ["abc123", "def456"],
   "tests": ["test1.sh", "test2.sh"],
   "callbackUrl": "http://localhost:8091/callback",
-  "workerIp": "localhost",
-  "buildType": "debug"
+  "workerIps": ["tester1", "tester2"],
+  "buildType": "debug",
+  "runMode": "until-pass",
+  "minRuns": 1,
+  "maxRuns": 3
 }
 ```
 
-### Viewing Reports
-
-1. **List all reports**: http://localhost:8091/report
-2. **View specific report**: http://localhost:8091/report?id=req_xxxxx
-3. **Health check**: http://localhost:8091/health
-
-### Health endpoint
-
-The standalone server exposes `/health`:
-
-```bash
-curl http://localhost:8091/health
-```
-
-Example response:
-
-```json
-{ "status": "healthy", "service": "report-server" }
-```
-
-- `status`: health state
-- `service`: service identifier
-
 ## Report Structure
 
-Reports are saved in `~/cubrid-testtools/CTP/builder_tester/log/requests/` with:
-- `results.json` - Raw test data
-- `report.html` - Interactive HTML report
-
-## Report Interface
-
-The web interface provides:
-
-- **Header**: Request ID, timestamp, test/commit counts
-- **Statistics Grid**: Visual KPIs for test results
-- **Results Table**: 
-  - Test cases as rows (clickable for details)
-  - Commits as columns showing pass/fail status with attempt counts (e.g., PASS(3))
-  - Fail count column
-  - Verdict column with automated analysis
-- **Enhanced Modals**:
-  - Test details with comprehensive information per commit
-  - Multi-attempt log viewer with status indicators (✅ Pass, ❌ Fail, ⚠️ Other)
-  - Build log viewer with proper formatting
-- **Export Buttons**: Download as JSON or CSV
-- **Interactive Elements**: Click test names for details, click result cells for execution logs
-
-## Verdict Logic
-
-| Priority | Condition | Verdict |
-|----------|-----------|---------|
-| 1 | Mixed pass/fail across attempts | Flaky: Inconsistent results across X attempts |
-| 2 | Build errors | Build errors in: [commit_ids] |
-| 3 | Execution/environment errors | Error: Test execution failed |
-| 4 | 0 failures | Pass: Not reproduced |
-| 5 | 1 failure | Bug or Revise: Caused by [commit_id] |
-| 6 | All commits fail | Pre-existing Failure: Likely not caused by listed commits |
-| 7 | Partial failures | Unstable: Fails intermittently across commits |
-
-**Note**: Flaky detection is unified across all run modes (until-pass, until-fail, fixed-runs) and based on result consistency, not attempt count relative to run mode.
-
-## Unified Test Execution Semantics
-
-The report server now supports the new unified test execution system:
-
-### Run Modes
-- **until-pass**: Run tests until they pass or max_runs reached
-- **until-fail**: Run tests until they fail or max_runs reached  
-- **fixed-runs**: Always run exactly min_runs to max_runs times
-
-### Multi-Attempt Log Handling
-- Tests with multiple attempts display as PASS(3), FAIL(3), or FLAKY(3)
-- Click "View Execution Log" to see all attempt logs with status indicators
-- Each attempt shows: ✅ Attempt 1: docker_opt_abc123_test.log
-- Logs are automatically resolved using attemptLogMetadata from test results
+Reports are stored in `~/cubrid-testtools/CTP/builder_tester/log/requests/`:
+- `results.json` - Raw test data with attemptLogMetadata
+- `report.html` - Interactive HTML report with enhanced features
 
 ## Development
 
-The report uses modern web technologies:
-- Glassmorphism design with gradient backgrounds
-- Responsive layout for mobile/desktop
-- Real-time statistics calculation
-- Client-side data processing for performance
+### Project Structure
 
-## Integration Example
+- **Modular Design**: Clean separation between routes, controllers, and services
+- **EJS Templates**: Server-side rendering with data injection
+- **Static Assets**: Organized CSS and JavaScript in public/ directory
+- **Configuration**: Centralized config management
+- **Error Handling**: Comprehensive error middleware
+
+### Technology Stack
+
+- **Backend**: Node.js, Express.js, EJS templating
+- **Frontend**: Vanilla JavaScript, CSS3 with CSS variables
+- **Security**: Helmet, CORS, rate limiting
+- **Logging**: Morgan HTTP request logging
+- **Compression**: Gzip compression for better performance
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Main dashboard interface |
+| GET | `/reports` | Reports listing page |
+| GET | `/report?id=<req_id>` | Specific report viewer |
+| POST | `/callback` | Test results callback handler |
+| GET | `/health` | Health check endpoint |
+| GET | `/api/local-ip` | Get server local IP |
+| GET | `/api/builder/health` | Builder service health |
+| GET | `/api/tester/health` | Tester service health |
+
+## Deployment
+
+### Environment Variables
 
 ```bash
-# Start the report server
-node report-server/report-server.js 8091 &
+# Server configuration
+REPORT_PORT=8091
+HOST=0.0.0.0
 
-# Send a test request with callback
-./bin/test_report_client.sh
+# Builder integration
+BUILDER_HOST=localhost
+BUILDER_PORT=8089
+
+# GitHub integration
+GITHUB_TOKEN=your_token
+
+# Security
+NODE_ENV=production
+CORS_ORIGIN=*
 ```
 
-The results will be automatically processed and a report will be generated and displayed.
+### Production Deployment
+
+```bash
+# Install dependencies
+npm ci --production
+
+# Start with PM2 (recommended)
+npm install -g pm2
+pm2 start src/server.js --name "report-server"
+
+# Or with systemd service
+sudo systemctl start report-server
+```
+
+## Migration from Legacy Server
+
+This modular version replaces the old monolithic `report-server-tobe.html` file with:
+- ✅ Separate, maintainable CSS and JavaScript files
+- ✅ EJS templating for dynamic content
+- ✅ Proper Express.js routing and middleware
+- ✅ Enhanced error handling and logging
+- ✅ Improved security and performance features
+
+All functionality from the legacy server has been preserved and enhanced.

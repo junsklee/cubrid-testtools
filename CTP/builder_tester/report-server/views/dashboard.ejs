@@ -5,70 +5,229 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CUBRID Builder-Tester Dashboard</title>
     <link rel="stylesheet" href="/css/dashboard.css">
+    <script>
+        window.SERVER_CONFIG = {
+            builderHost: '<%= config.builder.host %>',
+            builderPort: <%= config.builder.port %>,
+            reportPort: <%= config.server.port %>,
+            localIp: '<%= config.server.localIp %>'
+        };
+    </script>
 </head>
 <body>
+    <div class="bg-animation"></div>
+    
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">BT</div>
+            <h1>CUBRID Builder-Tester</h1>
+        </div>
+        <button class="info-button" onclick="showSystemInfo()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            System Info
+        </button>
+    </header>
+
     <div class="container">
-        <header class="header">
-            <h1>🚀 CUBRID Builder-Tester Dashboard</h1>
-            <div class="status-bar">
-                <span class="status" id="builderStatus">Checking...</span>
-                <span>Version: <%= config.app.version %></span>
-            </div>
-        </header>
-
+        <!-- Request Builder Card -->
         <div class="card">
-            <h2>📤 Submit Build Request</h2>
-            <form id="buildForm">
-                <div class="form-group">
-                    <label for="commits">Commits (one per line or comma-separated)</label>
-                    <textarea id="commits" name="commits" rows="4" placeholder="Enter commit SHAs..."></textarea>
+            <h2 class="card-title">
+                <div class="card-title-icon">📤</div>
+                Build Test Request
+            </h2>
+
+            <!-- Commits Section -->
+            <div class="form-group">
+                <label class="form-label">Commits</label>
+                <div class="commit-selector">
+                    <button id="selectModeBtn" class="mode-btn active" onclick="setCommitMode('select')">
+                        Browse & Select
+                    </button>
+                    <button id="manualModeBtn" class="mode-btn" onclick="setCommitMode('manual')">
+                        Manual Input
+                    </button>
                 </div>
 
-                <div class="form-group">
-                    <label for="tests">Test Cases (one per line)</label>
-                    <textarea id="tests" name="tests" rows="6" placeholder="Enter test cases..."></textarea>
+                <div id="selectCommits" class="commit-section">
+                    <div class="commit-controls">
+                        <button class="control-btn" onclick="selectAllCommits()">Select All</button>
+                        <button class="control-btn" onclick="deselectAllCommits()">Deselect All</button>
+                        <span class="commit-counter">Selected: <span id="selectedCount">0</span></span>
+                    </div>
+                    <div class="commit-list" id="commitList">
+                        <div class="spinner"></div>
+                    </div>
+                    <button class="load-more-btn" id="loadMoreBtn" onclick="loadMoreCommits()" style="display: none;">
+                        Load More Commits
+                    </button>
                 </div>
 
-                <div class="form-group">
-                    <label for="workerIps">Worker IPs (comma-separated)</label>
-                    <input type="text" id="workerIps" name="workerIps" value="localhost" />
+                <div id="manualCommits" class="commit-section" style="display: none;">
+                    <textarea class="form-textarea" id="manualCommitInput" 
+                        placeholder="Enter commit SHAs (one per line or comma-separated)&#10;Example:&#10;568fbb5370f4f1b6149218221d7fe4f9daa59168&#10;b534d0a4f28921c8e590f68f606049e1b643e252"></textarea>
                 </div>
+            </div>
 
+            <!-- Test Cases Section -->
+            <div class="form-group">
+                <label class="form-label" for="testsInput">Test Cases</label>
+                <textarea class="form-textarea" id="testsInput" 
+                    placeholder="Enter test case paths (one per line)&#10;Example:&#10;/home/cubrid-testtools/CTP/sql/cases/_01_object/_09_partition/_004_pruning/cases/range_hash.sql"></textarea>
+            </div>
+
+            <!-- Worker Configuration -->
+            <div class="form-group">
+                <label class="form-label">Worker Nodes</label>
+                <div class="worker-list" id="workerList">
+                    <div class="worker-item">
+                        <span class="worker-ip">localhost</span>
+                        <button class="remove-worker-btn" onclick="removeWorker(this)" style="display: none;">×</button>
+                    </div>
+                </div>
+                <div class="worker-input-group">
+                    <input type="text" class="form-input add-worker-input" id="newWorkerInput" 
+                        placeholder="Enter worker IP or hostname">
+                    <button class="control-btn" onclick="addWorker()">Add Worker</button>
+                </div>
+            </div>
+
+            <!-- Build Configuration -->
+            <div class="form-row">
                 <div class="form-group">
-                    <label for="buildType">Build Type</label>
-                    <select id="buildType" name="buildType">
+                    <label class="form-label" for="buildType">Build Type</label>
+                    <select class="form-select" id="buildType">
                         <option value="debug">Debug</option>
                         <option value="release">Release</option>
                         <option value="profile">Profile</option>
                     </select>
                 </div>
-
+                
                 <div class="form-group">
-                    <label for="callbackUrl">Callback URL</label>
-                    <input type="text" id="callbackUrl" name="callbackUrl" 
-                           value="http://localhost:<%= config.server.port %>/callback" />
+                    <label class="form-label" for="callbackUrl">Callback URL</label>
+                    <input type="text" class="form-input" id="callbackUrl" 
+                        value="http://localhost:<%= config.server.port %>/callback">
                 </div>
+            </div>
 
-                <button type="submit" class="btn">Send Build Request</button>
-            </form>
-        </div>
+            <!-- Advanced Configuration -->
+            <div class="advanced-config">
+                <button class="toggle-advanced-btn" onclick="toggleAdvanced()">
+                    <span>⚙️ Advanced Configuration</span>
+                    <span class="toggle-icon">▼</span>
+                </button>
+                
+                <div class="advanced-panel" id="advancedPanel" style="display: none;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="timeout">Timeout (seconds)</label>
+                            <input type="number" class="form-input" id="timeout" value="7200">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="minRuns">Min Runs</label>
+                            <input type="number" class="form-input" id="minRuns" value="1" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="maxRuns">Max Runs</label>
+                            <input type="number" class="form-input" id="maxRuns" value="3" min="1">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="runMode">Run Mode</label>
+                        <select class="form-select" id="runMode">
+                            <option value="until-pass">Until Pass</option>
+                            <option value="until-fail">Until Fail</option>
+                            <option value="fixed-runs">Fixed Runs</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="envVars">Environment Variables (JSON)</label>
+                        <textarea class="form-textarea" id="envVars" 
+                            placeholder='{"VARIABLE_NAME": "value", "ANOTHER_VAR": "value2"}'></textarea>
+                    </div>
+                </div>
+            </div>
 
-        <div class="card">
-            <h2>📊 System Status</h2>
-            <div id="systemStatus">
-                <p>Builder: <%= config.builder.host %>:<%= config.builder.port %></p>
-                <p>Report Server: <%= config.server.localIp %>:<%= config.server.port %></p>
+            <button class="submit-button" id="submitButton" onclick="submitBuildRequest()">
+                Send Build Request
+            </button>
+
+            <div id="responseDisplay" style="display: none;">
+                <h3>Response:</h3>
+                <div class="response-display" id="responseContent"></div>
             </div>
         </div>
 
+        <!-- Build Status Monitor Card -->
         <div class="card">
-            <h2>📑 Recent Reports</h2>
-            <div id="recentReports">
-                <p>Loading...</p>
+            <h2 class="card-title">
+                <div class="card-title-icon">📊</div>
+                Build Status Monitor
+            </h2>
+            
+            <div id="statusMonitor">
+                <p style="color: var(--text-secondary);">No active builds. Submit a request to start monitoring.</p>
             </div>
-            <a href="/reports" class="btn">View All Reports</a>
+        </div>
+
+        <!-- Recent Reports Card -->
+        <div class="card">
+            <h2 class="card-title">
+                <div class="card-title-icon">📋</div>
+                Recent Test Reports
+            </h2>
+            
+            <div class="reports-section">
+                <div class="reports-controls">
+                    <button class="control-btn" onclick="refreshReports()">Refresh</button>
+                    <button class="control-btn" onclick="viewAllReports()">View All Reports</button>
+                </div>
+                
+                <div id="recentReports">
+                    <div class="spinner"></div>
+                </div>
+            </div>
         </div>
     </div>
+
+    <!-- System Info Modal -->
+    <div class="modal" id="systemInfoModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">System Information</h2>
+                <div class="modal-close" onclick="closeSystemInfo()">×</div>
+            </div>
+            
+            <div class="info-section">
+                <h3 class="info-title">Builder Configuration</h3>
+                <div class="info-grid" id="builderInfo">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h3 class="info-title">Tester Configuration</h3>
+                <div class="form-group">
+                    <label class="form-label">Tester IP Address</label>
+                    <input type="text" class="form-input" id="testerIp" 
+                        placeholder="Enter tester IP to check status">
+                    <button class="control-btn" style="margin-top: 0.5rem;" 
+                        onclick="checkTesterStatus()">Check Status</button>
+                </div>
+                <div class="info-grid" id="testerInfo" style="margin-top: 1rem;">
+                    <p style="color: var(--text-secondary);">Enter tester IP to view configuration</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <script src="/js/dashboard.js"></script>
 </body>

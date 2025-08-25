@@ -122,6 +122,37 @@ class FileService {
     getResultsPath(requestId) {
         return path.join(config.paths.requests, requestId, 'results.json');
     }
+
+    /**
+     * Get list of available reports
+     */
+    async getReportsList() {
+        try {
+            const requestsDir = config.paths.requests;
+            const dirs = await this.listDirectory(requestsDir);
+            const reports = [];
+
+            for (const dir of dirs) {
+                if (!dir.startsWith('req_')) continue;
+                
+                const reportPath = path.join(requestsDir, dir, 'report.html');
+                if (await this.fileExists(reportPath)) {
+                    const stats = await this.getFileStats(reportPath);
+                    reports.push({
+                        id: dir,
+                        modified: stats.mtime
+                    });
+                }
+            }
+
+            // Sort by modification time (newest first)
+            reports.sort((a, b) => b.modified - a.modified);
+            return reports;
+        } catch (err) {
+            console.error('Error getting reports list:', err);
+            return [];
+        }
+    }
 }
 
 module.exports = new FileService();

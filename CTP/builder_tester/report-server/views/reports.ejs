@@ -1,36 +1,173 @@
-// Reports script for dashboard
-(function() {
-    async function loadRecentReports() {
-        const container = document.getElementById('recentReports');
-        if (!container) return;
-        
-        try {
-            const res = await fetch('/reports');
-            const html = await res.text();
-            
-            // Parse report links from HTML
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            const links = doc.querySelectorAll('a[href^="/report?id="]');
-            
-            if (links.length === 0) {
-                container.innerHTML = '<p>No reports available</p>';
-                return;
-            }
-            
-            // Show first 5 reports
-            const list = document.createElement('ul');
-            for (let i = 0; i < Math.min(5, links.length); i++) {
-                const li = document.createElement('li');
-                li.appendChild(links[i].cloneNode(true));
-                list.appendChild(li);
-            }
-            container.innerHTML = '';
-            container.appendChild(list);
-        } catch (e) {
-            container.innerHTML = '<p>Failed to load reports</p>';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - CUBRID Test Reports</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <style>
+        /* Reports specific styles using dashboard theme */
+        .reports-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
         }
-    }
 
-    document.addEventListener('DOMContentLoaded', loadRecentReports);
-})();
+        .reports-grid {
+            display: grid;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .report-card {
+            background: rgba(30, 41, 59, 0.5);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .report-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: var(--gradient);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .report-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--primary);
+            box-shadow: 0 20px 40px rgba(99, 102, 241, 0.1);
+        }
+
+        .report-card:hover::before {
+            opacity: 1;
+        }
+
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .report-id {
+            font-family: 'Courier New', monospace;
+            color: var(--primary);
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .report-id:hover {
+            color: var(--primary-hover);
+        }
+
+        .report-date {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .report-meta {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .report-icon {
+            font-size: 1.2rem;
+            margin-right: 0.5rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
+        }
+
+        .empty-state h3 {
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+        }
+
+        .back-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            background: rgba(51, 65, 85, 0.3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            margin-bottom: 2rem;
+        }
+
+        .back-button:hover {
+            background: rgba(51, 65, 85, 0.5);
+            border-color: var(--primary);
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-animation"></div>
+    
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">BT</div>
+            <h1>CUBRID Test Reports</h1>
+        </div>
+    </header>
+
+    <div class="reports-container">
+        <a href="/" class="back-button">
+            ← Back to Dashboard
+        </a>
+
+        <% if (reports && reports.length > 0) { %>
+            <div class="reports-grid">
+                <% reports.forEach(function(report) { %>
+                    <div class="report-card">
+                        <div class="report-header">
+                            <a href="/report?id=<%= report.id %>" class="report-id">
+                                <span class="report-icon">📋</span>
+                                <%= report.id %>
+                            </a>
+                            <div class="report-date">
+                                <%= new Date(report.modified).toLocaleString() %>
+                            </div>
+                        </div>
+                        
+                        <div class="report-meta">
+                            <span>📅 Generated <%= new Date(report.modified).toLocaleDateString() %></span>
+                            <span>🕒 <%= new Date(report.modified).toLocaleTimeString() %></span>
+                        </div>
+                    </div>
+                <% }); %>
+            </div>
+        <% } else { %>
+            <div class="empty-state">
+                <h3>No Reports Available</h3>
+                <p>No test reports have been generated yet.</p>
+                <p>Submit a build request from the dashboard to generate reports.</p>
+                <a href="/" class="back-button" style="margin-top: 2rem;">
+                    Go to Dashboard
+                </a>
+            </div>
+        <% } %>
+    </div>
+</body>
+</html>

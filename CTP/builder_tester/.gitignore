@@ -43,3 +43,37 @@ Thumbs.db
 # Misc
 *.bak
 *.cache
+
+# Node.js dependencies and build artifacts
+/report-server/node_modules/
+# Note: package-lock.json is kept for reproducible builds
+/report-server/npm-debug.log*
+/report-server/yarn-debug.log*
+/report-server/yarn-error.log*
+/report-server/.nyc_output/
+/report-server/coverage/
+/report-server/dist/
+/report-server/build/
+
+# Runtime files
+/report-server/.env
+/report-server/.env.local
+/report-server/.env.*.local
+
+# ESLint and Prettier cache
+/report-server/.eslintcache
+/report-server/.prettierignore
+
+# Jest cache
+/report-server/jest_cache/
+
+# Webpack/Vite build outputs
+/report-server/public/dist/
+/report-server/public/build/
+
+# Temporary and backup files in report-server
+/report-server/**/*.tmp
+/report-server/**/*.temp
+/report-server/**/*.bak
+/report-server/**/*.orig
+/report-server/**/*~
