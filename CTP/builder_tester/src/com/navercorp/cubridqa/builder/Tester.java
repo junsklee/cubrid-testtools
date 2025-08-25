@@ -448,9 +448,10 @@ public class Tester {
             }
             
             // Search all request directories (sorted by most recent first)
-            // Use the same base directory as configured for this tester instance
-            String logBaseDir = config.getWorkDir() + "/../log/requests";
-            Path requestsDir = Paths.get(logBaseDir).normalize();
+            // Use the same log directory as RequestLogManager by getting the parent of any request directory
+            String dummyRequestDir = RequestLogManager.getInstance().createRequestSubdir("dummy", "tests");
+            String logBaseDir = Paths.get(dummyRequestDir).getParent().getParent().toString(); // Go up from tests -> request_id -> requests
+            Path requestsDir = Paths.get(logBaseDir);
             logger.info("Searching in requests directory: " + requestsDir.toString());
             
             if (Files.exists(requestsDir) && Files.isDirectory(requestsDir)) {
@@ -503,9 +504,9 @@ public class Tester {
                 logger.warning("Requests directory does not exist or is not a directory: " + requestsDir.toString());
             }
             
-            // Fallback: check system log directory
-            String systemLogDir = config.getWorkDir() + "/../log/system";
-            Path systemLogFile = Paths.get(systemLogDir, filename).normalize();
+            // Fallback: check system log directory (sibling to requests directory)
+            String systemLogDir = Paths.get(logBaseDir).getParent().resolve("system").toString();
+            Path systemLogFile = Paths.get(systemLogDir, filename);
             if (Files.exists(systemLogFile)) {
                 logger.info("Found log file in system directory: " + systemLogFile.toString());
                 return systemLogFile;
