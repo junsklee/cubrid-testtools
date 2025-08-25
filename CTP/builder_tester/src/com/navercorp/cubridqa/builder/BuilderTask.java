@@ -9,6 +9,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.logging.*;
+import java.util.stream.Collectors;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
@@ -639,24 +640,54 @@ public class BuilderTask {
     private String findExistingBuildPackageOnDisk(String commitShort, String buildType, String baselineCommit, String fullCommit) {
         String found = findExistingBuildPackageOnDisk(commitShort);
         if (found == null) return null;
+        
         // Validate metadata if available
         try {
             File pkg = new File(found);
             File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
-            if (!meta.exists()) return found; // no metadata, accept
+            if (!meta.exists()) {
+                taskLogger.info("No metadata found for cached build " + commitShort + ", accepting without validation");
+                return found; // no metadata, accept
+            }
+            
             StringBuilder sb = new StringBuilder();
             try (BufferedReader br = new BufferedReader(new FileReader(meta))) {
                 String line; while ((line = br.readLine()) != null) sb.append(line);
             }
             JSONObject j = new JSONObject(sb.toString());
+            
+            // Validate commit matches
             String metaCommit = j.optString("commitShort", j.optString("commit", "")).substring(0, Math.min(7, j.optString("commitShort", j.optString("commit", "")).length()));
-            if (!metaCommit.equals(commitShort)) return null;
-            if (!buildType.equals(j.optString("buildType", buildType))) return null;
-            // If baseline differs significantly, we can choose to reject reuse; accept if absent
-            String metaBaseline = j.optString("baseline", baselineCommit);
-            if (metaBaseline != null && baselineCommit != null && !metaBaseline.equals(baselineCommit)) return null;
+            if (!metaCommit.equals(commitShort)) {
+                taskLogger.warning(String.format("Cached build rejected for %s: commit mismatch (cached: %s, requested: %s)", 
+                    commitShort, metaCommit, commitShort));
+                return null;
+            }
+            
+            // Validate build type matches  
+            String metaBuildType = j.optString("buildType", buildType);
+            if (!buildType.equals(metaBuildType)) {
+                taskLogger.warning(String.format("Cached build rejected for %s: buildType mismatch (cached: %s, requested: %s)", 
+                    commitShort, metaBuildType, buildType));
+                return null;
+            }
+            
+            // Validate baseline matches - this is the critical fix
+            String metaBaseline = j.optString("baseline", null);
+            if (metaBaseline != null && baselineCommit != null && !metaBaseline.equals(baselineCommit)) {
+                taskLogger.warning(String.format("Cached build rejected for %s: baseline mismatch (cached baseline: %s, current baseline: %s)", 
+                    commitShort, metaBaseline.substring(0, Math.min(7, metaBaseline.length())), 
+                    baselineCommit.substring(0, Math.min(7, baselineCommit.length()))));
+                return null;
+            }
+            
+            taskLogger.info(String.format("Cached build validation passed for %s (buildType: %s, baseline: %s)", 
+                commitShort, buildType, 
+                baselineCommit != null ? baselineCommit.substring(0, Math.min(7, baselineCommit.length())) : "null"));
+            
             return found;
-        } catch (Exception ignore) {
+        } catch (Exception e) {
+            taskLogger.warning("Failed to validate cached build metadata for " + commitShort + ": " + e.getMessage() + ", accepting build");
             return found; // be permissive on metadata parsing errors
         }
     }
@@ -665,14 +696,65 @@ public class BuilderTask {
         if (commits == null || commits.length() == 0) {
             throw new IllegalArgumentException("No commits provided");
         }
-        String earliest = commits.getString(0);
+        
         File repoRoot = new File(config.getCubridSrcDir());
         ProcessBuilder pb = new ProcessBuilder();
         pb.directory(repoRoot);
-        String base = executeCommandAndGetOutput(pb, "git", "rev-parse", earliest + "^").trim();
-        if (base.isEmpty()) {
-            throw new RuntimeException("Failed to determine baseline for " + earliest);
+        
+        // If only one commit, use it directly
+        if (commits.length() == 1) {
+            String commit = commits.getString(0);
+            String base = executeCommandAndGetOutput(pb, "git", "rev-parse", commit + "^").trim();
+            if (base.isEmpty()) {
+                throw new RuntimeException("Failed to determine baseline for " + commit);
+            }
+            return base;
         }
+        
+        // For multiple commits, find the chronologically earliest one
+        String earliestCommit = null;
+        long earliestTimestamp = Long.MAX_VALUE;
+        
+        taskLogger.info("Finding earliest commit among " + commits.length() + " commits by commit date...");
+        
+        for (int i = 0; i < commits.length(); i++) {
+            String commit = commits.getString(i);
+            
+            try {
+                // Get commit timestamp
+                String timestampStr = executeCommandAndGetOutput(pb, "git", "log", "-1", "--format=%ct", commit).trim();
+                long timestamp = Long.parseLong(timestampStr);
+                
+                taskLogger.info(String.format("Commit %s has timestamp %d", 
+                    commit.substring(0, Math.min(7, commit.length())), timestamp));
+                
+                if (timestamp < earliestTimestamp) {
+                    earliestTimestamp = timestamp;
+                    earliestCommit = commit;
+                }
+            } catch (Exception e) {
+                taskLogger.warning("Failed to get timestamp for commit " + commit + ": " + e.getMessage());
+                // If we can't get timestamp, treat it as very old to be conservative
+                if (earliestTimestamp == Long.MAX_VALUE) {
+                    earliestCommit = commit;
+                    earliestTimestamp = 0;
+                }
+            }
+        }
+        
+        if (earliestCommit == null) {
+            throw new RuntimeException("Could not determine earliest commit");
+        }
+        
+        taskLogger.info(String.format("Earliest commit determined: %s (timestamp: %d)", 
+            earliestCommit.substring(0, Math.min(7, earliestCommit.length())), earliestTimestamp));
+        
+        // Get the parent of the earliest commit as baseline
+        String base = executeCommandAndGetOutput(pb, "git", "rev-parse", earliestCommit + "^").trim();
+        if (base.isEmpty()) {
+            throw new RuntimeException("Failed to determine baseline for earliest commit " + earliestCommit);
+        }
+        
         return base;
     }
 
@@ -927,11 +1009,17 @@ public class BuilderTask {
                     taskLogger.warning("Failed to save multipart log files: " + e.getMessage());
                 }
             }
-            // Handle attempt log metadata from JSON response - fetch actual log content from remote tester
+            // Handle attempt log metadata from JSON response - fetch actual log content from remote tester or copy from local filesystem
             else if (responseJson.has("attemptLogMetadata")) {
                 try {
                     JSONArray metadata = responseJson.getJSONArray("attemptLogMetadata");
-                    taskLogger.info("Received metadata for " + metadata.length() + " attempt logs - fetching content from remote tester");
+                    boolean isLocal = isLocalTester(host);
+                    
+                    if (isLocal) {
+                        taskLogger.info("Received metadata for " + metadata.length() + " attempt logs - copying from local filesystem");
+                    } else {
+                        taskLogger.info("Received metadata for " + metadata.length() + " attempt logs - fetching content from remote tester");
+                    }
                     
                     if (requestId != null && config.isRequestGroupingEnabled()) {
                         String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
@@ -942,18 +1030,35 @@ public class BuilderTask {
                             int attemptNum = attemptMeta.getInt("attempt");
                             String status = attemptMeta.optString("status", "unknown");
                             
-                            // Fetch log content from remote tester
                             try {
-                                String logContent = fetchLogContentFromRemoteTester(host, port, logFileName);
-                                if (logContent != null && !logContent.isEmpty()) {
-                                    Path logFile = Paths.get(testsDir, logFileName);
-                                    Files.write(logFile, logContent.getBytes("UTF-8"));
-                                    taskLogger.info("Saved attempt " + attemptNum + " log (" + status + ") to: " + logFile.toString());
+                                if (isLocal) {
+                                    // Local tester - copy log file directly from filesystem
+                                    Path sourceLogFile = findLocalLogFile(requestId, logFileName);
+                                    if (sourceLogFile != null && Files.exists(sourceLogFile)) {
+                                        Path destLogFile = Paths.get(testsDir, logFileName);
+                                        if (!sourceLogFile.equals(destLogFile)) {
+                                            byte[] logContent = Files.readAllBytes(sourceLogFile);
+                                            Files.write(destLogFile, logContent);
+                                            taskLogger.info("Copied attempt " + attemptNum + " log (" + status + ") from " + sourceLogFile.toString() + " to: " + destLogFile.toString());
+                                        } else {
+                                            taskLogger.info("Log file already in correct location for attempt " + attemptNum + " (" + status + "): " + destLogFile.toString());
+                                        }
+                                    } else {
+                                        taskLogger.warning("Local log file not found for: " + logFileName);
+                                    }
                                 } else {
-                                    taskLogger.warning("Empty or null log content received for: " + logFileName);
+                                    // Remote tester - fetch log content via HTTP
+                                    String logContent = fetchLogContentFromRemoteTester(host, port, logFileName);
+                                    if (logContent != null && !logContent.isEmpty()) {
+                                        Path logFile = Paths.get(testsDir, logFileName);
+                                        Files.write(logFile, logContent.getBytes("UTF-8"));
+                                        taskLogger.info("Saved attempt " + attemptNum + " log (" + status + ") to: " + logFile.toString());
+                                    } else {
+                                        taskLogger.warning("Empty or null log content received for: " + logFileName);
+                                    }
                                 }
                             } catch (Exception logFetchEx) {
-                                taskLogger.warning("Failed to fetch log content for " + logFileName + ": " + logFetchEx.getMessage());
+                                taskLogger.warning("Failed to " + (isLocal ? "copy" : "fetch") + " log content for " + logFileName + ": " + logFetchEx.getMessage());
                             }
                         }
                         
@@ -1051,12 +1156,18 @@ public class BuilderTask {
     
     private boolean isLocalTester(String ip) {
         if ("localhost".equalsIgnoreCase(ip) || "127.0.0.1".equals(ip)) {
+            taskLogger.info("Tester " + ip + " identified as LOCAL (localhost/127.0.0.1)");
             return true;
         }
+        
         try {
             String localHost = InetAddress.getLocalHost().getHostAddress();
-            return ip.equals(localHost);
+            boolean isLocal = ip.equals(localHost);
+            taskLogger.info(String.format("Tester %s compared to local host %s: %s", 
+                ip, localHost, isLocal ? "LOCAL" : "REMOTE"));
+            return isLocal;
         } catch (Exception e) {
+            taskLogger.warning("Failed to determine local host address for comparison with " + ip + ": " + e.getMessage());
             return false;
         }
     }
@@ -1338,6 +1449,53 @@ public class BuilderTask {
         return request;
     }
     
+    /**
+     * Find local log file by searching the same request directory structure
+     */
+    private Path findLocalLogFile(String requestId, String logFileName) {
+        try {
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                // First try the current request's tests directory
+                String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+                Path localLogFile = Paths.get(testsDir, logFileName);
+                if (Files.exists(localLogFile)) {
+                    return localLogFile;
+                }
+                
+                // If not found, search across all request directories (most recent first)
+                String logBaseDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/requests";
+                Path requestsDir = Paths.get(logBaseDir);
+                if (Files.exists(requestsDir) && Files.isDirectory(requestsDir)) {
+                    try (java.util.stream.Stream<Path> requestDirs = Files.list(requestsDir)) {
+                        List<Path> sortedDirs = requestDirs.filter(Files::isDirectory)
+                            .sorted((a, b) -> {
+                                try {
+                                    return Long.compare(Files.getLastModifiedTime(b).toMillis(), 
+                                                      Files.getLastModifiedTime(a).toMillis());
+                                } catch (IOException e) {
+                                    return b.getFileName().toString().compareTo(a.getFileName().toString());
+                                }
+                            })
+                            .collect(Collectors.toList());
+                        
+                        for (Path requestDir : sortedDirs) {
+                            Path testsSubDir = requestDir.resolve("tests");
+                            if (Files.exists(testsSubDir) && Files.isDirectory(testsSubDir)) {
+                                Path logFile = testsSubDir.resolve(logFileName);
+                                if (Files.exists(logFile)) {
+                                    return logFile;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            taskLogger.warning("Error searching for local log file " + logFileName + ": " + e.getMessage());
+        }
+        return null;
+    }
+
     /**
      * Fetch log content from remote tester
      */

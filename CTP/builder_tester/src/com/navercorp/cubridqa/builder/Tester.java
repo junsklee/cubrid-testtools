@@ -430,42 +430,86 @@ public class Tester {
      * Find log file by searching across all request directories
      */
     private Path findLogFile(String filename) {
+        logger.info("Searching for log file: " + filename);
+        
         try {
             // First try current request context if available
             String currentRequestId = RequestContext.getRequestId();
+            logger.info("Current RequestContext ID: " + (currentRequestId != null ? currentRequestId : "null"));
+            
             if (currentRequestId != null && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(currentRequestId, "tests");
                 Path currentRequestLogFile = Paths.get(testsDir, filename);
+                logger.info("Checking current request context path: " + currentRequestLogFile.toString());
                 if (Files.exists(currentRequestLogFile)) {
+                    logger.info("Found log file in current request context: " + currentRequestLogFile.toString());
                     return currentRequestLogFile;
                 }
             }
             
-            // Search all request directories
+            // Search all request directories (sorted by most recent first)
             String logBaseDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/requests";
             Path requestsDir = Paths.get(logBaseDir);
+            logger.info("Searching in requests directory: " + requestsDir.toString());
+            
             if (Files.exists(requestsDir) && Files.isDirectory(requestsDir)) {
+                List<Path> allRequestDirs = new ArrayList<>();
                 try (java.util.stream.Stream<Path> requestDirs = Files.list(requestsDir)) {
-                    for (Path requestDir : requestDirs.sorted((a, b) -> b.getFileName().toString().compareTo(a.getFileName().toString())).collect(Collectors.toList())) {
-                        if (Files.isDirectory(requestDir)) {
-                            Path testsDir = requestDir.resolve("tests");
-                            if (Files.exists(testsDir) && Files.isDirectory(testsDir)) {
-                                Path logFile = testsDir.resolve(filename);
-                                if (Files.exists(logFile)) {
-                                    logger.info("Found log file: " + logFile.toString());
-                                    return logFile;
-                                }
+                    allRequestDirs = requestDirs.filter(Files::isDirectory)
+                        .sorted((a, b) -> {
+                            // Sort by last modified time (most recent first) for better chance of finding the file quickly
+                            try {
+                                return Long.compare(Files.getLastModifiedTime(b).toMillis(), 
+                                                  Files.getLastModifiedTime(a).toMillis());
+                            } catch (IOException e) {
+                                return b.getFileName().toString().compareTo(a.getFileName().toString());
                             }
+                        })
+                        .collect(Collectors.toList());
+                }
+                
+                logger.info("Found " + allRequestDirs.size() + " request directories to search");
+                
+                for (Path requestDir : allRequestDirs) {
+                    Path testsDir = requestDir.resolve("tests");
+                    if (Files.exists(testsDir) && Files.isDirectory(testsDir)) {
+                        Path logFile = testsDir.resolve(filename);
+                        if (Files.exists(logFile)) {
+                            logger.info("Found log file in request directory " + requestDir.getFileName() + ": " + logFile.toString());
+                            return logFile;
                         }
                     }
                 }
+                
+                logger.warning("Log file " + filename + " not found in any of the " + allRequestDirs.size() + " request directories");
+                
+                // Debug: list some recent files to help understand what's available
+                if (!allRequestDirs.isEmpty()) {
+                    Path mostRecentRequestDir = allRequestDirs.get(0);
+                    Path mostRecentTestsDir = mostRecentRequestDir.resolve("tests");
+                    if (Files.exists(mostRecentTestsDir) && Files.isDirectory(mostRecentTestsDir)) {
+                        logger.info("Contents of most recent tests directory (" + mostRecentRequestDir.getFileName() + "):");
+                        try (java.util.stream.Stream<Path> files = Files.list(mostRecentTestsDir)) {
+                            files.filter(p -> p.getFileName().toString().endsWith(".log"))
+                                 .limit(10)
+                                 .forEach(p -> logger.info("  Available log: " + p.getFileName().toString()));
+                        } catch (IOException e) {
+                            logger.warning("Failed to list contents of tests directory: " + e.getMessage());
+                        }
+                    }
+                }
+            } else {
+                logger.warning("Requests directory does not exist or is not a directory: " + requestsDir.toString());
             }
             
             // Fallback: check system log directory
             Path systemLogFile = Paths.get(System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system", filename);
             if (Files.exists(systemLogFile)) {
+                logger.info("Found log file in system directory: " + systemLogFile.toString());
                 return systemLogFile;
             }
+            
+            logger.warning("Log file " + filename + " not found in any location");
             
         } catch (Exception e) {
             logger.log(Level.WARNING, "Error searching for log file: " + filename, e);
