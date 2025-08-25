@@ -448,8 +448,9 @@ public class Tester {
             }
             
             // Search all request directories (sorted by most recent first)
-            String logBaseDir = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/requests";
-            Path requestsDir = Paths.get(logBaseDir);
+            // Use the same base directory as configured for this tester instance
+            String logBaseDir = config.getWorkDir() + "/../log/requests";
+            Path requestsDir = Paths.get(logBaseDir).normalize();
             logger.info("Searching in requests directory: " + requestsDir.toString());
             
             if (Files.exists(requestsDir) && Files.isDirectory(requestsDir)) {
@@ -503,7 +504,8 @@ public class Tester {
             }
             
             // Fallback: check system log directory
-            Path systemLogFile = Paths.get(System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system", filename);
+            String systemLogDir = config.getWorkDir() + "/../log/system";
+            Path systemLogFile = Paths.get(systemLogDir, filename).normalize();
             if (Files.exists(systemLogFile)) {
                 logger.info("Found log file in system directory: " + systemLogFile.toString());
                 return systemLogFile;
