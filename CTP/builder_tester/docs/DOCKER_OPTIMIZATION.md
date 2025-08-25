@@ -159,7 +159,7 @@ docker system prune -a
 Adjust cache size if needed:
 ```properties
 # Reduce cache size to save space
-build_cache_size=10
+build_cache_size=5
 ```
 
 ## Performance Metrics
