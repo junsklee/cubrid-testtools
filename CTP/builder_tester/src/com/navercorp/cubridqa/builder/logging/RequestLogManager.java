@@ -118,6 +118,20 @@ public class RequestLogManager {
     }
     
     /**
+     * Get the requests directory path
+     */
+    public String getRequestsDir() {
+        return config.getRequestsDir();
+    }
+    
+    /**
+     * Get the system directory path
+     */
+    public String getSystemDir() {
+        return config.getSystemDir();
+    }
+    
+    /**
      * Custom formatter that includes request ID
      */
     private static class RequestLogFormatter extends Formatter {
