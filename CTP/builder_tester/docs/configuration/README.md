@@ -39,7 +39,7 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `parallel_jobs` (int): Parallel compilation jobs, 0=auto-detect (default 0)
 ### Log management
 - `max_request_logs` (int): Keep last N request directories (default 5)
-- `max_tar_files` (int): Keep last N tar archives in work dir (default 10)
+- `max_tar_files` (int): Keep last N tar archives in work dir (default 5)
 - `enable_request_grouping` (bool): Group logs by request ID (default true)
 
 ## Tester (`conf/tester.conf`)

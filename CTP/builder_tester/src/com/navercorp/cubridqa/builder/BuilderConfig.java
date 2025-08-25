@@ -189,7 +189,7 @@ public class BuilderConfig {
     }
     
     public int getBuildCacheSize() {
-        return Integer.parseInt(properties.getProperty(BUILD_CACHE_SIZE, "20"));
+        return Integer.parseInt(properties.getProperty(BUILD_CACHE_SIZE, "10"));
     }
     
     public boolean getKeepFailedContainers() {
@@ -209,7 +209,7 @@ public class BuilderConfig {
     }
     
     public int getMaxTarFiles() {
-        return Integer.parseInt(properties.getProperty(MAX_TAR_FILES, "10"));
+        return Integer.parseInt(properties.getProperty(MAX_TAR_FILES, "5"));
     }
     
     public boolean isRequestGroupingEnabled() {
