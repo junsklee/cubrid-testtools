@@ -1,0 +1,45 @@
+// Override scripts for dashboard
+(function() {
+    const BUILDER_HOST = '<%= config.builder.host %>';
+    const BUILDER_PORT = <%= config.builder.port %>;
+    const REPORT_PORT = <%= config.server.port %>;
+
+    // Check builder status
+    window.checkBuilderStatus = async function() {
+        try {
+            const res = await fetch('/api/builder/health');
+            const data = await res.json();
+            const statusEl = document.getElementById('builderStatus');
+            if (statusEl) {
+                statusEl.className = 'status online';
+                statusEl.textContent = 'Connected - ' + (data.status || 'healthy');
+            }
+        } catch (err) {
+            const statusEl = document.getElementById('builderStatus');
+            if (statusEl) {
+                statusEl.className = 'status offline';
+                statusEl.textContent = 'Not connected';
+            }
+        }
+    };
+
+    // Load commits from GitHub
+    window.loadCommits = async function() {
+        try {
+            const res = await fetch('/api/github/commits?page=1');
+            if (!res.ok) throw new Error('Failed to fetch commits');
+            const data = await res.json();
+            return data;
+        } catch (e) {
+            console.error('Failed to load commits:', e);
+            return [];
+        }
+    };
+
+    // Initialize on load
+    document.addEventListener('DOMContentLoaded', function() {
+        checkBuilderStatus();
+        // Check status every 30 seconds
+        setInterval(checkBuilderStatus, 30000);
+    });
+})();

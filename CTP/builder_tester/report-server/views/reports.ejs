@@ -1,0 +1,36 @@
+// Reports script for dashboard
+(function() {
+    async function loadRecentReports() {
+        const container = document.getElementById('recentReports');
+        if (!container) return;
+        
+        try {
+            const res = await fetch('/reports');
+            const html = await res.text();
+            
+            // Parse report links from HTML
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const links = doc.querySelectorAll('a[href^="/report?id="]');
+            
+            if (links.length === 0) {
+                container.innerHTML = '<p>No reports available</p>';
+                return;
+            }
+            
+            // Show first 5 reports
+            const list = document.createElement('ul');
+            for (let i = 0; i < Math.min(5, links.length); i++) {
+                const li = document.createElement('li');
+                li.appendChild(links[i].cloneNode(true));
+                list.appendChild(li);
+            }
+            container.innerHTML = '';
+            container.appendChild(list);
+        } catch (e) {
+            container.innerHTML = '<p>Failed to load reports</p>';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadRecentReports);
+})();

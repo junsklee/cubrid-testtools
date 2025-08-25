@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CUBRID Builder-Tester Dashboard</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🚀 CUBRID Builder-Tester Dashboard</h1>
+            <div class="status-bar">
+                <span class="status" id="builderStatus">Checking...</span>
+                <span>Version: <%= config.app.version %></span>
+            </div>
+        </header>
+
+        <div class="card">
+            <h2>📤 Submit Build Request</h2>
+            <form id="buildForm">
+                <div class="form-group">
+                    <label for="commits">Commits (one per line or comma-separated)</label>
+                    <textarea id="commits" name="commits" rows="4" placeholder="Enter commit SHAs..."></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="tests">Test Cases (one per line)</label>
+                    <textarea id="tests" name="tests" rows="6" placeholder="Enter test cases..."></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="workerIps">Worker IPs (comma-separated)</label>
+                    <input type="text" id="workerIps" name="workerIps" value="localhost" />
+                </div>
+
+                <div class="form-group">
+                    <label for="buildType">Build Type</label>
+                    <select id="buildType" name="buildType">
+                        <option value="debug">Debug</option>
+                        <option value="release">Release</option>
+                        <option value="profile">Profile</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="callbackUrl">Callback URL</label>
+                    <input type="text" id="callbackUrl" name="callbackUrl" 
+                           value="http://localhost:<%= config.server.port %>/callback" />
+                </div>
+
+                <button type="submit" class="btn">Send Build Request</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>📊 System Status</h2>
+            <div id="systemStatus">
+                <p>Builder: <%= config.builder.host %>:<%= config.builder.port %></p>
+                <p>Report Server: <%= config.server.localIp %>:<%= config.server.port %></p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📑 Recent Reports</h2>
+            <div id="recentReports">
+                <p>Loading...</p>
+            </div>
+            <a href="/reports" class="btn">View All Reports</a>
+        </div>
+    </div>
+
+    <script src="/js/dashboard.js"></script>
+</body>
+</html>

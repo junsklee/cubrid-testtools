@@ -1,0 +1,120 @@
+/**
+ * CUBRID Test Report Server - Main Application
+ */
+
+const express = require('express');
+const path = require('path');
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
+
+const config = require('./config');
+const fileService = require('./services/fileService');
+const corsMiddleware = require('./middleware/cors');
+const errorHandler = require('./middleware/errorHandler');
+
+// Import routes
+const apiRoutes = require('./routes/api');
+const dashboardRoutes = require('./routes/dashboard');
+const reportRoutes = require('./routes/reports');
+const healthRoutes = require('./routes/health');
+
+// Create Express app
+const app = express();
+
+// View engine setup
+app.set('views', path.join(__dirname, '..', 'views'));
+app.set('view engine', 'ejs');
+
+// Security middleware
+app.use(helmet({
+    contentSecurityPolicy: false // Disable for development
+}));
+
+// Compression middleware
+app.use(compression());
+
+// Logging middleware
+if (config.app.environment !== 'test') {
+    app.use(morgan('combined'));
+}
+
+// Rate limiting
+const limiter = rateLimit(config.security.rateLimit);
+app.use('/api/', limiter);
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// CORS middleware
+app.use(corsMiddleware);
+
+// Static files
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Routes
+app.use('/api', apiRoutes);
+app.use('/', dashboardRoutes);
+app.use('/', reportRoutes);
+app.use('/', healthRoutes);
+
+// 404 handler
+app.use((req, res) => {
+    res.status(404).json({ error: 'Not found' });
+});
+
+// Error handler
+app.use(errorHandler);
+
+// Initialize server
+async function startServer() {
+    try {
+        // Ensure required directories exist
+        await fileService.ensureDirectories();
+        
+        // Start server
+        const server = app.listen(config.server.port, config.server.host, () => {
+            console.log(`
+╔════════════════════════════════════════════════════════╗
+║       CUBRID Test Report Server Started                 ║
+╠════════════════════════════════════════════════════════╣
+║  Version:     ${config.app.version.padEnd(42, ' ')}║
+║  Environment: ${config.app.environment.padEnd(42, ' ')}║
+║  Port:        ${String(config.server.port).padEnd(42, ' ')}║
+║  Local IP:    ${config.server.localIp.padEnd(42, ' ')}║
+║  Dashboard:   http://localhost:${config.server.port.toString().padEnd(25, ' ')}║
+╚════════════════════════════════════════════════════════╝
+            `);
+        });
+        
+        // Graceful shutdown
+        process.on('SIGTERM', () => {
+            console.log('SIGTERM received, closing server...');
+            server.close(() => {
+                console.log('Server closed');
+                process.exit(0);
+            });
+        });
+        
+        process.on('SIGINT', () => {
+            console.log('\nSIGINT received, closing server...');
+            server.close(() => {
+                console.log('Server closed');
+                process.exit(0);
+            });
+        });
+        
+    } catch (err) {
+        console.error('Failed to start server:', err);
+        process.exit(1);
+    }
+}
+
+// Start the server
+if (require.main === module) {
+    startServer();
+}
+
+module.exports = app;
