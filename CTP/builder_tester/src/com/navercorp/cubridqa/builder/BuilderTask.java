@@ -1163,8 +1163,6 @@ public class BuilderTask {
         try {
             String localHost = InetAddress.getLocalHost().getHostAddress();
             boolean isLocal = ip.equals(localHost);
-            taskLogger.info(String.format("Tester %s compared to local host %s: %s", 
-                ip, localHost, isLocal ? "LOCAL" : "REMOTE"));
             return isLocal;
         } catch (Exception e) {
             taskLogger.warning("Failed to determine local host address for comparison with " + ip + ": " + e.getMessage());
