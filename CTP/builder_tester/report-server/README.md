@@ -11,13 +11,39 @@ report-server/
 ├── src/
 │   ├── server.js           # Main application entry point
 │   ├── config/             # Configuration management
-│   ├── controllers/        # Request handlers (builder, github, report, tester)
-│   ├── middleware/         # Express middleware (cors, error handling)
-│   ├── routes/            # Route definitions (api, dashboard, reports)
-│   └── services/          # Business logic (file, github, proxy, report)
-├── views/                 # EJS templates (dashboard, reports, overrides)
-├── public/               # Static assets (CSS, JavaScript)
-└── package.json          # Dependencies and scripts
+│   │   └── index.js        # Centralized configuration
+│   ├── controllers/        # Request handlers
+│   │   ├── builderController.js  # Builder service proxy
+│   │   ├── githubController.js   # GitHub API integration
+│   │   ├── reportController.js   # Report generation and viewing
+│   │   └── testerController.js   # Tester health checks
+│   ├── middleware/         # Express middleware
+│   │   ├── cors.js         # CORS configuration
+│   │   └── errorHandler.js # Error handling
+│   ├── routes/            # Route definitions
+│   │   ├── api.js         # API endpoints
+│   │   ├── dashboard.js   # Dashboard routes
+│   │   ├── health.js      # Health check routes
+│   │   └── reports.js     # Report routes
+│   └── services/          # Business logic
+│       ├── fileService.js    # File system operations
+│       ├── githubService.js  # GitHub API client
+│       ├── proxyService.js   # HTTP proxy utilities
+│       └── reportService.js  # Report generation logic
+├── views/                 # EJS templates
+│   ├── dashboard.ejs      # Main dashboard template
+│   ├── reports.ejs        # Reports listing template
+│   └── overrides.ejs      # Client script overrides
+├── public/               # Static assets
+│   ├── css/
+│   │   ├── dashboard.css # Dashboard styles
+│   │   └── report.css    # Report viewer styles
+│   └── js/
+│       ├── dashboard.js  # Dashboard client logic
+│       └── report.js     # Report viewer logic
+├── .env                  # Environment configuration
+├── package.json          # Dependencies and scripts
+└── package-lock.json     # Locked dependency versions
 ```
 
 ## Features
@@ -143,36 +169,76 @@ Reports are stored in `~/cubrid-testtools/CTP/builder_tester/log/requests/`:
 
 ### API Endpoints
 
+#### Dashboard & UI
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/` | Main dashboard interface |
 | GET | `/reports` | Reports listing page |
 | GET | `/report?id=<req_id>` | Specific report viewer |
+| GET | `/ui/overrides.js` | Dashboard override scripts |
+| GET | `/ui/reports.js` | Reports page scripts |
+
+#### Reports & Callbacks
+| Method | Endpoint | Description |
+|--------|----------|-------------|
 | POST | `/callback` | Test results callback handler |
+| GET | `/api/logs/<req_id>/tests` | List test logs |
+| GET | `/api/log/<req_id>/tests/<filename>` | Get specific test log |
+| GET | `/api/logs/<req_id>/builds` | List build logs |
+| GET | `/api/log-root/<req_id>/<filename>` | Get system logs |
+
+#### System & Health
+| Method | Endpoint | Description |
+|--------|----------|-------------|
 | GET | `/health` | Health check endpoint |
-| GET | `/api/local-ip` | Get server local IP |
+| GET | `/api/local-ip` | Get server local IP and hostname |
+
+#### GitHub Integration
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/github/commits` | Get commits (supports pagination) |
+| GET | `/api/github/validate/<sha>` | Validate commit SHA |
+| GET | `/api/github/commit/<sha>` | Get commit details |
+
+#### Builder Proxy
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/builder/build` | Submit build request |
+| GET | `/api/builder/status` | Get build status |
 | GET | `/api/builder/health` | Builder service health |
-| GET | `/api/tester/health` | Tester service health |
+| ALL | `/api/builder/*` | Proxy other builder endpoints |
+
+#### Tester Integration
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/tester/health` | Tester service health check |
 
 ## Deployment
 
 ### Environment Variables
 
+Create a `.env` file in the report-server directory:
+
 ```bash
-# Server configuration
-REPORT_PORT=8091
-HOST=0.0.0.0
+# Server Configuration
+REPORT_PORT=8091           # Server port (default: 8091)
+HOST=0.0.0.0              # Host binding (default: 0.0.0.0)
+NODE_ENV=production       # Environment (development/production)
 
-# Builder integration
-BUILDER_HOST=localhost
-BUILDER_PORT=8089
+# Builder Integration
+BUILDER_HOST=localhost    # Builder service host
+BUILDER_PORT=8089        # Builder service port
+BUILDER_PROTOCOL=http    # Protocol (http/https)
 
-# GitHub integration
-GITHUB_TOKEN=your_token
+# GitHub Integration (Optional)
+GITHUB_TOKEN=ghp_xxx     # Personal access token for API rate limits
 
-# Security
-NODE_ENV=production
-CORS_ORIGIN=*
+# Security Settings
+CORS_ORIGIN=*            # CORS allowed origins
+RATE_LIMIT_MAX=100       # Max requests per 15 minutes
+
+# Paths (Auto-configured)
+# LOG_BASE_DIR=~/cubrid-testtools/CTP/builder_tester/log
 ```
 
 ### Production Deployment
@@ -189,13 +255,77 @@ pm2 start src/server.js --name "report-server"
 sudo systemctl start report-server
 ```
 
-## Migration from Legacy Server
+## Troubleshooting
 
-This modular version replaces the old monolithic `report-server-tobe.html` file with:
-- ✅ Separate, maintainable CSS and JavaScript files
-- ✅ EJS templating for dynamic content
-- ✅ Proper Express.js routing and middleware
-- ✅ Enhanced error handling and logging
-- ✅ Improved security and performance features
+### Common Issues
 
-All functionality from the legacy server has been preserved and enhanced.
+1. **Port Already in Use**
+   ```bash
+   # Find process using port 8091
+   lsof -i :8091
+   # Kill the process or use different port
+   node src/server.js 8092
+   ```
+
+2. **GitHub API Rate Limit**
+   - Set `GITHUB_TOKEN` in `.env` file
+   - Use a GitHub personal access token
+
+3. **Builder Connection Failed**
+   - Verify Builder is running: `curl http://localhost:8089/health`
+   - Check `BUILDER_HOST` and `BUILDER_PORT` in `.env`
+
+4. **Missing Dependencies**
+   ```bash
+   npm ci  # Clean install from package-lock.json
+   ```
+
+5. **Permission Errors**
+   - Ensure write permissions for log directories
+   - Check `~/cubrid-testtools/CTP/builder_tester/log/` permissions
+
+## Contributing
+
+### Development Workflow
+
+1. **Setup Development Environment**
+   ```bash
+   git clone <repository>
+   cd report-server
+   npm install
+   cp .env.example .env  # Configure environment
+   npm run dev           # Start in development mode
+   ```
+
+2. **Code Style**
+   - Follow modular pattern: routes → controllers → services
+   - Keep functions small and focused
+   - Use async/await for asynchronous operations
+   - Add JSDoc comments for public functions
+
+3. **Adding New Features**
+   - **New API endpoint**: Create controller, service, and route
+   - **New UI page**: Add EJS template and route
+   - **New middleware**: Add to `src/middleware/` and register in server.js
+
+4. **Testing**
+   ```bash
+   # Manual testing
+   curl http://localhost:8091/health
+   
+   # Submit test request
+   curl -X POST http://localhost:8091/callback \
+     -H "Content-Type: application/json" \
+     -d '{"requestId": "test_123", "results": {}}'
+   ```
+
+## License
+
+Apache License 2.0 - See LICENSE file for details
+
+## Support
+
+For issues or questions:
+- Check the main Builder-Tester documentation
+- Review logs in `~/cubrid-testtools/CTP/builder_tester/log/`
+- Contact the CUBRID QA Team
