@@ -16,6 +16,7 @@ router.get('/logs/:req_id/tests/:filename', (req, res) => reportController.getTe
 router.get('/api/log/:req_id/tests/:filename', (req, res) => reportController.getTestLog(req, res));
 router.get('/api/logs/:req_id/tests', (req, res) => reportController.listTestLogs(req, res));
 router.get('/api/logs/:req_id/builds', (req, res) => reportController.listBuildLogs(req, res));
+router.get('/api/log/:req_id/builds/:filename', (req, res) => reportController.getBuildLog(req, res));
 router.get('/api/log-root/:req_id/:filename', (req, res) => reportController.getRootLog(req, res));
 
 module.exports = router;

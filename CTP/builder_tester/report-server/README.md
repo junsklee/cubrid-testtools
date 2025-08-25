@@ -145,9 +145,11 @@ Configure your Builder to use the callback URL:
 
 ## Report Structure
 
-Reports are stored in `~/cubrid-testtools/CTP/builder_tester/log/requests/`:
-- `results.json` - Raw test data with attemptLogMetadata
-- `report.html` - Interactive HTML report with enhanced features
+Reports are stored in `~/cubrid-testtools/CTP/builder_tester/log/requests/` (directory name matches taskId):
+- `results.json` - Raw test data; includes `requestId`, `taskId`, `results` (array), and attempt metadata
+- `report.html` - Interactive HTML report (integrated template)
+- `tests/*.log` - Test execution logs per test/attempt (e.g., docker_opt_<commit>_<test>.log)
+- `builds/*.log` - Build logs per commit (e.g., build_<commit7>.log)
 
 ## Development
 
@@ -181,10 +183,11 @@ Reports are stored in `~/cubrid-testtools/CTP/builder_tester/log/requests/`:
 #### Reports & Callbacks
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/callback` | Test results callback handler |
-| GET | `/api/logs/<req_id>/tests` | List test logs |
+| POST | `/callback` | Test results callback handler (prefers taskId for directory) |
+| GET | `/api/logs/<req_id>/tests` | List test logs (array of filenames) |
 | GET | `/api/log/<req_id>/tests/<filename>` | Get specific test log |
-| GET | `/api/logs/<req_id>/builds` | List build logs |
+| GET | `/api/logs/<req_id>/builds` | List build logs (array of filenames) |
+| GET | `/api/log/<req_id>/builds/<filename>` | Get specific build log |
 | GET | `/api/log-root/<req_id>/<filename>` | Get system logs |
 
 #### System & Health
@@ -254,6 +257,13 @@ pm2 start src/server.js --name "report-server"
 # Or with systemd service
 sudo systemctl start report-server
 ```
+
+## Implementation Notes
+
+- Report HTML is generated from `src/com/navercorp/cubridqa/builder/report/report-template.html` with placeholders `{{REQUEST_ID}}`, `{{TIMESTAMP}}`, and `{{RESULTS_JSON}}` substituted at generation time to provide the full interactive UI.
+- Callback handling normalizes payload fields so the directory id, `requestId`, and `taskId` are consistent (prefers `taskId` for legacy parity).
+- Log APIs return arrays (not wrapped objects) for compatibility with the integrated viewer logic.
+- Root logs are accessible via `/api/log-root/<req_id>/<filename>` (e.g., builder.log, tester.log).
 
 ## Troubleshooting
 

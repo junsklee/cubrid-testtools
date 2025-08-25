@@ -2,31 +2,80 @@
  * Report Client-Side JavaScript
  */
 
-document.addEventListener('DOMContentLoaded', function() {
-    // Process report data if available
-    if (typeof resultsData !== 'undefined') {
-        processReportData(resultsData);
+// Ensure execution whether this script is injected after DOMContentLoaded or before
+(function initReportRendering() {
+    function getData() {
+        return (typeof reportData !== 'undefined') ? reportData :
+               (typeof resultsData !== 'undefined') ? resultsData : null;
     }
-});
+    function render() {
+        var data = getData();
+        if (data) processReportData(data);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', render);
+    } else {
+        // DOM already ready
+        render();
+    }
+})();
 
 /**
  * Process and display report data
  */
 function processReportData(data) {
-    const container = document.getElementById('resultsContainer');
+    // Prefer modern container id used by current report template
+    const container = document.getElementById('report-content') || document.getElementById('resultsContainer');
     if (!container) return;
-    
+
+    // Normalize payload (array of results -> map by test then commit)
+    const normalized = normalizePayload(data);
+
     // Create statistics grid
-    const stats = calculateStatistics(data);
+    const stats = calculateStatistics(normalized);
     const statsHtml = createStatisticsGrid(stats);
-    
+
     // Create results table
-    const tableHtml = createResultsTable(data);
-    
+    const tableHtml = createResultsTable(normalized);
+
     container.innerHTML = statsHtml + tableHtml;
-    
+
     // Add event listeners
     attachEventListeners();
+
+    // Wire toolbar buttons if present
+    wireToolbar(normalized);
+}
+
+// Normalize payload to expected shape: { commits: string[], results: { [test]: { [commit]: result } } }
+function normalizePayload(data) {
+    // If already in expected map shape, return as-is
+    if (data && !Array.isArray(data.results)) {
+        return data;
+    }
+
+    const resultsArray = Array.isArray(data && data.results) ? data.results : [];
+    const commitsSet = new Set();
+    const resultsMap = {};
+
+    resultsArray.forEach(item => {
+        const testName = item.test || 'unknown_test';
+        const commit = item.commit || 'unknown_commit';
+        commitsSet.add(commit);
+        if (!resultsMap[testName]) resultsMap[testName] = {};
+        resultsMap[testName][commit] = {
+            status: item.status || 'unknown',
+            message: item.message || '',
+            attempts: item.attempts || 0,
+            flaky: !!item.flaky,
+            logPath: item.logPath || ''
+        };
+    });
+
+    return {
+        commits: Array.from(commitsSet),
+        results: resultsMap
+    };
 }
 
 /**
@@ -129,7 +178,8 @@ function createResultsTable(data) {
                 const statusClass = `result-${result.status}`;
                 const statusText = result.status.toUpperCase();
                 const attempts = result.attempts ? `(${result.attempts})` : '';
-                html += `<td><span class="${statusClass}">${statusText}${attempts}</span></td>`;
+                const logLink = result.logPath ? `<br><a href="/api/log-root/${encodeURIComponent(getRequestId())}/${encodeURIComponent(result.logPath.split('/').pop())}" target="_blank" class="log-link">view log</a>` : '';
+                html += `<td><span class="${statusClass}">${statusText}${attempts}</span>${logLink}</td>`;
             } else {
                 html += '<td>-</td>';
             }
@@ -143,6 +193,18 @@ function createResultsTable(data) {
     html += '</tbody></table></div>';
     
     return html;
+}
+
+function getRequestId() {
+    try {
+        if (typeof reportData !== 'undefined' && reportData.requestId) return reportData.requestId;
+        if (typeof resultsData !== 'undefined' && resultsData.requestId) return resultsData.requestId;
+    } catch (e) {}
+    // Fallback: parse from URL param `id`
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('id') || '';
+    } catch (e) { return ''; }
 }
 
 /**
@@ -184,6 +246,83 @@ function attachEventListeners() {
             showTestDetails(testName);
         });
     });
+}
+
+function wireToolbar(data) {
+    const reqId = getRequestId();
+    const btnBuilder = document.getElementById('btnBuilderLog');
+    const btnTester = document.getElementById('btnTesterLog');
+    const btnJson = document.getElementById('btnDownloadJson');
+    const btnCsv = document.getElementById('btnDownloadCsv');
+    const modal = document.getElementById('log-modal');
+    const modalTitle = document.getElementById('log-modal-title');
+    const modalBody = document.getElementById('log-modal-body');
+    const modalClose = document.getElementById('log-modal-close');
+
+    function openModal(title, content) {
+        modalTitle.textContent = title;
+        modalBody.textContent = content || '';
+        modal.classList.add('show');
+    }
+    function closeModal() { modal.classList.remove('show'); }
+    if (modalClose) modalClose.addEventListener('click', closeModal);
+    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+    if (btnBuilder) {
+        btnBuilder.addEventListener('click', async () => {
+            try {
+                const res = await fetch(`/api/log-root/${encodeURIComponent(reqId)}/builder.log`);
+                const text = await res.text();
+                openModal('Builder Log', text);
+            } catch (e) { openModal('Builder Log', 'Failed to load log'); }
+        });
+    }
+    if (btnTester) {
+        btnTester.addEventListener('click', async () => {
+            try {
+                const res = await fetch(`/api/log-root/${encodeURIComponent(reqId)}/tester.log`);
+                const text = await res.text();
+                openModal('Tester Log', text);
+            } catch (e) { openModal('Tester Log', 'Failed to load log'); }
+        });
+    }
+    if (btnJson) {
+        btnJson.addEventListener('click', () => {
+            const blob = new Blob([JSON.stringify((typeof reportData !== 'undefined' ? reportData : data), null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `${reqId || 'results'}.json`; a.click();
+            URL.revokeObjectURL(url);
+        });
+    }
+    if (btnCsv) {
+        btnCsv.addEventListener('click', () => {
+            const csv = toCsv(data);
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `${reqId || 'results'}.csv`; a.click();
+            URL.revokeObjectURL(url);
+        });
+    }
+}
+
+function toCsv(data) {
+    const commits = data.commits || [];
+    const tests = Object.keys(data.results || {});
+    const header = ['Test', ...commits.map(c => c.substring(0,7)), 'Verdict'];
+    const lines = [header.join(',')];
+    tests.forEach(test => {
+        const row = [JSON.stringify(test)];
+        commits.forEach(commit => {
+            const result = (data.results[test] || {})[commit];
+            row.push(result ? result.status.toUpperCase() : '');
+        });
+        const verdict = determineVerdict(data.results[test], commits).text;
+        row.push(verdict);
+        lines.push(row.join(','));
+    });
+    return lines.join('\n');
 }
 
 /**

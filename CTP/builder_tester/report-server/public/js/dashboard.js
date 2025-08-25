@@ -393,14 +393,46 @@
                     }
                 }
                 
-                // Display request
-                displayResponse('Request sent:\n' + JSON.stringify(payload, null, 2));
+                // Send request to builder service
+                showToast('Sending build request...', 'info');
                 
-                // Send request (in real implementation)
+                const response = await fetch('/api/builder/build', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    let errorMessage = `Build request failed: ${response.status} ${response.statusText}`;
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.message) {
+                            errorMessage += `\n${errorData.message}`;
+                        }
+                    } catch {
+                        const errorText = await response.text();
+                        if (errorText) {
+                            errorMessage += `\n${errorText}`;
+                        }
+                    }
+                    throw new Error(errorMessage);
+                }
+                
+                const result = await response.json();
+                
+                // Display successful response
+                const requestId = result.taskId || result.requestId || 'Unknown';
+                displayResponse('Build request sent successfully!\n\nRequest ID: ' + requestId + '\n\nStatus: ' + (result.status || 'Processing') + '\n\nPayload:\n' + JSON.stringify(payload, null, 2));
                 showToast('Build request sent successfully!', 'success');
                 
-                // Start monitoring
-                startStatusMonitoring(payload);
+                // Start monitoring with actual request ID
+                startStatusMonitoring({
+                    ...payload,
+                    requestId: requestId,
+                    taskId: result.taskId
+                });
                 
             } catch (error) {
                 showToast(error.message, 'error');
@@ -456,38 +488,90 @@
             const builderInfo = document.getElementById('builderInfo');
             builderInfo.innerHTML = '<div class="spinner"></div>';
             
-            // Simulate loading builder configuration
-            setTimeout(() => {
+            try {
+                // Fetch real builder health and status information
+                const response = await fetch('/api/builder/health');
+                
+                if (!response.ok) {
+                    throw new Error(`Builder not accessible: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // Get additional status info if available
+                let statusData = {};
+                try {
+                    const statusResponse = await fetch('/api/builder/status');
+                    if (statusResponse.ok) {
+                        statusData = await statusResponse.json();
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch builder status:', e);
+                }
+                
+                // Display real builder information
                 builderInfo.innerHTML = `
                     <div class="info-item">
                         <div class="info-label">Status</div>
-                        <div class="status online">
+                        <div class="status ${data.status === 'healthy' ? 'online' : 'offline'}">
                             <span class="status-dot"></span>
-                            Online
+                            ${data.status === 'healthy' ? 'Online' : 'Offline'}
                         </div>
                     </div>
                     <div class="info-item">
-                        <div class="info-label">Version</div>
-                        <div class="info-value">2.4.1</div>
+                        <div class="info-label">Service</div>
+                        <div class="info-value">${data.service || 'builder'}</div>
                     </div>
                     <div class="info-item">
                         <div class="info-label">Host</div>
-                        <div class="info-value">localhost:8088</div>
+                        <div class="info-value">${window.SERVER_CONFIG.builderHost}:${window.SERVER_CONFIG.builderPort}</div>
                     </div>
+                    ${statusData.activeTasks !== undefined ? `
                     <div class="info-item">
-                        <div class="info-label">Workers</div>
-                        <div class="info-value">4 active</div>
+                        <div class="info-label">Active Tasks</div>
+                        <div class="info-value">${statusData.activeTasks}</div>
                     </div>
+                    ` : ''}
+                    ${statusData.queueSize !== undefined ? `
                     <div class="info-item">
                         <div class="info-label">Queue Size</div>
-                        <div class="info-value">0</div>
+                        <div class="info-value">${statusData.queueSize}</div>
                     </div>
+                    ` : ''}
+                    ${data.uptime ? `
                     <div class="info-item">
                         <div class="info-label">Uptime</div>
-                        <div class="info-value">24h 35m</div>
+                        <div class="info-value">${data.uptime}</div>
+                    </div>
+                    ` : ''}
+                    ${data.version ? `
+                    <div class="info-item">
+                        <div class="info-label">Version</div>
+                        <div class="info-value">${data.version}</div>
+                    </div>
+                    ` : ''}
+                `;
+                
+            } catch (error) {
+                console.error('Error loading builder info:', error);
+                builderInfo.innerHTML = `
+                    <div class="info-item">
+                        <div class="info-label">Status</div>
+                        <div class="status offline">
+                            <span class="status-dot"></span>
+                            Connection Failed
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Error</div>
+                        <div class="info-value" style="color: var(--error);">${error.message}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Host</div>
+                        <div class="info-value">${window.SERVER_CONFIG.builderHost}:${window.SERVER_CONFIG.builderPort}</div>
                     </div>
                 `;
-            }, 1000);
+            }
         }
 
         // Check tester status
@@ -501,14 +585,81 @@
             const testerInfo = document.getElementById('testerInfo');
             testerInfo.innerHTML = '<div class="spinner"></div>';
             
-            // Simulate checking tester status
-            setTimeout(() => {
+            try {
+                // Fetch real tester health information
+                const response = await fetch(`/api/tester/health?ip=${encodeURIComponent(testerIp)}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Tester not accessible: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                // Display real tester information
                 testerInfo.innerHTML = `
                     <div class="info-item">
                         <div class="info-label">Status</div>
-                        <div class="status online">
+                        <div class="status ${data.status === 'healthy' ? 'online' : 'offline'}">
                             <span class="status-dot"></span>
-                            Connected
+                            ${data.status === 'healthy' ? 'Connected' : 'Disconnected'}
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Address</div>
+                        <div class="info-value">${testerIp}</div>
+                    </div>
+                    ${data.service ? `
+                    <div class="info-item">
+                        <div class="info-label">Service</div>
+                        <div class="info-value">${data.service}</div>
+                    </div>
+                    ` : ''}
+                    ${data.version ? `
+                    <div class="info-item">
+                        <div class="info-label">Version</div>
+                        <div class="info-value">${data.version}</div>
+                    </div>
+                    ` : ''}
+                    ${data.platform ? `
+                    <div class="info-item">
+                        <div class="info-label">Platform</div>
+                        <div class="info-value">${data.platform}</div>
+                    </div>
+                    ` : ''}
+                    ${data.cpuCores ? `
+                    <div class="info-item">
+                        <div class="info-label">CPU Cores</div>
+                        <div class="info-value">${data.cpuCores}</div>
+                    </div>
+                    ` : ''}
+                    ${data.memory ? `
+                    <div class="info-item">
+                        <div class="info-label">Memory</div>
+                        <div class="info-value">${data.memory}</div>
+                    </div>
+                    ` : ''}
+                    ${data.uptime ? `
+                    <div class="info-item">
+                        <div class="info-label">Uptime</div>
+                        <div class="info-value">${data.uptime}</div>
+                    </div>
+                    ` : ''}
+                `;
+                
+                showToast('Tester status retrieved successfully', 'success');
+                
+            } catch (error) {
+                console.error('Error checking tester status:', error);
+                testerInfo.innerHTML = `
+                    <div class="info-item">
+                        <div class="info-label">Status</div>
+                        <div class="status offline">
+                            <span class="status-dot"></span>
+                            Connection Failed
                         </div>
                     </div>
                     <div class="info-item">
@@ -516,24 +667,13 @@
                         <div class="info-value">${testerIp}</div>
                     </div>
                     <div class="info-item">
-                        <div class="info-label">Version</div>
-                        <div class="info-value">2.4.1</div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Platform</div>
-                        <div class="info-value">Linux x86_64</div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">CPU Cores</div>
-                        <div class="info-value">8</div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Memory</div>
-                        <div class="info-value">16 GB</div>
+                        <div class="info-label">Error</div>
+                        <div class="info-value" style="color: var(--error);">${error.message}</div>
                     </div>
                 `;
-                showToast('Tester status retrieved successfully', 'success');
-            }, 1500);
+                
+                showToast(`Failed to connect to tester: ${error.message}`, 'error');
+            }
         }
 
         // Close system info modal

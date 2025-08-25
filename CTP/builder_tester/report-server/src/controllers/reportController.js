@@ -13,8 +13,16 @@ class ReportController {
      */
     async handleCallback(req, res) {
         try {
-            const requestId = req.body.requestId || `req_${Date.now()}`;
-            const result = await reportService.processTestResults(requestId, req.body);
+            // Prefer taskId (legacy behavior) then requestId; else generate
+            const requestId = req.body.taskId || req.body.requestId || `req_${Date.now()}`;
+
+            // Normalize payload so embedded report data matches the directory name
+            const normalizedData = Object.assign({}, req.body, {
+                requestId: requestId,
+                taskId: req.body.taskId || requestId
+            });
+
+            const result = await reportService.processTestResults(requestId, normalizedData);
             
             res.json({
                 success: true,
@@ -99,16 +107,17 @@ class ReportController {
             const logsPath = path.join(config.paths.requests, req_id, 'tests');
             
             if (!await fileService.fileExists(logsPath)) {
-                return res.status(404).json({ error: 'Logs directory not found' });
+                return res.status(404).json([]);
             }
             
             const files = await fileService.listDirectory(logsPath);
             const logFiles = files.filter(file => file.endsWith('.log'));
             
-            res.json({ logs: logFiles });
+            // Return array for compatibility with integrated report template
+            res.json(logFiles);
         } catch (err) {
             console.error('Error listing test logs:', err);
-            res.status(500).json({ error: err.message });
+            res.status(500).json([]);
         }
     }
 
@@ -121,16 +130,17 @@ class ReportController {
             const logsPath = path.join(config.paths.requests, req_id, 'builds');
             
             if (!await fileService.fileExists(logsPath)) {
-                return res.status(404).json({ error: 'Logs directory not found' });
+                return res.status(404).json([]);
             }
             
             const files = await fileService.listDirectory(logsPath);
             const logFiles = files.filter(file => file.endsWith('.log'));
             
-            res.json({ logs: logFiles });
+            // Return array for compatibility with integrated report template
+            res.json(logFiles);
         } catch (err) {
             console.error('Error listing build logs:', err);
-            res.status(500).json({ error: err.message });
+            res.status(500).json([]);
         }
     }
 
@@ -151,6 +161,27 @@ class ReportController {
             res.type('text/plain').send(logContent);
         } catch (err) {
             console.error('Error getting root log:', err);
+            res.status(404).send('Log file not found');
+        }
+    }
+
+    /**
+     * Get specific build log content
+     */
+    async getBuildLog(req, res) {
+        try {
+            const { req_id, filename } = req.params;
+            
+            if (!req_id || !filename) {
+                return res.status(400).json({ error: 'Request ID and filename are required' });
+            }
+            
+            const logPath = path.join(config.paths.requests, req_id, 'builds', filename);
+            const logContent = await fileService.readFile(logPath);
+            
+            res.type('text/plain').send(logContent);
+        } catch (err) {
+            console.error('Error getting build log:', err);
             res.status(404).send('Log file not found');
         }
     }

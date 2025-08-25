@@ -1100,7 +1100,14 @@ public class BuilderTask {
     
     private void sendCallback(String callbackUrl) {
         try {
+            // Include original requestId so the report server saves under the correct request directory
+            String requestIdForCallback = RequestContext.getRequestId();
+            if (requestIdForCallback == null || requestIdForCallback.trim().isEmpty()) {
+                requestIdForCallback = request.optString("requestId", taskId);
+            }
+
             JSONObject response = new JSONObject()
+                .put("requestId", requestIdForCallback)
                 .put("taskId", taskId)
                 .put("results", new JSONArray(results))
                 .put("timestamp", System.currentTimeMillis());
@@ -1127,7 +1134,14 @@ public class BuilderTask {
     
     private void sendErrorCallback(String callbackUrl, String errorMessage) {
         try {
+            // Include original requestId so the report server saves under the correct request directory
+            String requestIdForCallback = RequestContext.getRequestId();
+            if (requestIdForCallback == null || requestIdForCallback.trim().isEmpty()) {
+                requestIdForCallback = request.optString("requestId", taskId);
+            }
+
             JSONObject response = new JSONObject()
+                .put("requestId", requestIdForCallback)
                 .put("taskId", taskId)
                 .put("status", "error")
                 .put("message", errorMessage)

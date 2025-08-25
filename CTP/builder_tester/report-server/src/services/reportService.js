@@ -53,29 +53,39 @@ class ReportService {
      * Get basic report template
      */
     getReportTemplate(data, requestId, timestamp, resultsJSON) {
-        return `<!DOCTYPE html>
+        // Use the integrated template from Java report-template.html for full UI
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const templatePath = path.join(__dirname, '..', '..', '..', 'src', 'com', 'navercorp', 'cubridqa', 'builder', 'report', 'report-template.html');
+            const raw = fs.readFileSync(templatePath, 'utf8');
+            return raw
+                .replace(/\{\{REQUEST_ID\}\}/g, requestId)
+                .replace(/\{\{TIMESTAMP\}\}/g, timestamp)
+                .replace(/\{\{RESULTS_JSON\}\}/g, resultsJSON);
+        } catch (e) {
+            // Fallback minimal template
+            return `<!DOCTYPE html>
 <html>
 <head>
     <title>Test Report - ${requestId}</title>
     <link rel="stylesheet" href="/css/report.css">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
 </head>
 <body>
     <div class="container">
         <h1>Test Report - ${requestId}</h1>
         <p>Generated: ${timestamp}</p>
-        <div id="report-content">
-            <!-- Report content will be rendered by JavaScript -->
-        </div>
+        <div id="report-content"></div>
     </div>
     <script>
         const reportData = ${resultsJSON};
-        // Load report JavaScript
-        const script = document.createElement('script');
-        script.src = '/js/report.js';
-        document.head.appendChild(script);
+        (function(){ var s=document.createElement('script'); s.src='/js/report.js'; document.head.appendChild(s); })();
     </script>
 </body>
 </html>`;
+        }
     }
 
     /**
