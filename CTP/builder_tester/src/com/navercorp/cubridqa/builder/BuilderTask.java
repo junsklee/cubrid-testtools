@@ -1499,15 +1499,18 @@ public class BuilderTask {
      */
     private String fetchLogContentFromRemoteTester(String host, int port, String logFileName) throws Exception {
         String url = "http://" + host + ":" + port + "/log/" + logFileName;
-        taskLogger.info("Fetching log content from: " + url);
+        int connectTimeout = config.getLogFetchConnectTimeoutSeconds();
+        int readTimeout = config.getLogFetchReadTimeoutSeconds();
+        taskLogger.info(String.format("Fetching log from: %s (connect timeout: %ds, read timeout: %ds)", 
+            url, connectTimeout, readTimeout));
         
         HttpURLConnection conn = null;
         try {
             URL logUrl = new URL(url);
             conn = (HttpURLConnection) logUrl.openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(10000); // 10 seconds
-            conn.setReadTimeout(30000); // 30 seconds
+            conn.setConnectTimeout(config.getLogFetchConnectTimeoutSeconds() * 1000); // Convert to milliseconds
+            conn.setReadTimeout(config.getLogFetchReadTimeoutSeconds() * 1000); // Convert to milliseconds
             
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {

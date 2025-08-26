@@ -39,6 +39,8 @@ public class BuilderConfig {
     private static final String MAX_RUNS = "max_runs";
     private static final String TIME_BUDGET_MS = "time_budget_ms";
     private static final String TEST_READ_TIMEOUT_MINUTES = "test_read_timeout_minutes"; // Tester: HTTP read timeout for /test
+    private static final String LOG_FETCH_CONNECT_TIMEOUT_SECONDS = "log_fetch_connect_timeout_seconds";
+    private static final String LOG_FETCH_READ_TIMEOUT_SECONDS = "log_fetch_read_timeout_seconds";
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String CCACHE_ENABLED = "ccache_enabled";
     private static final String CCACHE_DIR = "ccache_dir";
@@ -321,6 +323,34 @@ public class BuilderConfig {
             value = Integer.parseInt(properties.getProperty(TEST_READ_TIMEOUT_MINUTES, "60"));
         } catch (NumberFormatException e) {
             value = 60;
+        }
+        return Math.max(1, value);
+    }
+    
+    /**
+     * Get the HTTP connect timeout for fetching logs from remote testers (in seconds).
+     * Default is 10 seconds.
+     */
+    public int getLogFetchConnectTimeoutSeconds() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(LOG_FETCH_CONNECT_TIMEOUT_SECONDS, "10"));
+        } catch (NumberFormatException e) {
+            value = 10;
+        }
+        return Math.max(1, value);
+    }
+    
+    /**
+     * Get the HTTP read timeout for fetching logs from remote testers (in seconds).
+     * Default is 120 seconds (2 minutes) to handle large log files.
+     */
+    public int getLogFetchReadTimeoutSeconds() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(LOG_FETCH_READ_TIMEOUT_SECONDS, "120"));
+        } catch (NumberFormatException e) {
+            value = 120;
         }
         return Math.max(1, value);
     }

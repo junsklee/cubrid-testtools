@@ -403,17 +403,23 @@ public class Tester {
                     return;
                 }
                 
-                // Serve the log file content
-                byte[] content = Files.readAllBytes(logFile);
+                // Serve the log file content using streaming for better performance
+                long fileSize = Files.size(logFile);
                 exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
-                exchange.getResponseHeaders().set("Content-Length", String.valueOf(content.length));
-                exchange.sendResponseHeaders(200, content.length);
+                exchange.getResponseHeaders().set("Content-Length", String.valueOf(fileSize));
+                exchange.sendResponseHeaders(200, fileSize);
                 
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(content);
+                // Stream the file content efficiently
+                try (OutputStream os = exchange.getResponseBody();
+                     InputStream is = Files.newInputStream(logFile)) {
+                    byte[] buffer = new byte[8192]; // 8KB buffer
+                    int bytesRead;
+                    while ((bytesRead = is.read(buffer)) != -1) {
+                        os.write(buffer, 0, bytesRead);
+                    }
                 }
                 
-                logger.info("Served log file: " + filename + " (" + content.length + " bytes)");
+                logger.info("Streamed log file: " + filename + " (" + fileSize + " bytes)");
                 
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Error serving log file", e);
