@@ -150,7 +150,7 @@ public class BuilderTask {
                     
                     // Create test callable with appropriate build package reference
                     workerTestQueues.get(assignedWorker).add(() -> 
-                        runTest(commit, buildPackage, testPath, assignedWorker, baselineCommit));
+                        runTest(commit, buildPackage, testPath, assignedWorker, this.baselineCommit));
                 }
             }
             
