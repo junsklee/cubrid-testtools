@@ -4,6 +4,7 @@
 
 const fileService = require('./fileService');
 const config = require('../config');
+const path = require('path');
 
 class ReportService {
     /**
@@ -26,8 +27,29 @@ class ReportService {
             // Save raw results
             await fileService.saveTestResults(requestId, data);
             
-            // Generate HTML report
-            const html = this.generateReportHTML(data, requestId);
+            // Try to read existing request.json for configuration data
+            let combinedData = data;
+            try {
+                const requestPath = path.join(config.paths.requests, requestId, 'request.json');
+                const requestConfig = JSON.parse(await fileService.readFile(requestPath));
+                
+                // Combine results data with request configuration
+                combinedData = Object.assign({}, requestConfig, data, {
+                    // Ensure results data takes precedence, but include config fields
+                    runMode: data.runMode || requestConfig.runMode,
+                    buildType: data.buildType || requestConfig.buildType,
+                    minRuns: data.minRuns || requestConfig.minRuns,
+                    maxRuns: data.maxRuns || requestConfig.maxRuns,
+                    workerIps: data.workerIps || requestConfig.workerIps,
+                    commits: data.commits || requestConfig.commits,
+                    baselineCommit: data.baselineCommit || requestConfig.baselineCommit
+                });
+            } catch (err) {
+                console.warn('Could not read request.json, using callback data only:', err.message);
+            }
+            
+            // Generate HTML report with combined data
+            const html = this.generateReportHTML(combinedData, requestId);
             
             // Save HTML report
             await fileService.saveReport(requestId, html);

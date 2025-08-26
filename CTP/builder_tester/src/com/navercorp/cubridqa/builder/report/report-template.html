@@ -44,7 +44,680 @@
         .header h1 {
             font-size: 2.5rem;
             color: #111827;
+            margin-bottom: 1rem;
+        }
+        
+        .metadata {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            margin-top: 1.5rem;
+            padding: 2rem 2.5rem;
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.95));
+            border-radius: 1rem;
+            border: 1px solid rgba(226, 232, 240, 0.5);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        
+        .metadata-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        
+        .metadata-group-title {
+            font-size: 0.875rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.075em;
+            color: #475569;
             margin-bottom: 0.5rem;
+            padding-bottom: 0.375rem;
+            border-bottom: 2px solid #e2e8f0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+        
+        .metadata-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.375rem 0;
+        }
+        
+        .metadata-label {
+            font-size: 0.875rem;
+            color: #64748b;
+            font-weight: 600;
+            min-width: 80px;
+            flex-shrink: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+        
+        .metadata-value {
+            font-size: 0.875rem;
+            color: #0f172a;
+            font-weight: 500;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            line-height: 1.4;
+        }
+        
+        .metadata-value.monospace {
+            font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+        }
+        
+        .metadata-value.commit-hash {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1));
+            color: #4338ca;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            transition: all 0.2s ease;
+        }
+        
+        .metadata-value.commit-hash:hover {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.15));
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+        
+        .commit-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.375rem;
+            max-width: 100%;
+            align-items: flex-start;
+        }
+        
+        .runs-container {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        .run-item {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        
+        .run-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            font-weight: 500;
+        }
+
+        /* Modern Test Execution Section */
+        .test-execution-modern {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.95));
+            border-radius: 1.25rem;
+            padding: 1.25rem;
+            border: 1px solid rgba(226, 232, 240, 0.6);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+            backdrop-filter: blur(20px);
+        }
+
+        .test-execution-modern .metadata-group-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #1e293b;
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid rgba(99, 102, 241, 0.1);
+            text-transform: none;
+            letter-spacing: normal;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+
+        .title-text {
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .title-separator {
+            color: #64748b;
+            font-weight: 400;
+            flex-shrink: 0;
+        }
+
+        .request-id {
+            font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+            font-size: 0.875rem;
+            color: #6366f1;
+            background: rgba(99, 102, 241, 0.1);
+            padding: 0.125rem 0.375rem;
+            border-radius: 0.375rem;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 200px;
+            flex-shrink: 1;
+        }
+
+        .title-icon {
+            width: 1.5rem;
+            height: 1.5rem;
+            color: #6366f1;
+        }
+
+        .execution-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.625rem;
+        }
+
+        .execution-card {
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.9));
+            border-radius: 0.875rem;
+            padding: 0.875rem;
+            border: 1px solid rgba(226, 232, 240, 0.5);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .execution-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #6366f1, #8b5cf6, #06b6d4);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .execution-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+            border-color: rgba(99, 102, 241, 0.2);
+        }
+
+        .execution-card:hover::before {
+            opacity: 1;
+        }
+
+        .card-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 2.25rem;
+            height: 2.25rem;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1));
+            border-radius: 0.75rem;
+            margin-bottom: 0.625rem;
+            color: #6366f1;
+        }
+
+        .card-icon svg {
+            width: 1.125rem;
+            height: 1.125rem;
+        }
+
+        .card-content {
+            display: flex;
+            flex-direction: column;
+            gap: 0.125rem;
+        }
+
+        .card-label {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .card-value {
+            font-size: 0.9375rem;
+            font-weight: 700;
+            color: #1e293b;
+            line-height: 1.3;
+        }
+
+        .attempts-card .card-content {
+            gap: 0.5rem;
+        }
+
+        .attempts-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(248, 250, 252, 0.8);
+            border-radius: 0.625rem;
+            padding: 0.5rem;
+            border: 1px solid rgba(226, 232, 240, 0.4);
+        }
+
+        .attempt-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.25rem;
+            flex: 1;
+        }
+
+        .attempt-label {
+            font-size: 0.5625rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .attempt-value {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #1e293b;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1));
+            padding: 0.1875rem 0.375rem;
+            border-radius: 0.375rem;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+        }
+
+        .attempt-divider {
+            width: 1px;
+            height: 2rem;
+            background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.3), transparent);
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .execution-grid {
+                grid-template-columns: 1fr;
+                gap: 0.75rem;
+            }
+            
+            .execution-card {
+                padding: 1rem;
+            }
+            
+            .attempts-container {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            
+            .attempt-divider {
+                width: 100%;
+                height: 1px;
+                background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.3), transparent);
+            }
+        }
+        
+        .commit-details-section {
+            margin-top: 2rem;
+            padding: 2rem 2.5rem;
+            background: linear-gradient(145deg, rgba(241, 245, 249, 0.95), rgba(226, 232, 240, 0.95));
+            border-radius: 1rem;
+            border: 1px solid rgba(203, 213, 225, 0.6);
+            box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+        }
+        
+        .commit-details-title {
+            font-size: 1.125rem;
+            font-weight: 700;
+            color: #334155;
+            margin-bottom: 1.5rem;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+        
+        .commit-tree-container {
+            margin-top: 1.5rem;
+        }
+
+        /* Baseline Rail Design */
+        .baseline-rail {
+            max-width: 100%;
+            margin: 1.5rem 0;
+            padding: 1rem;
+            background: #fff;
+            color: #24292f;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.75rem;
+            font: 14px/1.2 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, "Helvetica Neue", sans-serif;
+        }
+
+        /* Base commit card - matches commit cards but simpler */
+        .baseline-rail .base {
+            display: block;
+            width: 280px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid rgba(203, 213, 225, 0.3);
+            border-left: 4px solid #10b981;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            text-decoration: none;
+            color: #24292f;
+            position: relative;
+            margin: 0 auto 14px;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .baseline-rail .base:hover {
+            background: rgba(255, 255, 255, 1);
+            border-left-color: #059669;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px -2px rgba(16, 185, 129, 0.2);
+        }
+
+        .baseline-rail .base-content {
+            text-align: center;
+        }
+
+        .baseline-rail .base-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #065f46;
+            margin-bottom: 0.25rem;
+        }
+
+        .baseline-rail .hash {
+            font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+            color: #6b7280;
+        }
+
+        /* Connector from base to the rail */
+        .baseline-rail .base::after {
+            content: "";
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: -14px;
+            height: 14px;
+            border-left: 2px solid #d0d7de;
+        }
+
+        /* Horizontal rail container */
+        .baseline-rail .rail-wrap {
+            overflow-x: auto;
+            padding: 0 2rem 6px;
+        }
+
+        /* Horizontal rail */
+        .baseline-rail .rail {
+            position: relative;
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-start;
+            padding-top: 16px;
+            min-width: 100%;
+            width: fit-content;
+        }
+
+        /* Horizontal line */
+        .baseline-rail .rail::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            border-top: 2px solid #d0d7de;
+        }
+
+        /* Commit card as rail leaf nodes */
+        .baseline-rail .commit-card {
+            position: relative;
+            flex: 0 0 auto;
+            width: 280px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid rgba(203, 213, 225, 0.3);
+            border-left: 4px solid #3b82f6;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+            backdrop-filter: blur(10px);
+        }
+
+        .baseline-rail .commit-card::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 197, 253, 0.1) 100%);
+            border-radius: inherit;
+            z-index: -1;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .baseline-rail .commit-card:hover {
+            background: rgba(255, 255, 255, 1);
+            border-left-color: #1d4ed8;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 12px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        .baseline-rail .commit-card:hover::before {
+            opacity: 1;
+        }
+
+        /* Stem connecting each commit card to the rail */
+        .baseline-rail .commit-card::after {
+            content: "";
+            position: absolute;
+            top: -16px;
+            left: 50%;
+            transform: translateX(-50%);
+            height: 16px;
+            border-left: 2px solid #d0d7de;
+        }
+
+        /* Adjust rail for wider cards */
+        .baseline-rail .rail {
+            min-width: max(100%, 800px);
+            gap: 1rem;
+        }
+
+
+
+
+        /* Visual indicators for child commits */
+        .commit-card .commit-sha {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .commits-children .commit-card .commit-sha::before {
+            content: '└';
+            font-family: ui-monospace, monospace;
+            color: #10b981;
+            font-weight: bold;
+            font-size: 1rem;
+            margin-right: 0.25rem;
+        }
+
+        /* Enhanced layout for many commits */
+        @media (min-width: 1600px) {
+            .commit-details-grid {
+                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+                gap: 1rem;
+            }
+        }
+
+        /* Compact layout for very wide screens */
+        @media (min-width: 2000px) {
+            .commit-details-grid {
+                grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            }
+        }
+
+
+        @media (max-width: 768px) {
+            .commit-details-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .baseline-root::after,
+            .commits-children::before,
+            .commit-details-grid::before {
+                display: none;
+            }
+        }
+        
+        .commit-card {
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid rgba(203, 213, 225, 0.3);
+            border-left: 4px solid #3b82f6;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            text-decoration: none;
+            display: block;
+            color: inherit;
+            position: relative;
+        }
+
+        .commit-card::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 197, 253, 0.1) 100%);
+            border-radius: inherit;
+            z-index: -1;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .commit-card:hover {
+            background: rgba(255, 255, 255, 1);
+            border-left-color: #1d4ed8;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 12px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        .commit-card:hover::before {
+            opacity: 1;
+        }
+
+        
+        .commit-card:active {
+            transform: translateY(-1px);
+        }
+        
+        .commit-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+        
+        .commit-sha {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1));
+            color: #4338ca;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+        }
+        
+        .commit-message {
+            font-weight: 600;
+            color: #1e293b;
+            font-size: 0.9rem;
+            line-height: 1.4;
+            margin-bottom: 0.75rem;
+        }
+        
+        .commit-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 0.375rem;
+        }
+        
+        .commit-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8125rem;
+            color: #64748b;
+        }
+        
+        .commit-author {
+            font-weight: 500;
+            color: #475569;
+        }
+        
+        .commit-date {
+            font-size: 0.75rem;
+        }
+        
+        
+        .expandable-section {
+            margin-top: 2rem;
+        }
+        
+        .expandable-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.5rem;
+            background: rgba(241, 245, 249, 0.8);
+            border: 1px solid rgba(203, 213, 225, 0.6);
+            border-radius: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .expandable-header:hover {
+            background: rgba(241, 245, 249, 0.95);
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+        
+        .expandable-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #334155;
+        }
+        
+        .expandable-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.375rem;
+            align-items: center;
+            margin-left: 1rem;
+        }
+        
+        .expandable-toggle {
+            font-size: 1.25rem;
+            color: #64748b;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: inline-block;
+        }
+        
+        .expandable-toggle.expanded {
+            transform: rotate(180deg);
+        }
+        
+        .expandable-content {
+            margin-top: 1rem;
+            padding: 2rem 2.5rem;
+            background: linear-gradient(145deg, rgba(241, 245, 249, 0.95), rgba(226, 232, 240, 0.95));
+            border: 1px solid rgba(203, 213, 225, 0.6);
+            border-top: none;
+            border-radius: 0 0 0.75rem 0.75rem;
+            display: none;
         }
         
         .controls {
@@ -111,36 +784,39 @@
         
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
         }
         
         .stat-card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 1rem;
-            padding: 1.5rem;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(226, 232, 240, 0.6);
+            border-radius: 0.5rem;
+            padding: 1rem 0.75rem;
+            text-align: center;
+            transition: all 0.2s ease;
         }
         
         .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            background: rgba(255, 255, 255, 0.9);
+            border-color: rgba(226, 232, 240, 0.8);
+            transform: translateY(-1px);
         }
         
         .stat-value {
-            font-size: 2.5rem;
-            font-weight: bold;
-            margin-bottom: 0.5rem;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+            line-height: 1;
         }
         
         .stat-label {
-            color: #6b7280;
-            font-size: 0.9rem;
+            color: #64748b;
+            font-size: 0.75rem;
+            font-weight: 500;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.025em;
         }
         
         .results-table {
@@ -412,21 +1088,149 @@
         <div class="header">
             <h1>CUBRID Test Results</h1>
             <div class="metadata">
-                <div class="metadata-item">
-                    <strong>Request ID:</strong>
-                    <span>{{REQUEST_ID}}</span>
+                <!-- Test Execution & Session Info -->
+                <div class="metadata-group test-execution-modern">
+                    <div class="metadata-group-title">
+                        <svg class="title-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span class="title-text">Test Execution & Session</span>
+                        <span class="title-separator">-</span>
+                        <span class="request-id" id="titleRequestId">{{REQUEST_ID}}</span>
+                    </div>
+                    <div class="execution-grid">
+                        <div class="execution-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M9 12L11 14L15 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">Build Type</div>
+                                <div class="card-value" id="buildType">-</div>
+                            </div>
+                        </div>
+                        
+                        <div class="execution-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">Run Mode</div>
+                                <div class="card-value" id="runMode">-</div>
+                            </div>
+                        </div>
+                        
+                        <div class="execution-card attempts-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M12 2V6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M12 18V22" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M4.93 4.93L7.76 7.76" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M16.24 16.24L19.07 19.07" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M2 12H6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M18 12H22" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M4.93 19.07L7.76 16.24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M16.24 7.76L19.07 4.93" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">Attempts</div>
+                                <div class="attempts-container">
+                                    <div class="attempt-item">
+                                        <span class="attempt-label">Min</span>
+                                        <span class="attempt-value" id="minRuns">-</span>
+                                    </div>
+                                    <div class="attempt-divider"></div>
+                                    <div class="attempt-item">
+                                        <span class="attempt-label">Max</span>
+                                        <span class="attempt-value" id="maxRuns">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="execution-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M17 21V19C17 17.9391 16.5786 16.9217 15.8284 16.1716C15.0783 15.4214 14.0609 15 13 15H5C3.93913 15 2.92172 15.4214 2.17157 16.1716C1.42143 16.9217 1 17.9391 1 19V21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M9 11C11.2091 11 13 9.20914 13 7C13 4.79086 11.2091 3 9 3C6.79086 3 5 4.79086 5 7C5 9.20914 6.79086 11 9 11Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M23 21V19C22.9993 18.1137 22.7044 17.2528 22.1614 16.5523C21.6184 15.8519 20.8581 15.3516 20 15.13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M16 3.13C16.8604 3.35031 17.623 3.85071 18.1676 4.55232C18.7122 5.25392 19.0078 6.11683 19.0078 7.005C19.0078 7.89317 18.7122 8.75608 18.1676 9.45768C17.623 10.1593 16.8604 10.6597 16 10.88" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">Workers</div>
+                                <div class="card-value" id="workerIps">-</div>
+                            </div>
+                        </div>
+                        
+
+                        
+                        <div class="execution-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="currentColor"/>
+                                    <path d="M12.5 6L11 6v6.5l4.75 2.85.75-1.23-4-2.37V6z" fill="currentColor"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">Execution Time</div>
+                                <div class="card-value" id="executionTime">-</div>
+                            </div>
+                        </div>
+                        
+                        <div class="execution-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M12 8V12L15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">Generated</div>
+                                <div class="card-value" id="timestamp">{{TIMESTAMP}}</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="metadata-item">
-                    <strong>Generated:</strong>
-                    <span>{{TIMESTAMP}}</span>
+            </div>
+            
+            <!-- Expandable Commit Details Section -->
+            <div class="expandable-section" id="commitDetailsSection" style="display: none;">
+                <div class="expandable-header" onclick="toggleCommitDetails()">
+                    <div style="display: flex; align-items: center;">
+                        <span class="expandable-title">Commits</span>
+                        <div class="expandable-preview" id="commitPreview">
+                            <!-- Commit hashes will be populated here when collapsed -->
+                        </div>
+                    </div>
+                    <span class="expandable-toggle" id="commitToggle">▼</span>
                 </div>
-                <div class="metadata-item">
-                    <strong>Total Tests:</strong>
-                    <span id="totalTests">-</span>
-                </div>
-                <div class="metadata-item">
-                    <strong>Commits:</strong>
-                    <span id="totalCommits">-</span>
+                <div class="expandable-content" id="commitDetailsContent">
+                    <div class="commit-tree-container">
+                        <!-- Baseline Rail -->
+                        <div class="baseline-rail" id="baselineRail" style="display: none;" aria-label="Commits derived from baseline">
+                            <a class="base" href="#" id="baselineRailLink" target="_blank" rel="noopener noreferrer">
+                                <div class="base-content">
+                                    <div class="base-title">Baseline</div>
+                                    <div class="hash" id="baselineRailHash">-</div>
+                                </div>
+                            </a>
+                            
+                            <div class="rail-wrap">
+                                <div class="rail" role="list" id="commitRail">
+                                    <!-- Commit chips will be populated here -->
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
                 </div>
             </div>
         </div>
@@ -516,9 +1320,27 @@
         let currentFilter = 'all';
         
         window.addEventListener('DOMContentLoaded', () => {
+            // Format the timestamp to be more readable
+            const timestamp = document.querySelector('.metadata-value:nth-of-type(2)');
+            if (timestamp) {
+                const date = new Date('{{TIMESTAMP}}');
+                const formattedDate = date.toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'short', 
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short'
+                });
+                timestamp.textContent = formattedDate;
+            }
+            
             processData();
             renderTable();
             setupEventListeners();
+            
+            // Load commit details automatically on page load
+            loadCommitDetails();
         });
         
         function processData() {
@@ -548,10 +1370,33 @@
                     };
                 });
             }
+            // Sort commits chronologically (will be improved with async sorting later)
             commits = Array.from(commitSet).sort();
             processedData = testGroups;
-            document.getElementById('totalTests').textContent = Object.keys(testGroups).length;
-            document.getElementById('totalCommits').textContent = commits.length;
+            
+            // Update basic counts
+            // Calculate and display execution time
+            const executionTime = calculateExecutionTime();
+            document.getElementById('executionTime').textContent = executionTime;
+            
+            // Extract and display configuration data from rawData
+            document.getElementById('runMode').textContent = rawData.runMode || 'until-pass';
+            document.getElementById('buildType').textContent = rawData.buildType || 'debug';
+            document.getElementById('minRuns').textContent = rawData.minRuns || '1';
+            document.getElementById('maxRuns').textContent = rawData.maxRuns || '3';
+            
+            // Display worker IPs
+            if (rawData.workerIps && rawData.workerIps.length > 0) {
+                document.getElementById('workerIps').textContent = rawData.workerIps.join(', ');
+            } else if (rawData.workerIp) {
+                document.getElementById('workerIps').textContent = rawData.workerIp;
+            } else {
+                document.getElementById('workerIps').textContent = 'localhost';
+            }
+            
+            // Initialize commit section without API calls
+            initializeCommitSection();
+            
             updateStatistics();
         }
         
@@ -577,6 +1422,182 @@
             document.getElementById('passRate').textContent = passRate + '%';
         }
         
+        // Initialize commit section without API calls
+        function initializeCommitSection() {
+            try {
+                if (commits.length > 0) {
+                    // Show commit section with preview only (commit hashes)
+                    populateCommitPreview(commits);
+                    document.getElementById('commitDetailsSection').style.display = 'block';
+                }
+                
+            } catch (error) {
+                console.warn('Failed to initialize commit section:', error);
+            }
+        }
+        
+        // Async function to fetch and load commit details (called only when expanded)
+        async function loadCommitDetails() {
+            try {
+                // Handle baseline commit display
+                if (rawData.baselineCommit) {
+                    try {
+                        const baselineResponse = await fetch(`https://api.github.com/repos/CUBRID/cubrid/commits/${rawData.baselineCommit}`);
+                        if (baselineResponse.ok) {
+                            const baselineData = await baselineResponse.json();
+                            const baselineLink = document.getElementById('baselineCommitLink');
+                            baselineLink.href = baselineData.html_url;
+                            baselineLink.textContent = rawData.baselineCommit.substring(0, 7);
+                        } else {
+                            // Fallback to direct GitHub URL
+                            const baselineLink = document.getElementById('baselineCommitLink');
+                            baselineLink.href = `https://github.com/CUBRID/cubrid/commit/${rawData.baselineCommit}`;
+                            baselineLink.textContent = rawData.baselineCommit.substring(0, 7);
+                        }
+                    } catch (error) {
+                        console.warn('Failed to fetch baseline commit details:', error);
+                        // Fallback to direct GitHub URL
+                        const baselineLink = document.getElementById('baselineCommitLink');
+                        baselineLink.href = `https://github.com/CUBRID/cubrid/commit/${rawData.baselineCommit}`;
+                        baselineLink.textContent = rawData.baselineCommit.substring(0, 7);
+                    }
+                    document.getElementById('baselineCommitSection').style.display = 'block';
+                }
+                
+                if (commits.length === 0) return;
+                
+                // Fetch commit details from GitHub API for tested commits only
+                const commitDetails = await Promise.all(
+                    commits.map(async (sha) => {
+                        try {
+                            const response = await fetch(`https://api.github.com/repos/CUBRID/cubrid/commits/${sha}`);
+                            if (response.ok) {
+                                const commitData = await response.json();
+                                return {
+                                    sha: sha,
+                                    timestamp: new Date(commitData.commit.author.date).getTime(),
+                                    data: commitData
+                                };
+                            }
+                        } catch (error) {
+                            console.warn(`Failed to fetch commit details for ${sha}:`, error);
+                        }
+                        
+                        // Fallback: create basic commit object with GitHub URL
+                        return {
+                            sha: sha,
+                            timestamp: null,
+                            data: {
+                                sha: sha,
+                                html_url: `https://github.com/CUBRID/cubrid/commit/${sha}`,
+                                commit: {
+                                    author: { name: 'Unknown' },
+                                    message: 'Click to view commit details on GitHub',
+                                    author: { date: new Date().toISOString() }
+                                }
+                            }
+                        };
+                    })
+                );
+                
+                // Sort by timestamp (oldest first), fall back to SHA comparison
+                commitDetails.sort((a, b) => {
+                    if (a.timestamp && b.timestamp) {
+                        return a.timestamp - b.timestamp; // Oldest first
+                    } else if (a.timestamp && !b.timestamp) {
+                        return -1; // Timestamped commits come first
+                    } else if (!a.timestamp && b.timestamp) {
+                        return 1;
+                    } else {
+                        // Both have no timestamp, use lexicographical order
+                        return a.sha.localeCompare(b.sha);
+                    }
+                });
+                
+                // Update commits array with chronologically sorted order
+                commits = commitDetails.map(item => item.sha);
+                
+                // Update preview with sorted commits
+                populateCommitPreview(commitDetails);
+                
+                // Re-render the table with the new commit order
+                renderTable();
+                
+                // Mark as loaded
+                commitDetailsLoaded = true;
+                
+                // Populate baseline rail
+                populateBaselineRail(commitDetails);
+                
+                
+            } catch (error) {
+                console.warn('Failed to load commit details:', error);
+                // Show basic commit info without API data
+                const basicCommits = commits.map(sha => ({
+                    sha: sha,
+                    timestamp: null,
+                    data: {
+                        sha: sha,
+                        html_url: `https://github.com/CUBRID/cubrid/commit/${sha}`,
+                        commit: {
+                            author: { name: 'GitHub API unavailable' },
+                            message: 'Click to view commit details on GitHub',
+                            author: { date: new Date().toISOString() }
+                        }
+                    }
+                }));
+                populateBaselineRail(basicCommits);
+            }
+        }
+        
+        
+        // Populate the commit preview with just commit hashes
+        function populateCommitPreview(commitData) {
+            const preview = document.getElementById('commitPreview');
+            preview.innerHTML = '';
+            
+            // Handle both simple SHA strings and detailed commit objects
+            const commitList = Array.isArray(commitData) ? commitData : [];
+            
+            commitList.forEach(item => {
+                const hashSpan = document.createElement('span');
+                hashSpan.className = 'metadata-value commit-hash';
+                
+                // Handle both simple strings and detailed objects
+                if (typeof item === 'string') {
+                    hashSpan.textContent = item.substring(0, 7);
+                } else if (item.data && item.data.sha) {
+                    hashSpan.textContent = item.data.sha.substring(0, 7);
+                } else if (item.sha) {
+                    hashSpan.textContent = item.sha.substring(0, 7);
+                }
+                
+                preview.appendChild(hashSpan);
+            });
+        }
+        
+        // Track if commit details have been loaded
+        let commitDetailsLoaded = false;
+        
+        // Toggle commit details section
+        function toggleCommitDetails() {
+            const content = document.getElementById('commitDetailsContent');
+            const toggle = document.getElementById('commitToggle');
+            const preview = document.getElementById('commitPreview');
+            
+            if (content.style.display === 'none' || content.style.display === '') {
+                // Expanding - show content (already loaded on page load)
+                content.style.display = 'block';
+                toggle.classList.add('expanded');
+                preview.style.display = 'none';
+            } else {
+                // Collapsing
+                content.style.display = 'none';
+                toggle.classList.remove('expanded');
+                preview.style.display = 'flex';
+            }
+        }
+        
         function calculateFailCount(testName) {
             let failCount = 0;
             commits.forEach(commit => {
@@ -590,6 +1611,47 @@
                 if (status !== 'pass') failCount++;
             });
             return failCount;
+        }
+        
+        function calculateExecutionTime() {
+            // Try to extract execution time from rawData
+            if (rawData.startTime && rawData.endTime) {
+                const start = new Date(rawData.startTime);
+                const end = new Date(rawData.endTime);
+                const diffMs = end - start;
+                
+                if (diffMs < 60000) { // Less than 1 minute
+                    return Math.round(diffMs / 1000) + 's';
+                } else if (diffMs < 3600000) { // Less than 1 hour
+                    const minutes = Math.round(diffMs / 60000);
+                    return minutes + 'm';
+                } else { // 1 hour or more
+                    const hours = Math.floor(diffMs / 3600000);
+                    const minutes = Math.round((diffMs % 3600000) / 60000);
+                    return hours + 'h ' + minutes + 'm';
+                }
+            }
+            
+            // Fallback: estimate based on test data if available
+            if (processedData && Object.keys(processedData).length > 0) {
+                const testCount = Object.keys(processedData).length;
+                const commitCount = commits ? commits.length : 1;
+                // Rough estimate: 30 seconds per test per commit
+                const estimatedMs = testCount * commitCount * 30000;
+                
+                if (estimatedMs < 60000) {
+                    return '~' + Math.round(estimatedMs / 1000) + 's';
+                } else if (estimatedMs < 3600000) {
+                    const minutes = Math.round(estimatedMs / 60000);
+                    return '~' + minutes + 'm';
+                } else {
+                    const hours = Math.floor(estimatedMs / 3600000);
+                    const minutes = Math.round((estimatedMs % 3600000) / 60000);
+                    return '~' + hours + 'h ' + minutes + 'm';
+                }
+            }
+            
+            return 'N/A';
         }
         
         function getTestVerdict(testName) {
@@ -1343,6 +2405,86 @@
                 closeModal();
             }
         }
+
+        // Populate the baseline rail with commit data
+        function populateBaselineRail(commitDetails) {
+            const commitRail = document.getElementById('commitRail');
+            const baselineRailLink = document.getElementById('baselineRailLink');
+            const baselineRailHash = document.getElementById('baselineRailHash');
+            
+            // Set up baseline link and hash
+            if (rawData.baselineCommit) {
+                const baselineUrl = `https://github.com/CUBRID/cubrid/commit/${rawData.baselineCommit}`;
+                baselineRailLink.href = baselineUrl;
+                baselineRailHash.textContent = rawData.baselineCommit.substring(0, 7);
+            }
+
+            // Clear existing commit chips
+            commitRail.innerHTML = '';
+
+            // Create detailed commit cards for the rail
+            commitDetails.forEach((commitDetail, index) => {
+                const commitSha = commitDetail.sha;
+                const commitData = commitDetail.data;
+                
+                if (!commitData) return; // Skip commits without API data
+                
+                const commit = commitData;
+                
+                // Create commit card element
+                const card = document.createElement('a');
+                card.className = 'commit-card';
+                card.setAttribute('role', 'listitem');
+                card.href = commit.html_url;
+                card.target = '_blank';
+                card.rel = 'noopener noreferrer';
+                
+                const authorName = commit.commit?.author?.name || 'Unknown';
+                
+                // Format date with time like the detailed section
+                const authorDate = commit.commit?.author?.date ? new Date(commit.commit.author.date).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric', 
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                }) : 'Unknown date';
+                
+                const commitMessage = commit.commit?.message?.split('\n')[0] || 'No message';
+                const truncatedMessage = commitMessage.length > 70 ? commitMessage.substring(0, 67) + '...' : commitMessage;
+                
+                card.innerHTML = `
+                    <div class="commit-header">
+                        <span class="commit-sha">${commitSha.substring(0, 7)}</span>
+                    </div>
+                    <div class="commit-message">${escapeHtml(truncatedMessage)}</div>
+                    <div class="commit-meta">
+                        <div class="commit-meta-item">
+                            <span>👤</span>
+                            <span class="commit-author">${escapeHtml(authorName)}</span>
+                        </div>
+                        <div class="commit-meta-item">
+                            <span>📅</span>
+                            <span class="commit-date">${authorDate}</span>
+                        </div>
+                    </div>
+                `;
+                
+                commitRail.appendChild(card);
+            });
+            
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            // Horizontal line is now handled by CSS ::before
+            
+            // Show the baseline rail
+            document.getElementById('baselineRail').style.display = 'block';
+        }
+
     </script>
 </body>
 </html>
