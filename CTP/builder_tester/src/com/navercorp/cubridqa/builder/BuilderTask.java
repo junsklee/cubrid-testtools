@@ -280,10 +280,16 @@ public class BuilderTask {
                 }
                 
                 try {
-                    progress.put(commit, 0); // Starting
-                    
                     // Normalize commit to full SHA to make cache keys stable
                     String normalizedCommit = resolveFullCommitHashSafe(commit);
+                    
+                    // Skip the baseline commit itself - it should not be in the build targets
+                    if (normalizedCommit.equals(baselineCommit)) {
+                        taskLogger.info("Skipping baseline commit " + commit + " - it should not be a build target");
+                        return null;
+                    }
+                    
+                    progress.put(commit, 0); // Starting
                     String normalizedShort = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
                     
                     // Check in-memory cache first using normalized key
@@ -485,11 +491,18 @@ public class BuilderTask {
 
         boolean success = false;
         try {
-            // 2) Cherry-pick only that commit onto the baseline
-            boolean isMerge = isMergeCommit(commit, repoRoot);
+            // 2) Ensure clean baseline state and cherry-pick the target commit
             ProcessBuilder wtPb = new ProcessBuilder();
             wtPb.directory(wtDir);
             
+            // Always start from a clean baseline state to ensure consistent version numbering
+            taskLogger.info("Resetting to baseline before cherry-picking " + commit);
+            executeCommand(wtPb, "git", "checkout", "-f", baselineCommit);
+            executeCommand(wtPb, "git", "reset", "--hard", baselineCommit);
+            executeCommand(wtPb, "git", "clean", "-fdx");
+            
+            // Now cherry-pick the target commit onto the clean baseline
+            boolean isMerge = isMergeCommit(commit, repoRoot);
             boolean cherryPickSucceeded = false;
             Exception cherryPickException = null;
             

@@ -84,8 +84,11 @@ The system implements a dual logging approach:
 ### Commit isolation details
 
 - Compute baseline as the parent of the earliest requested commit
-- Docker build path (default): clone into writable target, checkout a temporary branch at the baseline, cherry-pick the single target commit, sync submodules to gitlinks, clean and build, then package
-- Direct host fallback: create a temporary branch + `git worktree add` at baseline, cherry-pick only the target commit, sync submodules, clean and build, package, then remove the worktree and delete the temp branch
+- **Automatically exclude the baseline commit itself from build targets** (baseline should result in baseline version, not baseline+1)
+- For each target commit, ensure clean baseline state for consistent version numbering:
+- Docker build path (default): clone into writable target, checkout a temporary branch at the baseline, reset hard to baseline, cherry-pick the single target commit, sync submodules to gitlinks, clean and build, then package
+- Direct host fallback: create a temporary branch + `git worktree add` at baseline, reset hard to baseline, cherry-pick only the target commit, sync submodules, clean and build, package, then remove the worktree and delete the temp branch
+- Each build starts from pristine baseline state, ensuring all target commits get version = baseline + 1
 - Merge commits are cherry-picked with `-m 1`
 - Host binds:
   - `config.docker_host_root` (default `~/docker-work`) binds to `/work` and `/root/.gradle`

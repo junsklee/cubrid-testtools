@@ -195,8 +195,10 @@ See docs/CCACHE_GUIDE.md for detailed setup.
 ## Notes on isolated builds
 
 - Baseline = parent of earliest commit in `commits[]`
-- Docker build path (default): clone into writable target, checkout temp branch at baseline, cherry-pick only the target commit, `git submodule sync && git submodule update --init --recursive --checkout --force`, clean, build, package
-- Direct host fallback: create temp branch + `git worktree add` at baseline, cherry-pick only the target commit, sync submodules, clean, build, package, remove worktree and delete temp branch
+- **The baseline commit itself is automatically excluded from build targets** to avoid version numbering issues
+- Each build starts from a clean baseline state to ensure consistent versioning (baseline + 1)
+- Docker build path (default): clone into writable target, checkout temp branch at baseline, reset hard to baseline, cherry-pick only the target commit, `git submodule sync && git submodule update --init --recursive --checkout --force`, clean, build, package
+- Direct host fallback: create temp branch + `git worktree add` at baseline, reset hard to baseline, cherry-pick only the target commit, sync submodules, clean, build, package, remove worktree and delete temp branch
 - Merge commits are cherry-picked with `-m 1`
 
 ## Logs

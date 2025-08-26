@@ -15,9 +15,11 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
 
 - Each target commit is built in isolation against a common baseline using a hermetic flow:
   - Baseline is computed as the parent of the earliest commit in your `commits[]` list
-  - For each commit, one of the following is used:
-    - Docker build (default): clone into a writable work dir inside the container, checkout a temporary branch at the baseline, cherry-pick only that one commit, sync submodules to gitlinks, clean, build, and package
-    - Direct host fallback: create a temporary branch + `git worktree add` at the baseline, cherry-pick only that commit, sync submodules to gitlinks, clean, build, package, then remove the worktree and delete the temp branch
+  - **The baseline commit itself is automatically excluded from build targets** (it would result in baseline version, not baseline+1)
+  - For each remaining commit, the build process ensures a clean baseline state:
+    - Docker build (default): clone into a writable work dir inside the container, checkout a temporary branch at the baseline, reset hard to baseline, cherry-pick only that one commit, sync submodules to gitlinks, clean, build, and package
+    - Direct host fallback: create a temporary branch + `git worktree add` at the baseline, reset hard to baseline, cherry-pick only that commit, sync submodules to gitlinks, clean, build, package, then remove the worktree and delete the temp branch
+  - Each build starts from a pristine baseline state to ensure consistent version numbering (baseline + 1)
   - Merge commits are cherry-picked with `-m 1` (mainline 1) by default
   - This avoids cumulative history and keeps builds hermetic
 
