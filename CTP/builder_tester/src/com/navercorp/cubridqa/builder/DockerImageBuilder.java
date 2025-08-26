@@ -41,16 +41,18 @@ public class DockerImageBuilder {
     }
     
     /**
-     * Get or build a Docker image for the given commit.
+     * Get or build a Docker image for the given commit built on the given baseline.
      * This method first extracts the build package, then builds a Docker image.
+     * The image name includes both commit and baseline to prevent incorrect reuse.
      */
-    public String getOrBuildImage(String commitHash, Path buildPackage) throws IOException {
-        String imageName = "cubrid-test:" + commitHash;
+    public String getOrBuildImage(String commitHash, String baselineHash, Path buildPackage) throws IOException {
+        String imageKey = commitHash + "_" + baselineHash;
+        String imageName = "cubrid-test:" + imageKey;
         
         // Check if image already exists
         if (imageExists(imageName)) {
             logger.info("Using existing Docker image: " + imageName);
-            updateCacheEntry(commitHash, imageName);
+            updateCacheEntry(imageKey, imageName);
             return imageName;
         }
         
@@ -58,12 +60,12 @@ public class DockerImageBuilder {
         synchronized (buildLock) {
             // Double-check after acquiring lock
             if (imageExists(imageName)) {
-                updateCacheEntry(commitHash, imageName);
+                updateCacheEntry(imageKey, imageName);
                 return imageName;
             }
             
-            logger.info("Building Docker image for commit " + commitHash);
-            buildImageFromPackage(commitHash, buildPackage);
+            logger.info("Building Docker image for commit " + commitHash + " on baseline " + baselineHash);
+            buildImageFromPackage(imageKey, buildPackage);
             
             // Clean old images if needed
             if (imageCache.size() > maxCachedImages) {
@@ -75,11 +77,21 @@ public class DockerImageBuilder {
     }
     
     /**
+     * Backward compatibility method - use with caution as it may reuse images incorrectly
+     * @deprecated Use getOrBuildImage(String, String, Path) instead to specify baseline
+     */
+    @Deprecated
+    public String getOrBuildImage(String commitHash, Path buildPackage) throws IOException {
+        logger.warning("Using deprecated getOrBuildImage without baseline - this may cause incorrect image reuse");
+        return getOrBuildImage(commitHash, "unknown", buildPackage);
+    }
+    
+    /**
      * Build Docker image directly from the tar.gz package
      */
-    private void buildImageFromPackage(String commitHash, Path buildPackage) throws IOException {
-        String imageName = "cubrid-test:" + commitHash;
-        Path dockerfileDir = workDir.resolve(commitHash);
+    private void buildImageFromPackage(String imageKey, Path buildPackage) throws IOException {
+        String imageName = "cubrid-test:" + imageKey;
+        Path dockerfileDir = workDir.resolve(imageKey);
         
         try {
             Files.createDirectories(dockerfileDir);
@@ -124,7 +136,7 @@ public class DockerImageBuilder {
             }
             
             // Update cache
-            updateCacheEntry(commitHash, imageName);
+            updateCacheEntry(imageKey, imageName);
             
             logger.info("Successfully built Docker image: " + imageName);
             
@@ -232,9 +244,9 @@ public class DockerImageBuilder {
     /**
      * Update cache entry with current timestamp
      */
-    private void updateCacheEntry(String commitHash, String imageName) {
-        imageCache.put(commitHash, imageName);
-        imageBuildTime.put(commitHash, System.currentTimeMillis());
+    private void updateCacheEntry(String imageKey, String imageName) {
+        imageCache.put(imageKey, imageName);
+        imageBuildTime.put(imageKey, System.currentTimeMillis());
     }
     
     /**
@@ -276,9 +288,9 @@ public class DockerImageBuilder {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (line.startsWith("cubrid-test:")) {
-                        String commitHash = line.substring("cubrid-test:".length());
-                        imageCache.put(commitHash, line);
-                        imageBuildTime.put(commitHash, System.currentTimeMillis());
+                        String imageKey = line.substring("cubrid-test:".length());
+                        imageCache.put(imageKey, line);
+                        imageBuildTime.put(imageKey, System.currentTimeMillis());
                     }
                 }
             }
@@ -300,19 +312,19 @@ public class DockerImageBuilder {
         }
         
         // Find oldest image
-        String oldestCommit = null;
+        String oldestImageKey = null;
         long oldestTime = Long.MAX_VALUE;
         
         for (Map.Entry<String, Long> entry : imageBuildTime.entrySet()) {
             if (entry.getValue() < oldestTime) {
                 oldestTime = entry.getValue();
-                oldestCommit = entry.getKey();
+                oldestImageKey = entry.getKey();
             }
         }
         
-        if (oldestCommit != null) {
-            String imageName = imageCache.remove(oldestCommit);
-            imageBuildTime.remove(oldestCommit);
+        if (oldestImageKey != null) {
+            String imageName = imageCache.remove(oldestImageKey);
+            imageBuildTime.remove(oldestImageKey);
             
             // Remove Docker image
             try {

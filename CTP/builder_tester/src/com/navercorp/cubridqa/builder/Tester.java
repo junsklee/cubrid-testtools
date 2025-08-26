@@ -1469,6 +1469,8 @@ public class Tester {
         String expectedBuildVersion = request.optString("expectedBuildVersion", null);
         String commit = request.optString("commit", "unknown");
         String commitShort = request.optString("commitShort", commit.substring(0, Math.min(commit.length(), 7)));
+        String baseline = request.optString("baseline", "unknown");
+        String baselineShort = request.optString("baselineShort", baseline.substring(0, Math.min(baseline.length(), 7)));
         boolean keepAlive = request.optBoolean("keepAlive", config.getKeepFailedContainers());
         String containerName = request.optString("containerName", 
             "tester_opt_" + testName.replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis());
@@ -1493,7 +1495,7 @@ public class Tester {
         String dockerImage;
         try {
             if (imageBuilder != null) {
-                dockerImage = imageBuilder.getOrBuildImage(commitShort, localBuildPackage);
+                dockerImage = imageBuilder.getOrBuildImage(commitShort, baselineShort, localBuildPackage);
                 testLogger.info("Using Docker image: " + dockerImage);
             } else {
                 testLogger.info("Image builder not available, falling back to standard execution");
