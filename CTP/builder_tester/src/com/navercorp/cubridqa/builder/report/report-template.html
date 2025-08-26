@@ -732,6 +732,10 @@
                         statusClass = isFlaky ? 'result-flaky' : 'result-pass';
                         statusText = isFlaky ? 'FLAKY(' + attempts + ')' : 'PASS';
                         break;
+                    case 'flaky':
+                        statusClass = 'result-flaky';
+                        statusText = 'FLAKY(' + attempts + ')';
+                        break;
                     case 'fail': statusClass = 'result-fail'; statusText = 'FAIL'; break;
                     case 'build_failed': statusClass = 'result-error'; statusText = 'BUILD'; break;
                     case 'execution_error':
@@ -907,6 +911,10 @@
                     case 'pass': 
                         statusClass = isFlaky ? 'result-flaky' : 'result-pass';
                         statusText = isFlaky ? 'FLAKY(' + attempts + ')' : 'PASS';
+                        break;
+                    case 'flaky':
+                        statusClass = 'result-flaky';
+                        statusText = 'FLAKY(' + attempts + ')';
                         break;
                     case 'fail': statusClass = 'result-fail'; statusText = 'FAIL'; break;
                     case 'build_failed': statusClass = 'result-error'; statusText = 'BUILD'; break;
@@ -1194,6 +1202,8 @@
             switch (statusLower) {
                 case 'pass':
                     return { border: '#10b981', background: '#f0fdf4', text: '#166534' };
+                case 'flaky':
+                    return { border: '#f59e0b', background: '#fef3c7', text: '#d97706' };  // Orange/amber for flaky
                 case 'fail':
                     return { border: '#ef4444', background: '#fef2f2', text: '#991b1b' };
                 case 'execution_error':
