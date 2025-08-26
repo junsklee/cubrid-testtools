@@ -27,7 +27,6 @@ public class BuilderTask {
     private final List<JSONObject> results;
     private final Map<String, Integer> progress;
     private Logger taskLogger;
-    private String baselineCommit;
     
     // Thread-safe build cache shared across all tasks
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
@@ -85,11 +84,11 @@ public class BuilderTask {
             setupCubridRepository();
 
             // Determine common baseline = parent of earliest commit in the list
-            this.baselineCommit = determineBaselineCommit(commits);
-            taskLogger.info("Using baseline (parent of earliest commit): " + this.baselineCommit);
+            String baselineCommit = determineBaselineCommit(commits);
+            taskLogger.info("Using baseline (parent of earliest commit): " + baselineCommit);
 
             // Build all commits concurrently (each in isolation via worktree + cherry-pick)
-            Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, this.baselineCommit);
+            Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, baselineCommit);
             
             // Distribute tests across multiple tester nodes
             Map<String, List<Callable<JSONObject>>> workerTestQueues = new HashMap<>();
@@ -150,7 +149,7 @@ public class BuilderTask {
                     
                     // Create test callable with appropriate build package reference
                     workerTestQueues.get(assignedWorker).add(() -> 
-                        runTest(commit, buildPackage, testPath, assignedWorker, this.baselineCommit));
+                        runTest(commit, buildPackage, testPath, assignedWorker, baselineCommit));
                 }
             }
             
@@ -243,7 +242,7 @@ public class BuilderTask {
             testPool.shutdown();
             
             // Send callback with results
-            sendCallback(callbackUrl);
+            sendCallback(callbackUrl, baselineCommit);
             
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Builder task failed: " + taskId, e);
@@ -643,10 +642,7 @@ public class BuilderTask {
             try (FileWriter w = new FileWriter(meta)) {
                 w.write(j.toString());
             }
-            taskLogger.info("Written build metadata: " + meta.getAbsolutePath());
-        } catch (Exception e) { 
-            taskLogger.warning("Failed to write build metadata for " + packagePath + ": " + e.getMessage());
-        }
+        } catch (Exception ignore) { }
     }
 
     /**
@@ -1255,7 +1251,7 @@ public class BuilderTask {
         taskLogger.info("CUBRID repository ready");
     }
     
-    private void sendCallback(String callbackUrl) {
+    private void sendCallback(String callbackUrl, String baselineCommit) {
         try {
             // Include original requestId so the report server saves under the correct request directory
             String requestIdForCallback = RequestContext.getRequestId();
@@ -1267,7 +1263,7 @@ public class BuilderTask {
                 .put("requestId", requestIdForCallback)
                 .put("taskId", taskId)
                 .put("results", new JSONArray(results))
-                .put("baselineCommit", this.baselineCommit)
+                .put("baselineCommit", baselineCommit)
                 .put("timestamp", System.currentTimeMillis());
             
             taskLogger.info("Sending results to " + callbackUrl);
