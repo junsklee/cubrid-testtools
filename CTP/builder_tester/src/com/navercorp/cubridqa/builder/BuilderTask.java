@@ -149,7 +149,7 @@ public class BuilderTask {
                     
                     // Create test callable with appropriate build package reference
                     workerTestQueues.get(assignedWorker).add(() -> 
-                        runTest(commit, buildPackage, testPath, assignedWorker));
+                        runTest(commit, buildPackage, testPath, assignedWorker, baselineCommit));
                 }
             }
             
@@ -781,7 +781,7 @@ public class BuilderTask {
     }
     
     private JSONObject runTest(String commit, String buildPackage, String testPath, 
-                               String workerIp) {
+                               String workerIp, String baselineCommit) {
         try {
             // Parse host and port from workerIp (supports "host:port" format)
             String host = workerIp;
