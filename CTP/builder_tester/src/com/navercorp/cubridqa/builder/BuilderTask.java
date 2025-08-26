@@ -643,7 +643,10 @@ public class BuilderTask {
             try (FileWriter w = new FileWriter(meta)) {
                 w.write(j.toString());
             }
-        } catch (Exception ignore) { }
+            taskLogger.info("Written build metadata: " + meta.getAbsolutePath());
+        } catch (Exception e) { 
+            taskLogger.warning("Failed to write build metadata for " + packagePath + ": " + e.getMessage());
+        }
     }
 
     /**

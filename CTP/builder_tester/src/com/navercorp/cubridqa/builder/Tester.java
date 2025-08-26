@@ -2190,6 +2190,10 @@ public class Tester {
             String expectedBaselineShort = expectedBaseline != null && expectedBaseline.length() > 7 ? 
                                          expectedBaseline.substring(0, 7) : expectedBaseline;
             
+            // Debug logging for baseline comparison
+            testLogger.info(String.format("Baseline validation debug: expectedBaseline='%s', expectedBaselineShort='%s', metaBaseline='%s' (package: %s)", 
+                          expectedBaseline, expectedBaselineShort, metaBaseline, packageFile.getFileName()));
+            
             if (expectedBaselineShort != null && !expectedBaselineShort.equals("unknown") && !expectedBaselineShort.equals(metaBaseline)) {
                 testLogger.warning(String.format("Cached package validation failed: baseline mismatch. " +
                     "Expected: %s, Found: %s (package: %s)", expectedBaselineShort, metaBaseline, packageFile));
