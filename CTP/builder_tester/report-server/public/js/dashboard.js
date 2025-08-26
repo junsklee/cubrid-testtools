@@ -448,20 +448,24 @@
             document.getElementById('responseContent').textContent = content;
         }
 
-        // Start status monitoring
+        // Start status monitoring with real-time updates
         function startStatusMonitoring(request) {
             const monitor = document.getElementById('statusMonitor');
+            const startTime = new Date();
+            let statusInterval;
+            
+            // Initial display
             monitor.innerHTML = `
                 <div class="info-item">
                     <div class="info-label">Status</div>
                     <div class="status checking">
                         <span class="status-dot"></span>
-                        Building...
+                        <span id="status-text">Initializing...</span>
                     </div>
                 </div>
                 <div class="info-item">
                     <div class="info-label">Started</div>
-                    <div class="info-value">${new Date().toLocaleString()}</div>
+                    <div class="info-value">${startTime.toLocaleString()}</div>
                 </div>
                 <div class="info-item">
                     <div class="info-label">Commits</div>
@@ -471,7 +475,158 @@
                     <div class="info-label">Tests</div>
                     <div class="info-value">${request.tests.length}</div>
                 </div>
+                <div class="info-item">
+                    <div class="info-label">Progress</div>
+                    <div class="info-value">
+                        <div id="progress-details">Preparing build environment...</div>
+                        <div id="progress-bar" style="width: 100%; background: #333; height: 8px; border-radius: 4px; margin-top: 4px;">
+                            <div id="progress-fill" style="width: 0%; background: var(--primary); height: 100%; border-radius: 4px; transition: width 0.5s ease;"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Runtime</div>
+                    <div class="info-value" id="runtime">0s</div>
+                </div>
             `;
+            
+            let completedTasks = 0;
+            const totalTasks = request.commits.length + (request.commits.length * request.tests.length);
+            
+            // Update runtime counter
+            const runtimeInterval = setInterval(() => {
+                const elapsed = Math.floor((new Date() - startTime) / 1000);
+                const runtimeElement = document.getElementById('runtime');
+                if (runtimeElement) {
+                    const minutes = Math.floor(elapsed / 60);
+                    const seconds = elapsed % 60;
+                    runtimeElement.textContent = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                }
+            }, 1000);
+            
+            // Polling function for status updates
+            async function pollStatus() {
+                try {
+                    // Poll builder status with taskId if available
+                    const statusUrl = request.taskId || request.requestId ? 
+                        `/api/builder/status?taskId=${request.taskId || request.requestId}` : 
+                        '/api/builder/status';
+                    
+                    const response = await fetch(statusUrl);
+                    const statusData = await response.json();
+                    
+                    const statusElement = document.getElementById('status-text');
+                    const progressDetails = document.getElementById('progress-details');
+                    const progressFill = document.getElementById('progress-fill');
+                    
+                    if (response.ok && statusData) {
+                        // Update status based on response
+                        if (statusData.status === 'completed') {
+                            statusElement.textContent = 'Completed';
+                            statusElement.parentElement.className = 'status success';
+                            progressDetails.textContent = `All ${totalTasks} tasks completed successfully`;
+                            progressFill.style.width = '100%';
+                            
+                            // Stop polling
+                            clearInterval(statusInterval);
+                            clearInterval(runtimeInterval);
+                            showToast('Build and tests completed successfully!', 'success');
+                            
+                        } else if (statusData.status === 'failed' || statusData.status === 'error') {
+                            statusElement.textContent = 'Failed';
+                            statusElement.parentElement.className = 'status offline';
+                            progressDetails.textContent = statusData.message || 'Build or tests failed';
+                            
+                            // Stop polling
+                            clearInterval(statusInterval);
+                            clearInterval(runtimeInterval);
+                            showToast('Build or tests failed', 'error');
+                            
+                        } else if (statusData.status === 'running' || statusData.status === 'building') {
+                            // Update progress details
+                            if (statusData.currentPhase) {
+                                statusElement.textContent = `${statusData.currentPhase}...`;
+                                progressDetails.textContent = statusData.currentTask || 
+                                    `Processing ${statusData.currentPhase.toLowerCase()}...`;
+                            } else {
+                                statusElement.textContent = 'Building...';
+                                progressDetails.textContent = 'Building commits and running tests...';
+                            }
+                            
+                            // Calculate progress
+                            if (statusData.progress !== undefined) {
+                                progressFill.style.width = `${statusData.progress}%`;
+                            } else if (statusData.completedTasks !== undefined && statusData.totalTasks !== undefined) {
+                                const progress = (statusData.completedTasks / statusData.totalTasks) * 100;
+                                progressFill.style.width = `${progress}%`;
+                                progressDetails.textContent = 
+                                    `${statusData.completedTasks}/${statusData.totalTasks} tasks completed`;
+                            } else {
+                                // Estimated progress based on time (simple fallback)
+                                const elapsed = (new Date() - startTime) / 1000;
+                                const estimatedProgress = Math.min(90, elapsed / 10); // Max 90% until completion
+                                progressFill.style.width = `${estimatedProgress}%`;
+                            }
+                            
+                            // Show current build/test details if available
+                            if (statusData.currentCommit && statusData.currentTest) {
+                                progressDetails.textContent = 
+                                    `Testing ${statusData.currentTest} on ${statusData.currentCommit.substring(0, 7)}`;
+                            } else if (statusData.currentCommit) {
+                                progressDetails.textContent = 
+                                    `Building commit ${statusData.currentCommit.substring(0, 7)}`;
+                            }
+                            
+                        } else {
+                            // Default processing state
+                            statusElement.textContent = 'Processing...';
+                            progressDetails.textContent = 'Build and test execution in progress...';
+                        }
+                        
+                    } else {
+                        // Status API not responding, show generic progress
+                        const elapsed = (new Date() - startTime) / 1000;
+                        if (elapsed < 60) {
+                            statusElement.textContent = 'Building...';
+                            progressDetails.textContent = 'Setting up build environment...';
+                        } else if (elapsed < 300) {
+                            statusElement.textContent = 'Testing...';
+                            progressDetails.textContent = 'Compiling and running tests...';
+                        } else {
+                            statusElement.textContent = 'Processing...';
+                            progressDetails.textContent = 'Long-running test execution...';
+                        }
+                        
+                        // Estimated progress
+                        const estimatedProgress = Math.min(85, elapsed / 20);
+                        progressFill.style.width = `${estimatedProgress}%`;
+                    }
+                    
+                } catch (error) {
+                    console.warn('Status polling error:', error);
+                    // Continue with generic updates
+                    const elapsed = (new Date() - startTime) / 1000;
+                    const statusElement = document.getElementById('status-text');
+                    const progressDetails = document.getElementById('progress-details');
+                    const progressFill = document.getElementById('progress-fill');
+                    
+                    if (statusElement) {
+                        statusElement.textContent = 'Processing...';
+                        progressDetails.textContent = 'Build and test execution in progress...';
+                        const estimatedProgress = Math.min(80, elapsed / 30);
+                        progressFill.style.width = `${estimatedProgress}%`;
+                    }
+                }
+            }
+            
+            // Start polling every 5 seconds
+            statusInterval = setInterval(pollStatus, 5000);
+            
+            // Initial poll
+            pollStatus();
+            
+            // Store intervals for cleanup if needed
+            window.statusMonitorIntervals = { statusInterval, runtimeInterval };
         }
 
         // Show system info modal

@@ -8,9 +8,9 @@
         return (typeof reportData !== 'undefined') ? reportData :
                (typeof resultsData !== 'undefined') ? resultsData : null;
     }
-    function render() {
+    async function render() {
         var data = getData();
-        if (data) processReportData(data);
+        if (data) await processReportData(data);
     }
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', render);
@@ -23,34 +23,51 @@
 /**
  * Process and display report data
  */
-function processReportData(data) {
+async function processReportData(data) {
     // Prefer modern container id used by current report template
     const container = document.getElementById('report-content') || document.getElementById('resultsContainer');
     if (!container) return;
 
-    // Normalize payload (array of results -> map by test then commit)
-    const normalized = normalizePayload(data);
+    // Show loading state
+    container.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--text-secondary);">Processing report data...</div>';
 
-    // Create statistics grid
-    const stats = calculateStatistics(normalized);
-    const statsHtml = createStatisticsGrid(stats);
+    try {
+        // Normalize payload (now async to sort commits)
+        const normalized = await normalizePayload(data);
 
-    // Create results table
-    const tableHtml = createResultsTable(normalized);
+        // Create statistics grid
+        const stats = calculateStatistics(normalized);
+        const statsHtml = createStatisticsGrid(stats);
 
-    container.innerHTML = statsHtml + tableHtml;
+        // Create results table
+        const tableHtml = createResultsTable(normalized);
 
-    // Add event listeners
-    attachEventListeners();
+        container.innerHTML = statsHtml + tableHtml;
 
-    // Wire toolbar buttons if present
-    wireToolbar(normalized);
+        // Add event listeners
+        attachEventListeners();
+
+        // Wire toolbar buttons if present
+        wireToolbar(normalized);
+        
+    } catch (error) {
+        console.error('Error processing report data:', error);
+        container.innerHTML = `
+            <div style="text-align: center; padding: 2rem; color: var(--error);">
+                Failed to process report data: ${error.message}
+            </div>
+        `;
+    }
 }
 
 // Normalize payload to expected shape: { commits: string[], results: { [test]: { [commit]: result } } }
-function normalizePayload(data) {
-    // If already in expected map shape, return as-is
+async function normalizePayload(data) {
+    // If already in expected map shape, check if we need to sort commits
     if (data && !Array.isArray(data.results)) {
+        // Sort existing commits if not already sorted chronologically
+        if (data.commits && data.commits.length > 1) {
+            data.commits = await sortCommitsChronologically(data.commits);
+        }
         return data;
     }
 
@@ -72,10 +89,65 @@ function normalizePayload(data) {
         };
     });
 
+    // Sort commits chronologically (oldest to newest)
+    const sortedCommits = await sortCommitsChronologically(Array.from(commitsSet));
+
     return {
-        commits: Array.from(commitsSet),
+        commits: sortedCommits,
         results: resultsMap
     };
+}
+
+// Sort commits chronologically from oldest to newest
+async function sortCommitsChronologically(commits) {
+    if (!commits || commits.length <= 1) return commits;
+    
+    try {
+        // Try to fetch commit details from GitHub API for proper chronological sorting
+        const commitDetails = await Promise.all(
+            commits.map(async (sha) => {
+                try {
+                    const response = await fetch(`/api/github/commit/${sha}`);
+                    if (response.ok) {
+                        const commitData = await response.json();
+                        return {
+                            sha: sha,
+                            timestamp: new Date(commitData.commit.author.date).getTime()
+                        };
+                    }
+                } catch (error) {
+                    console.warn(`Failed to fetch commit details for ${sha}:`, error);
+                }
+                
+                // Fallback: use commit SHA for lexicographical ordering
+                return {
+                    sha: sha,
+                    timestamp: null
+                };
+            })
+        );
+        
+        // Sort by timestamp (oldest first), fall back to SHA comparison for equal/null timestamps
+        commitDetails.sort((a, b) => {
+            if (a.timestamp && b.timestamp) {
+                return a.timestamp - b.timestamp; // Oldest first
+            } else if (a.timestamp && !b.timestamp) {
+                return -1; // Timestamped commits come first
+            } else if (!a.timestamp && b.timestamp) {
+                return 1;
+            } else {
+                // Both have no timestamp, use lexicographical order
+                return a.sha.localeCompare(b.sha);
+            }
+        });
+        
+        return commitDetails.map(item => item.sha);
+        
+    } catch (error) {
+        console.warn('Failed to sort commits chronologically, using lexicographical order:', error);
+        // Fallback to simple lexicographical sort
+        return commits.slice().sort();
+    }
 }
 
 /**
