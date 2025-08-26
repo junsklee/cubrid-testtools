@@ -283,7 +283,8 @@ public class Tester {
             // Track failures and passes to decide flakiness later
             boolean isFailLike = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
                                   TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
-                                  TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status);
+                                  TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status) ||
+                                  TestStatus.BUILD_ERROR.getValue().equalsIgnoreCase(status);
             boolean isPass = TestStatus.PASS.getValue().equalsIgnoreCase(status);
             
             if (isFailLike) {
@@ -298,6 +299,7 @@ public class Tester {
                 lastResult.put("attempts", attempt);
                 lastResult.put("attemptLogFiles", attemptLogFiles);
                 lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                // Note: keepAlive mode doesn't check for flakiness since it's not meant for testing
                 return lastResult;
             }
 
@@ -337,12 +339,28 @@ public class Tester {
             }
 
             // 4) until-fail early exit after minRuns on FAIL-like
+            // For flaky detection: only exit early if we have confidence about the test's behavior
             if (runMode.equals("until-fail") && attempt >= minRuns && isFailLike) {
-                lastResult.put("attempts", attempt);
-                testLogger.info("Test failed on attempt " + attempt + " (reproduce mode)");
-                lastResult.put("attemptLogFiles", attemptLogFiles);
-                lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                return lastResult;
+                // If we've seen both pass and failure, mark as flaky and exit
+                if (sawFailure && sawPass) {
+                    lastResult.put("attempts", attempt);
+                    lastResult.put("flaky", true);
+                    testLogger.info("Test marked as flaky in until-fail mode - saw both pass and failure in " + attempt + " attempts");
+                    lastResult.put("attemptLogFiles", attemptLogFiles);
+                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                    return lastResult;
+                }
+                // If we've only seen failures and we have sufficient data (at least 2 failures), exit as reproducible
+                else if (!sawPass && attempt >= Math.max(2, minRuns)) {
+                    lastResult.put("attempts", attempt);
+                    testLogger.info("Test failure reproduced - only failures in " + attempt + " attempts (reproduce mode)");
+                    lastResult.put("attemptLogFiles", attemptLogFiles);
+                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                    return lastResult;
+                }
+                // If we've only seen passes + this failure, continue running to see if it's consistently failing now
+                // If we've only seen one failure so far, continue to gather more data for confidence
+                // (don't exit early - let it run more attempts to gather more data)
             }
 
             // fixed-runs ignores early exits 3) & 4), continue to next attempt
@@ -363,6 +381,11 @@ public class Tester {
         if (runMode.equals("until-fail") && !TestStatus.FAIL.getValue().equalsIgnoreCase(lastResult.optString("status", ""))) {
             testLogger.info("Test did not fail after " + attempt + " attempts (reproduce mode)");
             lastResult.put("summary", "Could not reproduce failure after " + attempt + " attempts");
+            // Check for flakiness when until-fail mode completes without failing
+            if (sawFailure && sawPass) {
+                lastResult.put("flaky", true);
+                testLogger.info("Test marked as flaky in until-fail mode - saw both pass and failure");
+            }
         } else if (runMode.equals("fixed-runs")) {
             testLogger.info("Completed " + attempt + " run(s)");
             lastResult.put("summary", "Completed " + attempt + " runs");
