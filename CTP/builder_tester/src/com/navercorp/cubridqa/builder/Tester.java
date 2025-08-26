@@ -77,6 +77,9 @@ public class Tester {
         // Initialize Docker image builder for optimized test execution
         this.imageBuilder = useDocker ? new DockerImageBuilder(config) : null;
         
+        // Load existing cached build packages from disk
+        loadExistingCachedPackages();
+        
         // Create work directory if it doesn't exist
         File workDir = new File(config.getWorkDir());
         if (!workDir.exists()) {
@@ -658,7 +661,7 @@ public class Tester {
         try {
             Path sharedCacheDir = Paths.get(config.getWorkDir(), "cache");
             try { Files.createDirectories(sharedCacheDir); } catch (Exception ignore) {}
-            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, sharedCacheDir, testLogger);
+            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, sharedCacheDir, testLogger, commitShort, "unknown");
         } catch (IOException e) {
             return new JSONObject()
                 .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
@@ -984,7 +987,7 @@ public class Tester {
         // Download build package if it's a URL
         Path localBuildPackage;
         try {
-            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, workDir, testLogger);
+            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, workDir, testLogger, commitShort, "unknown");
         } catch (IOException e) {
             return new JSONObject()
                 .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
@@ -1492,7 +1495,7 @@ public class Tester {
         try {
             Path sharedCacheDir = Paths.get(config.getWorkDir(), "cache");
             Files.createDirectories(sharedCacheDir);
-            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, sharedCacheDir, testLogger);
+            localBuildPackage = downloadBuildPackageIfNeeded(buildPackage, sharedCacheDir, testLogger, commitShort, baselineShort);
         } catch (IOException e) {
             return new JSONObject()
                 .put("status", TestStatus.ENVIRONMENT_ERROR.getValue())
@@ -1956,18 +1959,53 @@ public class Tester {
     /**
      * Download build package if it's a URL, otherwise return the local path.
      * Caches downloaded packages to avoid re-downloading.
+     * Validates cached packages against expected commit and baseline.
      */
-    private Path downloadBuildPackageIfNeeded(String buildPackage, Path workDir, Logger testLogger) 
+    private Path downloadBuildPackageIfNeeded(String buildPackage, Path workDir, Logger testLogger, 
+                                             String expectedCommit, String expectedBaseline) 
             throws IOException {
         // Check if it's a URL
         if (buildPackage.startsWith("http://") || buildPackage.startsWith("https://")) {
             testLogger.info("Build package is a URL: " + buildPackage);
             
-            // Check cache first
+            // Check in-memory cache first
             Path cached = buildPackageCache.get(buildPackage);
             if (cached != null && Files.exists(cached)) {
                 testLogger.info("Using cached build package: " + cached);
                 return cached;
+            }
+            
+            // Check for existing file on disk (in case cache was cleared or service restarted)
+            try {
+                URL url = new URL(buildPackage);
+                String urlPath = url.getPath();
+                String fileName = null;
+                
+                // Try to extract filename from URL
+                if (urlPath != null && !urlPath.isEmpty()) {
+                    int lastSlash = urlPath.lastIndexOf('/');
+                    if (lastSlash >= 0 && lastSlash < urlPath.length() - 1) {
+                        fileName = urlPath.substring(lastSlash + 1);
+                    }
+                }
+                
+                if (fileName != null) {
+                    Path potentialExistingFile = workDir.resolve(fileName);
+                    if (Files.exists(potentialExistingFile) && Files.size(potentialExistingFile) > 0) {
+                        // Validate that this cached file matches the expected baseline+commit combination
+                        if (validateCachedBuildPackage(potentialExistingFile, expectedCommit, expectedBaseline, testLogger)) {
+                            testLogger.info("Found valid cached build package on disk: " + potentialExistingFile);
+                            // Add to in-memory cache for faster future lookups
+                            buildPackageCache.put(buildPackage, potentialExistingFile);
+                            return potentialExistingFile;
+                        } else {
+                            testLogger.warning("Cached build package validation failed, will re-download: " + potentialExistingFile);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                // If we can't check for existing file, continue with download
+                testLogger.warning("Failed to check for existing cached file: " + e.getMessage());
             }
             
             synchronized (DOWNLOAD_LOCK) {
@@ -1992,6 +2030,24 @@ public class Tester {
                 }
                 
                 Path downloadPath = workDir.resolve(fileName);
+                
+                // Final check: if file already exists after acquiring lock, validate and use it
+                if (Files.exists(downloadPath) && Files.size(downloadPath) > 0) {
+                    if (validateCachedBuildPackage(downloadPath, expectedCommit, expectedBaseline, testLogger)) {
+                        testLogger.info("Valid build package already exists on disk: " + downloadPath);
+                        buildPackageCache.put(buildPackage, downloadPath);
+                        return downloadPath;
+                    } else {
+                        testLogger.warning("Invalid cached package found, removing and re-downloading: " + downloadPath);
+                        try {
+                            Files.deleteIfExists(downloadPath);
+                            // Also try to delete metadata file
+                            Files.deleteIfExists(downloadPath.resolveSibling(downloadPath.getFileName() + ".meta.json"));
+                        } catch (Exception deleteEx) {
+                            testLogger.warning("Failed to delete invalid cached package: " + deleteEx.getMessage());
+                        }
+                    }
+                }
                 
                 try {
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -2055,6 +2111,98 @@ public class Tester {
         } else {
             // It's a local path
             return Paths.get(buildPackage);
+        }
+    }
+    
+    /**
+     * Load existing cached build packages from disk into memory cache
+     */
+    private void loadExistingCachedPackages() {
+        try {
+            Path cacheDir = Paths.get(config.getWorkDir(), "cache");
+            if (!Files.exists(cacheDir)) {
+                return;
+            }
+            
+            Files.list(cacheDir)
+                .filter(Files::isRegularFile)
+                .filter(p -> p.getFileName().toString().endsWith(".tar.gz"))
+                .forEach(cachedFile -> {
+                    try {
+                        // Check if the cached file has valid metadata
+                        Path metadataFile = cachedFile.resolveSibling(cachedFile.getFileName() + ".meta.json");
+                        if (Files.exists(metadataFile)) {
+                            logger.info("Found existing cached build package with metadata: " + cachedFile);
+                        } else {
+                            logger.warning("Found cached build package without metadata (may be from older version): " + cachedFile);
+                            // Note: Files without metadata will be validated during use and may be rejected
+                        }
+                        // Note: We can't add to buildPackageCache here because we don't know the original URL
+                        // But the disk-based check in downloadBuildPackageIfNeeded will find and validate these files
+                    } catch (Exception e) {
+                        logger.warning("Error processing cached file " + cachedFile + ": " + e.getMessage());
+                    }
+                });
+            
+        } catch (IOException e) {
+            logger.warning("Failed to load existing cached packages: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Validate that a cached build package matches the expected commit and baseline
+     * by checking the metadata file created by the Builder.
+     */
+    private boolean validateCachedBuildPackage(Path packageFile, String expectedCommit, String expectedBaseline, Logger testLogger) {
+        try {
+            // Look for metadata file alongside the package
+            Path metadataFile = packageFile.resolveSibling(packageFile.getFileName() + ".meta.json");
+            
+            if (!Files.exists(metadataFile)) {
+                testLogger.warning("No metadata file found for cached package: " + packageFile + 
+                                 " (expected: " + metadataFile + "). Rejecting to ensure baseline consistency.");
+                return false;
+            }
+            
+            // Read and parse metadata
+            String metadataContent = new String(Files.readAllBytes(metadataFile), "UTF-8");
+            org.json.JSONObject metadata = new org.json.JSONObject(metadataContent);
+            
+            // Validate commit
+            String metaCommit = metadata.optString("commitShort", metadata.optString("commit", ""));
+            if (metaCommit.length() > 7) {
+                metaCommit = metaCommit.substring(0, 7);
+            }
+            String expectedCommitShort = expectedCommit != null && expectedCommit.length() > 7 ? 
+                                       expectedCommit.substring(0, 7) : expectedCommit;
+            
+            if (expectedCommitShort != null && !expectedCommitShort.equals(metaCommit)) {
+                testLogger.warning(String.format("Cached package validation failed: commit mismatch. " +
+                    "Expected: %s, Found: %s (package: %s)", expectedCommitShort, metaCommit, packageFile));
+                return false;
+            }
+            
+            // Validate baseline
+            String metaBaseline = metadata.optString("baseline", "");
+            if (metaBaseline.length() > 7) {
+                metaBaseline = metaBaseline.substring(0, 7);
+            }
+            String expectedBaselineShort = expectedBaseline != null && expectedBaseline.length() > 7 ? 
+                                         expectedBaseline.substring(0, 7) : expectedBaseline;
+            
+            if (expectedBaselineShort != null && !expectedBaselineShort.equals("unknown") && !expectedBaselineShort.equals(metaBaseline)) {
+                testLogger.warning(String.format("Cached package validation failed: baseline mismatch. " +
+                    "Expected: %s, Found: %s (package: %s)", expectedBaselineShort, metaBaseline, packageFile));
+                return false;
+            }
+            
+            testLogger.info(String.format("Cached package validation passed: commit=%s, baseline=%s (package: %s)", 
+                          metaCommit, metaBaseline, packageFile.getFileName()));
+            return true;
+            
+        } catch (Exception e) {
+            testLogger.warning("Failed to validate cached package metadata: " + e.getMessage() + " (package: " + packageFile + ")");
+            return false;
         }
     }
     
