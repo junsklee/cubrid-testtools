@@ -281,11 +281,12 @@ public class Tester {
             }
 
             // Track failures and passes to decide flakiness later
+            boolean isPass = TestStatus.PASS.getValue().equalsIgnoreCase(status);
             boolean isFailLike = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
                                   TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
                                   TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status) ||
-                                  TestStatus.BUILD_ERROR.getValue().equalsIgnoreCase(status);
-            boolean isPass = TestStatus.PASS.getValue().equalsIgnoreCase(status);
+                                  TestStatus.BUILD_ERROR.getValue().equalsIgnoreCase(status) ||
+                                  (!isPass && !status.equalsIgnoreCase("started"));  // Treat unknown statuses as fail-like, except "started"
             
             if (isFailLike) {
                 sawFailure = true;
@@ -320,6 +321,7 @@ public class Tester {
                 if (sawFailure && sawPass) {
                     lastResult.put("attempts", attempt);
                     lastResult.put("flaky", true);
+                    lastResult.put("status", "flaky");  // Override status to indicate flakiness
                     testLogger.info("Test marked as flaky - saw both pass and failure in " + attempt + " attempts");
                     lastResult.put("attemptLogFiles", attemptLogFiles);
                     lastResult.put("attemptLogMetadata", attemptLogMetadata);
@@ -345,6 +347,7 @@ public class Tester {
                 if (sawFailure && sawPass) {
                     lastResult.put("attempts", attempt);
                     lastResult.put("flaky", true);
+                    lastResult.put("status", "flaky");  // Override status to indicate flakiness
                     testLogger.info("Test marked as flaky in until-fail mode - saw both pass and failure in " + attempt + " attempts");
                     lastResult.put("attemptLogFiles", attemptLogFiles);
                     lastResult.put("attemptLogMetadata", attemptLogMetadata);
@@ -375,16 +378,21 @@ public class Tester {
         // Check for flakiness when completing without early exit
         if (runMode.equals("until-pass") && sawFailure && sawPass) {
             lastResult.put("flaky", true);
+            lastResult.put("status", "flaky");  // Override status to indicate flakiness
             testLogger.info("Test marked as flaky - saw both pass and failure across " + attempt + " attempts");
         }
 
-        if (runMode.equals("until-fail") && !TestStatus.FAIL.getValue().equalsIgnoreCase(lastResult.optString("status", ""))) {
-            testLogger.info("Test did not fail after " + attempt + " attempts (reproduce mode)");
-            lastResult.put("summary", "Could not reproduce failure after " + attempt + " attempts");
-            // Check for flakiness when until-fail mode completes without failing
+        if (runMode.equals("until-fail")) {
+            // Check for flakiness first
             if (sawFailure && sawPass) {
                 lastResult.put("flaky", true);
+                lastResult.put("status", "flaky");  // Override status to indicate flakiness
                 testLogger.info("Test marked as flaky in until-fail mode - saw both pass and failure");
+            }
+            // Only set "could not reproduce" summary if we didn't see any failures at all
+            else if (!sawFailure) {
+                testLogger.info("Test did not fail after " + attempt + " attempts (reproduce mode)");
+                lastResult.put("summary", "Could not reproduce failure after " + attempt + " attempts");
             }
         } else if (runMode.equals("fixed-runs")) {
             testLogger.info("Completed " + attempt + " run(s)");
@@ -392,6 +400,7 @@ public class Tester {
             // Check for flakiness in fixed-runs mode too
             if (sawFailure && sawPass) {
                 lastResult.put("flaky", true);
+                lastResult.put("status", "flaky");  // Override status to indicate flakiness
                 testLogger.info("Test marked as flaky in fixed-runs mode - saw both pass and failure");
             }
         }
