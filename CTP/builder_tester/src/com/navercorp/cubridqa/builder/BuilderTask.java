@@ -1045,6 +1045,15 @@ public class BuilderTask {
                             int attemptNum = attemptMeta.getInt("attempt");
                             String status = attemptMeta.optString("status", "unknown");
                             
+                            // Add small delay between remote log fetches to avoid overwhelming the remote tester
+                            if (!isLocal && i > 0) {
+                                try {
+                                    Thread.sleep(500); // 500ms delay between remote log fetches
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                }
+                            }
+                            
                             try {
                                 if (isLocal) {
                                     // Local tester - copy log file directly from filesystem
@@ -1062,14 +1071,34 @@ public class BuilderTask {
                                         taskLogger.warning("Local log file not found for: " + logFileName);
                                     }
                                 } else {
-                                    // Remote tester - fetch log content via HTTP
-                                    String logContent = fetchLogContentFromRemoteTester(host, port, logFileName);
+                                    // Remote tester - fetch log content via HTTP with retry
+                                    String logContent = null;
+                                    int maxRetries = 3;
+                                    for (int retry = 0; retry < maxRetries; retry++) {
+                                        try {
+                                            logContent = fetchLogContentFromRemoteTester(host, port, logFileName);
+                                            if (logContent != null && !logContent.isEmpty()) {
+                                                break; // Success, exit retry loop
+                                            }
+                                            if (retry < maxRetries - 1) {
+                                                taskLogger.info("Retrying log fetch for " + logFileName + " (attempt " + (retry + 2) + "/" + maxRetries + ")");
+                                                Thread.sleep(1000 * (retry + 1)); // Exponential backoff: 1s, 2s, 3s
+                                            }
+                                        } catch (Exception fetchEx) {
+                                            if (retry == maxRetries - 1) {
+                                                throw fetchEx; // Re-throw on final attempt
+                                            }
+                                            taskLogger.warning("Log fetch attempt " + (retry + 1) + " failed for " + logFileName + ": " + fetchEx.getMessage());
+                                            Thread.sleep(1000 * (retry + 1)); // Exponential backoff
+                                        }
+                                    }
+                                    
                                     if (logContent != null && !logContent.isEmpty()) {
                                         Path logFile = Paths.get(testsDir, logFileName);
                                         Files.write(logFile, logContent.getBytes("UTF-8"));
                                         taskLogger.info("Saved attempt " + attemptNum + " log (" + status + ") to: " + logFile.toString());
                                     } else {
-                                        taskLogger.warning("Empty or null log content received for: " + logFileName);
+                                        taskLogger.warning("Empty or null log content received for: " + logFileName + " after " + maxRetries + " attempts");
                                     }
                                 }
                             } catch (Exception logFetchEx) {
