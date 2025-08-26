@@ -2090,6 +2090,35 @@ public class Tester {
                     
                     testLogger.info("Build package downloaded successfully: " + downloadPath);
                     
+                    // Try to download the corresponding metadata file
+                    try {
+                        String metadataUrl = buildPackage + ".meta.json";
+                        Path metadataPath = downloadPath.resolveSibling(downloadPath.getFileName() + ".meta.json");
+                        
+                        testLogger.info("Attempting to download metadata file: " + metadataUrl);
+                        HttpURLConnection metaConn = (HttpURLConnection) new URL(metadataUrl).openConnection();
+                        metaConn.setRequestMethod("GET");
+                        metaConn.setConnectTimeout(10000);
+                        metaConn.setReadTimeout(30000);
+                        
+                        if (metaConn.getResponseCode() == 200) {
+                            try (InputStream metaIn = metaConn.getInputStream();
+                                 OutputStream metaOut = Files.newOutputStream(metadataPath)) {
+                                byte[] buffer = new byte[8192];
+                                int bytesRead;
+                                while ((bytesRead = metaIn.read(buffer)) != -1) {
+                                    metaOut.write(buffer, 0, bytesRead);
+                                }
+                            }
+                            testLogger.info("Metadata file downloaded successfully: " + metadataPath);
+                        } else {
+                            testLogger.info("Metadata file not available on server (HTTP " + metaConn.getResponseCode() + ")");
+                        }
+                    } catch (Exception metaEx) {
+                        testLogger.info("Could not download metadata file: " + metaEx.getMessage());
+                        // Continue without metadata - validation will handle missing metadata gracefully
+                    }
+                    
                     // Cache the downloaded package
                     buildPackageCache.put(buildPackage, downloadPath);
                     
