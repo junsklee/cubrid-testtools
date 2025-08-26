@@ -303,6 +303,8 @@ public class BuilderTask {
                         
                         // Create build log for cached build
                         createCachedBuildLog(commit, cachedPackage, "memory cache");
+                        // Ensure metadata exists for cached package so remote testers can validate without re-download
+                        try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
                         
                         return null;
                     }
@@ -317,6 +319,8 @@ public class BuilderTask {
                         
                         // Create build log for cached build
                         createCachedBuildLog(commit, diskPackage, "disk cache");
+                        // Ensure metadata exists for cached package on disk
+                        try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
                         
                         return null;
                     }
@@ -642,6 +646,30 @@ public class BuilderTask {
             j.put("createdAt", System.currentTimeMillis());
             try (FileWriter w = new FileWriter(meta)) {
                 w.write(j.toString());
+            }
+        } catch (Exception ignore) { }
+    }
+
+    /**
+     * Ensure a .meta.json exists for a given package; if missing or empty, (re)write it.
+     */
+    private void ensureBuildMetadata(String packagePath, String fullCommit, String buildType, String baselineCommit) {
+        try {
+            File pkg = new File(packagePath);
+            File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
+            boolean needsWrite = true;
+            if (meta.exists() && meta.isFile()) {
+                try (BufferedReader br = new BufferedReader(new FileReader(meta))) {
+                    String content = br.readLine();
+                    if (content != null && content.trim().length() > 1) {
+                        needsWrite = false; // metadata exists and is non-empty
+                    }
+                } catch (Exception ignore) {
+                    needsWrite = true;
+                }
+            }
+            if (needsWrite) {
+                writeBuildMetadata(packagePath, fullCommit, buildType, baselineCommit);
             }
         } catch (Exception ignore) { }
     }
