@@ -27,6 +27,7 @@ public class BuilderTask {
     private final List<JSONObject> results;
     private final Map<String, Integer> progress;
     private Logger taskLogger;
+    private String baselineCommit;
     
     // Thread-safe build cache shared across all tasks
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
@@ -84,11 +85,11 @@ public class BuilderTask {
             setupCubridRepository();
 
             // Determine common baseline = parent of earliest commit in the list
-            String baselineCommit = determineBaselineCommit(commits);
-            taskLogger.info("Using baseline (parent of earliest commit): " + baselineCommit);
+            this.baselineCommit = determineBaselineCommit(commits);
+            taskLogger.info("Using baseline (parent of earliest commit): " + this.baselineCommit);
 
             // Build all commits concurrently (each in isolation via worktree + cherry-pick)
-            Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, baselineCommit);
+            Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, this.baselineCommit);
             
             // Distribute tests across multiple tester nodes
             Map<String, List<Callable<JSONObject>>> workerTestQueues = new HashMap<>();
@@ -1263,6 +1264,7 @@ public class BuilderTask {
                 .put("requestId", requestIdForCallback)
                 .put("taskId", taskId)
                 .put("results", new JSONArray(results))
+                .put("baselineCommit", this.baselineCommit)
                 .put("timestamp", System.currentTimeMillis());
             
             taskLogger.info("Sending results to " + callbackUrl);

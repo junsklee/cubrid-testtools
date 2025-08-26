@@ -193,10 +193,7 @@
             border-radius: 0.375rem;
             border: 1px solid rgba(99, 102, 241, 0.2);
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 200px;
-            flex-shrink: 1;
+            flex-shrink: 0;
         }
 
         .title-icon {
@@ -1508,9 +1505,8 @@
                                 sha: sha,
                                 html_url: `https://github.com/CUBRID/cubrid/commit/${sha}`,
                                 commit: {
-                                    author: { name: 'Unknown' },
-                                    message: 'Click to view commit details on GitHub',
-                                    author: { date: new Date().toISOString() }
+                                    author: { name: 'Unknown', date: new Date().toISOString() },
+                                    message: 'Click to view commit details on GitHub'
                                 }
                             }
                         };
@@ -2430,10 +2426,26 @@
             const baselineRailHash = document.getElementById('baselineRailHash');
             
             // Set up baseline link and hash
-            if (rawData.baselineCommit) {
-                const baselineUrl = `https://github.com/CUBRID/cubrid/commit/${rawData.baselineCommit}`;
+            let baselineCommit = rawData.baselineCommit;
+            
+            // If no explicit baseline, try to determine it from commits
+            if (!baselineCommit && commits && commits.length > 0) {
+                // Try to get parent of earliest commit from API data
+                const firstCommitDetail = commitDetails.find(detail => detail.sha === commits[0]);
+                if (firstCommitDetail && firstCommitDetail.data && firstCommitDetail.data.parents && firstCommitDetail.data.parents.length > 0) {
+                    baselineCommit = firstCommitDetail.data.parents[0].sha;
+                }
+                // If we can't determine baseline, just leave it as undefined - don't use first commit
+            }
+            
+            if (baselineCommit) {
+                const baselineUrl = `https://github.com/CUBRID/cubrid/commit/${baselineCommit}`;
                 baselineRailLink.href = baselineUrl;
-                baselineRailHash.textContent = rawData.baselineCommit.substring(0, 7);
+                baselineRailHash.textContent = baselineCommit.substring(0, 7);
+            } else {
+                // Show dash to indicate server couldn't determine baseline
+                baselineRailLink.href = '#';
+                baselineRailHash.textContent = '-';
             }
 
             // Clear existing commit chips
