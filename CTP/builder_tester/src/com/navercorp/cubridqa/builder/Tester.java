@@ -248,7 +248,8 @@ public class Tester {
         List<Path> attemptLogFiles = new ArrayList<>();
         JSONArray attemptLogMetadata = new JSONArray();
         long startTime = System.currentTimeMillis();
-        boolean sawFailureBeforePass = false;
+        boolean sawFailure = false;
+        boolean sawPass = false;
 
         testLogger.info("Starting test execution with mode '" + runMode + "', minRuns=" + minRuns + ", maxRuns=" + maxRuns + (timeBudgetMs != null ? ", timeBudgetMs=" + timeBudgetMs : ""));
 
@@ -279,12 +280,17 @@ public class Tester {
                 lastResult.remove("logFilePath");
             }
 
-            // Track failures to decide flakiness later
+            // Track failures and passes to decide flakiness later
             boolean isFailLike = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
                                   TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
                                   TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status);
+            boolean isPass = TestStatus.PASS.getValue().equalsIgnoreCase(status);
+            
             if (isFailLike) {
-                sawFailureBeforePass = true;
+                sawFailure = true;
+            }
+            if (isPass) {
+                sawPass = true;
             }
 
             // For keepAlive runs where tester returns 'started', end immediately
@@ -306,15 +312,28 @@ public class Tester {
             }
 
             // 3) until-pass early exit after minRuns on PASS
-            if (runMode.equals("until-pass") && attempt >= minRuns && TestStatus.PASS.getValue().equalsIgnoreCase(status)) {
-                lastResult.put("attempts", attempt);
-                if (sawFailureBeforePass) {
+            // For flaky detection: only exit early if we have confidence about the test's behavior
+            if (runMode.equals("until-pass") && attempt >= minRuns && isPass) {
+                // If we've seen both pass and failure, mark as flaky and exit
+                if (sawFailure && sawPass) {
+                    lastResult.put("attempts", attempt);
                     lastResult.put("flaky", true);
-                    testLogger.info("Test marked as flaky - passed after " + attempt + " attempts");
+                    testLogger.info("Test marked as flaky - saw both pass and failure in " + attempt + " attempts");
+                    lastResult.put("attemptLogFiles", attemptLogFiles);
+                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                    return lastResult;
                 }
-                lastResult.put("attemptLogFiles", attemptLogFiles);
-                lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                return lastResult;
+                // If we've only seen passes and we have sufficient data (at least 2 passes), exit as stable
+                else if (!sawFailure && attempt >= Math.max(2, minRuns)) {
+                    lastResult.put("attempts", attempt);
+                    testLogger.info("Test appears stable - only passes in " + attempt + " attempts");
+                    lastResult.put("attemptLogFiles", attemptLogFiles);
+                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                    return lastResult;
+                }
+                // If we've only seen failures + this pass, continue running to see if it's consistently passing now
+                // If we've only seen one pass so far, continue to gather more data for confidence
+                // (don't exit early - let it run more attempts to gather more data)
             }
 
             // 4) until-fail early exit after minRuns on FAIL-like
@@ -335,12 +354,23 @@ public class Tester {
         lastResult.put("attemptLogMetadata", attemptLogMetadata);
         lastResult.put("runMode", runMode);
 
+        // Check for flakiness when completing without early exit
+        if (runMode.equals("until-pass") && sawFailure && sawPass) {
+            lastResult.put("flaky", true);
+            testLogger.info("Test marked as flaky - saw both pass and failure across " + attempt + " attempts");
+        }
+
         if (runMode.equals("until-fail") && !TestStatus.FAIL.getValue().equalsIgnoreCase(lastResult.optString("status", ""))) {
             testLogger.info("Test did not fail after " + attempt + " attempts (reproduce mode)");
             lastResult.put("summary", "Could not reproduce failure after " + attempt + " attempts");
         } else if (runMode.equals("fixed-runs")) {
             testLogger.info("Completed " + attempt + " run(s)");
             lastResult.put("summary", "Completed " + attempt + " runs");
+            // Check for flakiness in fixed-runs mode too
+            if (sawFailure && sawPass) {
+                lastResult.put("flaky", true);
+                testLogger.info("Test marked as flaky in fixed-runs mode - saw both pass and failure");
+            }
         }
 
         return lastResult;
