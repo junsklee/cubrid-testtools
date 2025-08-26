@@ -440,6 +440,7 @@
                 <button class="btn btn-secondary" onclick="filterResults('passed')">Passed</button>
                 <button class="btn btn-secondary" onclick="filterResults('failed')">Failed</button>
                 <button class="btn btn-secondary" onclick="filterResults('unstable')">Unstable</button>
+                <button class="btn btn-secondary" onclick="filterResults('flaky')">Flaky</button>
             </div>
         </div>
         
@@ -637,10 +638,6 @@
             
             // Fall back to traditional verdict logic
             const failCount = calculateFailCount(testName);
-            return getVerdict(testName, failCount);
-        }
-        
-        function getVerdict(testName, failCount) {
             const numCommits = commits.length;
             
             if (failCount === 0) {
@@ -701,9 +698,10 @@
             const failCount = calculateFailCount(testName);
             
             if (currentFilter !== 'all') {
-                if (currentFilter === 'passed' && verdict.class !== 'verdict-success' && verdict.class !== 'verdict-flaky') return null;
+                if (currentFilter === 'passed' && verdict.class !== 'verdict-success') return null;
                 if (currentFilter === 'failed' && verdict.class !== 'verdict-bug' && verdict.class !== 'verdict-preexisting') return null;
                 if (currentFilter === 'unstable' && verdict.class !== 'verdict-unstable') return null;
+                if (currentFilter === 'flaky' && verdict.class !== 'verdict-flaky') return null;
             }
             const row = document.createElement('tr');
             const testCell = document.createElement('td');
@@ -796,9 +794,19 @@
             csv += 'Fail Num,Verdict\n';
             Object.keys(processedData).sort().forEach(test => {
                 csv += '"' + test + '",';
-                commits.forEach(commit => { const status = processedData[test][commit] || 'error'; csv += status.toUpperCase() + ','; });
+                commits.forEach(commit => { 
+                    const resultData = processedData[test][commit];
+                    let status;
+                    if (typeof resultData === 'object' && resultData.status) {
+                        status = resultData.status;
+                        if (resultData.flaky) status = 'flaky';
+                    } else {
+                        status = resultData || 'error';
+                    }
+                    csv += status.toUpperCase() + ','; 
+                });
                 const failCount = calculateFailCount(test);
-                const verdict = getVerdict(test, failCount);
+                const verdict = getTestVerdict(test);
                 csv += failCount + ',"' + verdict.text + '"\n';
             });
             const blob = new Blob([csv], {type: 'text/csv'});
