@@ -169,7 +169,7 @@ public class Tester {
     // Main method for standalone execution (maintains original behavior)
     public static void main(String[] args) {
         try {
-            String configFile = "conf/tester.conf";
+            String configFile = args.length > 0 ? args[0] : "conf/tester.conf";
             Config config = new Config(configFile);
             Tester tester = new Tester(config);
             tester.start();
