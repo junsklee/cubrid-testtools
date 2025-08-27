@@ -499,24 +499,10 @@
                         </div>
                     </div>
                 </div>
-                <div class="info-item">
-                    <div class="info-label">Runtime</div>
-                    <div class="info-value" id="runtime">0s</div>
-                </div>
             `;
             
             const totalTasks = request.commits.length + (request.commits.length * request.tests.length);
             
-            // Update runtime counter
-            const runtimeInterval = setInterval(() => {
-                const elapsed = Math.floor((new Date() - startTime) / 1000);
-                const runtimeElement = document.getElementById('runtime');
-                if (runtimeElement) {
-                    const minutes = Math.floor(elapsed / 60);
-                    const seconds = elapsed % 60;
-                    runtimeElement.textContent = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-                }
-            }, 1000);
             
             // Polling function for status updates
             async function pollStatus() {
@@ -549,7 +535,6 @@
                                     progressFill.style.width = '100%';
                                     
                                     // Stop monitoring and hide refresh button
-                                    clearInterval(runtimeInterval);
                                     const refreshBtn = document.getElementById('refreshStatusBtn');
                                     if (refreshBtn) {
                                         refreshBtn.style.display = 'none';
@@ -574,7 +559,6 @@
                         progressFill.style.width = '100%';
                         
                         // Stop monitoring and hide refresh button
-                        clearInterval(runtimeInterval);
                         const refreshBtn = document.getElementById('refreshStatusBtn');
                         if (refreshBtn) {
                             refreshBtn.style.display = 'none';
@@ -597,7 +581,6 @@
                             progressFill.style.width = '100%';
                             
                             // Stop polling and hide refresh button
-                            clearInterval(runtimeInterval);
                             const refreshBtn = document.getElementById('refreshStatusBtn');
                             if (refreshBtn) {
                                 refreshBtn.style.display = 'none';
@@ -615,7 +598,6 @@
                             progressDetails.textContent = statusData.message || 'Build or tests failed';
                             
                             // Stop polling and hide refresh button
-                            clearInterval(runtimeInterval);
                             const refreshBtn = document.getElementById('refreshStatusBtn');
                             if (refreshBtn) {
                                 refreshBtn.style.display = 'none';
