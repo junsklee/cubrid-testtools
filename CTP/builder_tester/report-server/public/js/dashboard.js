@@ -24,6 +24,9 @@
             loadCommits();
             setupEventListeners();
             loadRecentReports();
+            
+            // Check for active sessions on page load
+            checkForActiveSessions();
         });
 
         // Setup event listeners
@@ -451,8 +454,20 @@
         // Start status monitoring with real-time updates
         function startStatusMonitoring(request) {
             const monitor = document.getElementById('statusMonitor');
+            const refreshBtn = document.getElementById('refreshStatusBtn');
             const startTime = new Date();
-            let statusInterval;
+            
+            // Store session data for persistence across page refreshes
+            const taskId = request.taskId || request.requestId;
+            if (taskId) {
+                sessionStorage.setItem('activeTaskId', taskId);
+                sessionStorage.setItem('activeRequest', JSON.stringify(request));
+            }
+            
+            // Show the refresh button
+            if (refreshBtn) {
+                refreshBtn.style.display = 'inline-block';
+            }
             
             // Initial display
             monitor.innerHTML = `
@@ -490,7 +505,6 @@
                 </div>
             `;
             
-            let completedTasks = 0;
             const totalTasks = request.commits.length + (request.commits.length * request.tests.length);
             
             // Update runtime counter
@@ -507,9 +521,11 @@
             // Polling function for status updates
             async function pollStatus() {
                 try {
+                    const taskId = request.taskId || request.requestId;
+                    
                     // Poll builder status with taskId if available
-                    const statusUrl = request.taskId || request.requestId ? 
-                        `/api/builder/status?taskId=${request.taskId || request.requestId}` : 
+                    const statusUrl = taskId ? 
+                        `/api/builder/status?taskId=${taskId}` : 
                         '/api/builder/status';
                     
                     const response = await fetch(statusUrl);
@@ -519,6 +535,59 @@
                     const progressDetails = document.getElementById('progress-details');
                     const progressFill = document.getElementById('progress-fill');
                     
+                    // Check for completion first
+                    if (response.ok && statusData && statusData.status === 'not_found') {
+                        // Task not found - check if report exists to confirm completion
+                        if (taskId) {
+                            try {
+                                const reportResponse = await fetch(`/report?id=${taskId}`, { method: 'HEAD' });
+                                if (reportResponse.ok) {
+                                    // Report exists - task completed successfully
+                                    statusElement.textContent = 'Completed';
+                                    statusElement.parentElement.className = 'status success';
+                                    progressDetails.textContent = 'Build and tests completed successfully - Report available';
+                                    progressFill.style.width = '100%';
+                                    
+                                    // Stop monitoring and hide refresh button
+                                    clearInterval(runtimeInterval);
+                                    const refreshBtn = document.getElementById('refreshStatusBtn');
+                                    if (refreshBtn) {
+                                        refreshBtn.style.display = 'none';
+                                    }
+                                    
+                                    // Clear session storage
+                                    sessionStorage.removeItem('activeTaskId');
+                                    sessionStorage.removeItem('activeRequest');
+                                    
+                                    showToast('Build completed successfully! Report is available.', 'success');
+                                    return;
+                                }
+                            } catch (reportError) {
+                                console.warn('Could not check report existence:', reportError);
+                            }
+                        }
+                        
+                        // Task not found but no report - unclear completion state
+                        statusElement.textContent = 'Completed';
+                        statusElement.parentElement.className = 'status success';
+                        progressDetails.textContent = 'Build session completed (status lost)';
+                        progressFill.style.width = '100%';
+                        
+                        // Stop monitoring and hide refresh button
+                        clearInterval(runtimeInterval);
+                        const refreshBtn = document.getElementById('refreshStatusBtn');
+                        if (refreshBtn) {
+                            refreshBtn.style.display = 'none';
+                        }
+                        
+                        // Clear session storage
+                        sessionStorage.removeItem('activeTaskId');
+                        sessionStorage.removeItem('activeRequest');
+                        
+                        showToast('Build session has completed', 'info');
+                        return;
+                    }
+                    
                     if (response.ok && statusData) {
                         // Update status based on response
                         if (statusData.status === 'completed') {
@@ -527,9 +596,17 @@
                             progressDetails.textContent = `All ${totalTasks} tasks completed successfully`;
                             progressFill.style.width = '100%';
                             
-                            // Stop polling
-                            clearInterval(statusInterval);
+                            // Stop polling and hide refresh button
                             clearInterval(runtimeInterval);
+                            const refreshBtn = document.getElementById('refreshStatusBtn');
+                            if (refreshBtn) {
+                                refreshBtn.style.display = 'none';
+                            }
+                            
+                            // Clear session storage
+                            sessionStorage.removeItem('activeTaskId');
+                            sessionStorage.removeItem('activeRequest');
+                            
                             showToast('Build and tests completed successfully!', 'success');
                             
                         } else if (statusData.status === 'failed' || statusData.status === 'error') {
@@ -537,9 +614,17 @@
                             statusElement.parentElement.className = 'status offline';
                             progressDetails.textContent = statusData.message || 'Build or tests failed';
                             
-                            // Stop polling
-                            clearInterval(statusInterval);
+                            // Stop polling and hide refresh button
                             clearInterval(runtimeInterval);
+                            const refreshBtn = document.getElementById('refreshStatusBtn');
+                            if (refreshBtn) {
+                                refreshBtn.style.display = 'none';
+                            }
+                            
+                            // Clear session storage
+                            sessionStorage.removeItem('activeTaskId');
+                            sessionStorage.removeItem('activeRequest');
+                            
                             showToast('Build or tests failed', 'error');
                             
                         } else if (statusData.status === 'running' || statusData.status === 'building') {
@@ -619,14 +704,14 @@
                 }
             }
             
-            // Start polling every 5 seconds
-            statusInterval = setInterval(pollStatus, 5000);
-            
-            // Initial poll
+            // Initial status check only (no automatic polling)
             pollStatus();
             
             // Store intervals for cleanup if needed
-            window.statusMonitorIntervals = { statusInterval, runtimeInterval };
+            window.statusMonitorIntervals = { runtimeInterval };
+            
+            // Make pollStatus available globally for manual refresh
+            window.refreshBuildStatus = pollStatus;
         }
 
         // Show system info modal
@@ -928,6 +1013,45 @@
                     container.removeChild(toast);
                 }, 300);
             }, 3000);
+        }
+
+        // Check for active sessions on page load
+        async function checkForActiveSessions() {
+            try {
+                // First check if we have a stored session
+                const storedTaskId = sessionStorage.getItem('activeTaskId');
+                const storedRequest = sessionStorage.getItem('activeRequest');
+                
+                if (storedTaskId && storedRequest) {
+                    // Check if the stored session is still active
+                    const response = await fetch(`/api/builder/status?taskId=${storedTaskId}`);
+                    const statusData = await response.json();
+                    
+                    if (response.ok && statusData.status === 'running') {
+                        // Session is still active, restore the monitoring
+                        const request = JSON.parse(storedRequest);
+                        startStatusMonitoring(request);
+                        showToast('Resumed monitoring active build session', 'info');
+                        return;
+                    } else {
+                        // Session is no longer active, clear storage
+                        sessionStorage.removeItem('activeTaskId');
+                        sessionStorage.removeItem('activeRequest');
+                    }
+                }
+                
+                // Check for any active builds (without taskId)
+                const generalResponse = await fetch('/api/builder/status');
+                if (generalResponse.ok) {
+                    const generalStatus = await generalResponse.json();
+                    if (generalStatus.activeTasks && generalStatus.activeTasks.length > 0) {
+                        // There are active builds but we don't have session data
+                        showToast(`Found ${generalStatus.activeTasks.length} active build(s), but session was lost. You may need to resubmit to monitor progress.`, 'warning');
+                    }
+                }
+            } catch (error) {
+                console.warn('Could not check for active sessions:', error);
+            }
         }
 
         // Utility functions

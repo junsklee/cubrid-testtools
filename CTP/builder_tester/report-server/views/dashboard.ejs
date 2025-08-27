@@ -169,6 +169,13 @@
                 Build Status Monitor
             </h2>
             
+            <div class="status-controls" style="margin-bottom: 1rem;">
+                <button class="control-btn" onclick="window.refreshBuildStatus && window.refreshBuildStatus()" 
+                        id="refreshStatusBtn" style="display: none;">
+                    🔄 Refresh Status
+                </button>
+            </div>
+            
             <div id="statusMonitor">
                 <p style="color: var(--text-secondary);">No active builds. Submit a request to start monitoring.</p>
             </div>

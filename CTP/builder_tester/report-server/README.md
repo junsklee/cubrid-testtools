@@ -53,7 +53,8 @@ report-server/
 - **Build Request Interface**: Submit test requests with commit selection and worker management
 - **GitHub Integration**: Browse and select commits directly from GitHub API
 - **Advanced Configuration**: Timeout settings, run modes, environment variables
-- **Real-time Status Monitoring**: Builder and tester health checks
+- **Manual Status Refresh**: On-demand status checking to prevent rate limiting
+- **Session Persistence**: Maintains build monitoring across page refreshes
 - **Recent Reports**: Quick access to latest test results
 
 ### 📊 **Enhanced Report Viewer**
@@ -108,6 +109,29 @@ Default port is **8091**. The server creates log directories automatically.
 - **Reports**: http://localhost:8091/reports
 - **Health Check**: http://localhost:8091/health
 
+## Status Monitoring
+
+### 🔄 **Manual Refresh System**
+The dashboard uses a manual refresh system instead of automatic polling to prevent rate limiting issues:
+
+- **Manual Refresh Button**: Click "🔄 Refresh Status" to get the latest build status
+- **No Automatic Polling**: Eliminates 429 "Too Many Requests" errors
+- **Session Persistence**: Build monitoring state survives page refreshes using sessionStorage
+
+### 🔄 **Session Management**
+The system provides robust session management:
+
+1. **Active Session Storage**: Stores taskId and request data in browser sessionStorage
+2. **Automatic Recovery**: On page load, checks for active builds and resumes monitoring
+3. **Completion Detection**: Automatically detects when builds complete and cleans up session
+4. **Orphaned Build Detection**: Warns if active builds exist but session was lost
+
+### 🔄 **Status States**
+- **Active Monitoring**: Shows refresh button and current build progress
+- **Completed/Failed**: Hides refresh button and clears session storage  
+- **Session Recovery**: "Resumed monitoring active build session" notification
+- **Orphaned Builds**: "Found X active build(s), but session was lost" warning
+
 ## Usage
 
 ### 1. Dashboard Interface
@@ -122,7 +146,8 @@ Navigate to http://localhost:8091/ to access the modern dashboard:
 
 ### 2. Monitoring & Reports
 
-- **Build Status**: Real-time monitoring of active builds
+- **Build Status**: Manual refresh monitoring with session persistence
+- **Automatic Session Recovery**: Detects and resumes active builds after page refresh
 - **Recent Reports**: Quick access to latest test results
 - **Report Viewer**: Detailed test analysis with interactive elements
 
@@ -269,7 +294,12 @@ sudo systemctl start report-server
 
 ### Common Issues
 
-1. **Port Already in Use**
+1. **429 "Too Many Requests" Error (Fixed)**
+   - **Problem**: Previous versions used automatic polling every 5 seconds
+   - **Solution**: Updated to manual refresh system - click "🔄 Refresh Status" button
+   - **Prevention**: Status is only checked when user clicks refresh button
+
+2. **Port Already in Use**
    ```bash
    # Find process using port 8091
    lsof -i :8091
