@@ -76,10 +76,29 @@ public class Tester {
         
         // Initialize request logging
         try {
+            // Determine project root directory for logs
+            String logRootDir = "log"; // Default fallback
+            String projectRoot = System.getProperty("tester.project.root");
+            if (projectRoot != null) {
+                logRootDir = new File(projectRoot, "log").getAbsolutePath();
+            } else {
+                // Fallback: try to derive from typical project structure
+                try {
+                    String userHome = System.getProperty("user.home");
+                    String defaultProjectRoot = userHome + "/cubrid-testtools/CTP/builder_tester";
+                    File projectLogDir = new File(defaultProjectRoot, "log");
+                    if (projectLogDir.getParentFile().exists()) {
+                        logRootDir = projectLogDir.getAbsolutePath();
+                    }
+                } catch (Exception e) {
+                    logger.warning("Could not determine project log directory, using relative path: " + e.getMessage());
+                }
+            }
+            
             LogConfig logConfig = new LogConfig(
                 config.getMaxRequestLogs(),
                 5, // maxTarFiles 
-                "log", // logRootDir
+                logRootDir,
                 config.isRequestGroupingEnabled()
             );
             RequestLogManager.initialize(logConfig);
@@ -170,6 +189,15 @@ public class Tester {
     public static void main(String[] args) {
         try {
             String configFile = args.length > 0 ? args[0] : "conf/tester.conf";
+            
+            // Set system property for log directory based on config file location
+            if (args.length > 0) {
+                // Config file is absolute path from startup script
+                File configFileObj = new File(configFile);
+                File projectRoot = configFileObj.getParentFile().getParentFile(); // ../.. from conf/tester.conf
+                System.setProperty("tester.project.root", projectRoot.getAbsolutePath());
+            }
+            
             Config config = new Config(configFile);
             Tester tester = new Tester(config);
             tester.start();
