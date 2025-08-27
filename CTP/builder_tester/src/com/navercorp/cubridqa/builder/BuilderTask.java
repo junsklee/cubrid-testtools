@@ -253,8 +253,9 @@ public class BuilderTask {
             }
             testPool.shutdown();
             
-            // Send callback with results
-            sendCallback(callbackUrl);
+            // Calculate execution time and send callback with results
+            long duration = System.currentTimeMillis() - startTime;
+            sendCallback(callbackUrl, duration);
             
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Builder task failed: " + taskId, e);
@@ -1295,7 +1296,7 @@ public class BuilderTask {
         taskLogger.info("CUBRID repository ready");
     }
     
-    private void sendCallback(String callbackUrl) {
+    private void sendCallback(String callbackUrl, long durationMs) {
         try {
             // Include original requestId so the report server saves under the correct request directory
             String requestIdForCallback = RequestContext.getRequestId();
@@ -1303,11 +1304,27 @@ public class BuilderTask {
                 requestIdForCallback = request.optString("requestId", taskId);
             }
 
+            // Format execution time in user-friendly format
+            long durationSeconds = durationMs / 1000;
+            String executionTime;
+            if (durationSeconds < 60) {
+                executionTime = durationSeconds + "s";
+            } else if (durationSeconds < 3600) {
+                long minutes = durationSeconds / 60;
+                long seconds = durationSeconds % 60;
+                executionTime = minutes + "m " + seconds + "s";
+            } else {
+                long hours = durationSeconds / 3600;
+                long minutes = (durationSeconds % 3600) / 60;
+                executionTime = hours + "h " + minutes + "m";
+            }
+
             JSONObject response = new JSONObject()
                 .put("requestId", requestIdForCallback)
                 .put("taskId", taskId)
                 .put("results", new JSONArray(results))
                 .put("baselineCommit", this.baselineCommit)
+                .put("executionTime", executionTime)
                 .put("timestamp", System.currentTimeMillis());
             
             taskLogger.info("Sending results to " + callbackUrl);

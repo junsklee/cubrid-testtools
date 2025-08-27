@@ -1643,7 +1643,12 @@
         }
         
         function calculateExecutionTime() {
-            // Try to extract execution time from rawData
+            // First priority: use executionTime from Builder if available
+            if (rawData.executionTime) {
+                return rawData.executionTime;
+            }
+            
+            // Second priority: try to extract from startTime and endTime
             if (rawData.startTime && rawData.endTime) {
                 const start = new Date(rawData.startTime);
                 const end = new Date(rawData.endTime);
