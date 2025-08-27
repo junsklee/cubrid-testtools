@@ -1400,8 +1400,8 @@
                     };
                 });
             }
-            // Sort commits chronologically (will be improved with async sorting later)
-            commits = Array.from(commitSet).sort();
+            // Keep commits in original order - proper chronological sorting happens in loadCommitDetails()
+            commits = Array.from(commitSet);
             processedData = testGroups;
             
             // Update basic counts
