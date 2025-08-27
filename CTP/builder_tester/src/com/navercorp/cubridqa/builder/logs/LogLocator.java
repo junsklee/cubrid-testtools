@@ -45,7 +45,6 @@ public class LogLocator {
         // Fallback: search in common log locations
         String[] searchPaths = {
             System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/requests",
-            System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log/system"
         };
         
         for (String searchPath : searchPaths) {

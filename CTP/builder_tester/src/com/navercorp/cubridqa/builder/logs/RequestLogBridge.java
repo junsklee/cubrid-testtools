@@ -34,34 +34,4 @@ public class RequestLogBridge {
         // Add the log file path for multipart sending
         resultBuilder.addAttemptLogFile(logFilePath);
     }
-    
-    /**
-     * Helper method to add log content to response JSON (DEPRECATED - for backward compatibility only)
-     * Truncates large logs to avoid overwhelming the network
-     */
-    public static void addLogContentToResult(JSONObject response, String logContent, String logFileName) {
-        if (logContent == null || logContent.isEmpty()) {
-            return;
-        }
-        
-        // Limit log size to 500KB to avoid network issues
-        final int MAX_LOG_SIZE = 500 * 1024;
-        String truncatedLog = logContent;
-        boolean wasTruncated = false;
-        
-        if (logContent.length() > MAX_LOG_SIZE) {
-            // Keep first and last parts of the log
-            int keepSize = MAX_LOG_SIZE / 2;
-            truncatedLog = logContent.substring(0, keepSize) + 
-                          "\n\n... [LOG TRUNCATED - Total size: " + logContent.length() + " bytes] ...\n\n" +
-                          logContent.substring(logContent.length() - keepSize);
-            wasTruncated = true;
-        }
-        
-        response.put("logContent", truncatedLog);
-        response.put("logTruncated", wasTruncated);
-        if (logFileName != null) {
-            response.put("logFileName", logFileName);
-        }
-    }
 }
