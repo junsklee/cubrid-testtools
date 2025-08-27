@@ -390,39 +390,7 @@ public class BuilderTask {
         return commit;
     }
 
-    /**
-     * Find an existing built package on disk for the given 7-char short commit.
-     * Returns absolute path if found, otherwise null. Chooses the most recently
-     * modified package if multiple are present.
-     */
-    private String findExistingBuildPackageOnDisk(String commitShort) {
-        try {
-            File workDirRoot = new File(config.getWorkDir());
-            if (!workDirRoot.exists() || !workDirRoot.isDirectory()) {
-                return null;
-            }
-            File[] buildDirs = workDirRoot.listFiles(f -> f.isDirectory() && f.getName().startsWith("build_"));
-            if (buildDirs == null || buildDirs.length == 0) {
-                return null;
-            }
-            String targetName = "cubrid_" + commitShort + ".tar.gz";
-            File newest = null;
-            long newestMtime = Long.MIN_VALUE;
-            for (File dir : buildDirs) {
-                File candidate = new File(dir, targetName);
-                if (candidate.exists() && candidate.isFile()) {
-                    long mtime = candidate.lastModified();
-                    if (mtime > newestMtime) {
-                        newest = candidate;
-                        newestMtime = mtime;
-                    }
-                }
-            }
-            return newest != null ? newest.getAbsolutePath() : null;
-        } catch (Exception ignore) {
-            return null;
-        }
-    }
+
 
     private int fetchTesterConcurrency(String workerIp) {
         try {
@@ -680,57 +648,93 @@ public class BuilderTask {
      * or if validation fails.
      */
     private String findExistingBuildPackageOnDisk(String commitShort, String buildType, String baselineCommit, String fullCommit) {
-        String found = findExistingBuildPackageOnDisk(commitShort);
-        if (found == null) return null;
-        
-        // Validate metadata if available
         try {
-            File pkg = new File(found);
-            File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
-            if (!meta.exists()) {
-                taskLogger.warning("No metadata found for cached build " + commitShort + ", rejecting to ensure baseline consistency");
-                return null; // no metadata, reject to be safe
+            File workDirRoot = new File(config.getWorkDir());
+            if (!workDirRoot.exists() || !workDirRoot.isDirectory()) {
+                return null;
             }
-            
-            StringBuilder sb = new StringBuilder();
-            try (BufferedReader br = new BufferedReader(new FileReader(meta))) {
-                String line; while ((line = br.readLine()) != null) sb.append(line);
-            }
-            JSONObject j = new JSONObject(sb.toString());
-            
-            // Validate commit matches
-            String metaCommit = j.optString("commitShort", j.optString("commit", "")).substring(0, Math.min(7, j.optString("commitShort", j.optString("commit", "")).length()));
-            if (!metaCommit.equals(commitShort)) {
-                taskLogger.warning(String.format("Cached build rejected for %s: commit mismatch (cached: %s, requested: %s)", 
-                    commitShort, metaCommit, commitShort));
+            File[] buildDirs = workDirRoot.listFiles(f -> f.isDirectory() && f.getName().startsWith("build_"));
+            if (buildDirs == null || buildDirs.length == 0) {
                 return null;
             }
             
-            // Validate build type matches  
-            String metaBuildType = j.optString("buildType", buildType);
-            if (!buildType.equals(metaBuildType)) {
-                taskLogger.warning(String.format("Cached build rejected for %s: buildType mismatch (cached: %s, requested: %s)", 
-                    commitShort, metaBuildType, buildType));
-                return null;
+            String targetName = "cubrid_" + commitShort + ".tar.gz";
+            File bestCandidate = null;
+            long bestMtime = Long.MIN_VALUE;
+            
+            // Search through all build directories to find the best matching package
+            for (File dir : buildDirs) {
+                File candidate = new File(dir, targetName);
+                if (!candidate.exists() || !candidate.isFile()) {
+                    continue;
+                }
+                
+                // Check if this candidate has the correct metadata
+                File meta = new File(candidate.getParentFile(), candidate.getName() + ".meta.json");
+                if (!meta.exists()) {
+                    taskLogger.warning("No metadata found for cached build " + commitShort + " in " + dir.getName() + ", skipping to ensure baseline consistency");
+                    continue; // no metadata, skip to be safe
+                }
+                
+                // Validate metadata
+                try {
+                    StringBuilder sb = new StringBuilder();
+                    try (BufferedReader br = new BufferedReader(new FileReader(meta))) {
+                        String line; while ((line = br.readLine()) != null) sb.append(line);
+                    }
+                    JSONObject j = new JSONObject(sb.toString());
+                    
+                    // Validate commit matches
+                    String metaCommit = j.optString("commitShort", j.optString("commit", ""));
+                    if (metaCommit.length() > 7) metaCommit = metaCommit.substring(0, 7);
+                    if (!metaCommit.equals(commitShort)) {
+                        taskLogger.warning(String.format("Cached build in %s rejected for %s: commit mismatch (cached: %s, requested: %s)", 
+                            dir.getName(), commitShort, metaCommit, commitShort));
+                        continue;
+                    }
+                    
+                    // Validate build type matches  
+                    String metaBuildType = j.optString("buildType", buildType);
+                    if (!buildType.equals(metaBuildType)) {
+                        taskLogger.warning(String.format("Cached build in %s rejected for %s: buildType mismatch (cached: %s, requested: %s)", 
+                            dir.getName(), commitShort, metaBuildType, buildType));
+                        continue;
+                    }
+                    
+                    // Validate baseline matches - this is the critical fix
+                    String metaBaseline = j.optString("baseline", null);
+                    if (metaBaseline != null && baselineCommit != null && !metaBaseline.equals(baselineCommit)) {
+                        taskLogger.warning(String.format("Cached build in %s rejected for %s: baseline mismatch (cached baseline: %s, current baseline: %s)", 
+                            dir.getName(), commitShort, metaBaseline.substring(0, Math.min(7, metaBaseline.length())), 
+                            baselineCommit.substring(0, Math.min(7, baselineCommit.length()))));
+                        continue;
+                    }
+                    
+                    // This candidate passes all validation checks
+                    long mtime = candidate.lastModified();
+                    if (mtime > bestMtime) {
+                        bestCandidate = candidate;
+                        bestMtime = mtime;
+                    }
+                    
+                } catch (Exception e) {
+                    taskLogger.warning("Error validating cached build metadata for " + commitShort + " in " + dir.getName() + ": " + e.getMessage());
+                    continue;
+                }
             }
             
-            // Validate baseline matches - this is the critical fix
-            String metaBaseline = j.optString("baseline", null);
-            if (metaBaseline != null && baselineCommit != null && !metaBaseline.equals(baselineCommit)) {
-                taskLogger.warning(String.format("Cached build rejected for %s: baseline mismatch (cached baseline: %s, current baseline: %s)", 
-                    commitShort, metaBaseline.substring(0, Math.min(7, metaBaseline.length())), 
-                    baselineCommit.substring(0, Math.min(7, baselineCommit.length()))));
-                return null;
+            if (bestCandidate != null) {
+                taskLogger.info(String.format("Cached build validation passed for %s (buildType: %s, baseline: %s) from %s", 
+                    commitShort, buildType, 
+                    baselineCommit != null ? baselineCommit.substring(0, Math.min(7, baselineCommit.length())) : "null",
+                    bestCandidate.getParentFile().getName()));
+                return bestCandidate.getAbsolutePath();
             }
             
-            taskLogger.info(String.format("Cached build validation passed for %s (buildType: %s, baseline: %s)", 
-                commitShort, buildType, 
-                baselineCommit != null ? baselineCommit.substring(0, Math.min(7, baselineCommit.length())) : "null"));
-            
-            return found;
+            return null;
         } catch (Exception e) {
-            taskLogger.warning("Failed to validate cached build metadata for " + commitShort + ": " + e.getMessage() + ", accepting build");
-            return found; // be permissive on metadata parsing errors
+            taskLogger.warning("Error searching for cached build for " + commitShort + ": " + e.getMessage());
+            return null;
         }
     }
 

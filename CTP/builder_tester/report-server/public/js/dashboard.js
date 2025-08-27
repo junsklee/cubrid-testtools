@@ -690,7 +690,7 @@
             pollStatus();
             
             // Store intervals for cleanup if needed
-            window.statusMonitorIntervals = { runtimeInterval };
+            window.statusMonitorIntervals = {};
             
             // Make pollStatus available globally for manual refresh
             window.refreshBuildStatus = pollStatus;
