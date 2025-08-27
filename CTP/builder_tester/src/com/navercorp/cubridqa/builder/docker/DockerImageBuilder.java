@@ -1,7 +1,7 @@
 /**
  * Copyright (c) 2016, Search Solution Corporation. All rights reserved.
  */
-package com.navercorp.cubridqa.builder;
+package com.navercorp.cubridqa.builder.docker;
 
 import java.io.*;
 import java.nio.file.*;
@@ -9,6 +9,8 @@ import java.nio.file.attribute.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.logging.*;
+
+import com.navercorp.cubridqa.builder.BuilderConfig;
 
 /**
  * DockerImageBuilder - Builds and manages Docker images with pre-installed CUBRID builds

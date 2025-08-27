@@ -12,6 +12,7 @@ import com.sun.net.httpserver.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
+import com.navercorp.cubridqa.builder.docker.DockerUtils;
 
 /**
  * Builder - Receives build requests and builds CUBRID at specified commits

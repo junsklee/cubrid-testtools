@@ -15,9 +15,9 @@ import com.navercorp.cubridqa.builder.cache.BuildCache;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
 import com.navercorp.cubridqa.builder.logging.LogConfig;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
-import com.navercorp.cubridqa.builder.DockerTesterManager;
-import com.navercorp.cubridqa.builder.DockerImageBuilder;
-import com.navercorp.cubridqa.builder.DockerUtils;
+import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
+import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
+import com.navercorp.cubridqa.builder.docker.DockerUtils;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.File;
@@ -28,10 +28,21 @@ import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
 /**
- * Refactored Tester that assembles all extracted components while maintaining 100% behavior parity.
- * This class serves as the main entry point and dependency injector for the modularized tester architecture.
+ * Tester - Modular tester implementation with dependency injection
+ * 
+ * This is the main entry point for the tester service with a clean, modular 
+ * architecture that provides comprehensive test execution capabilities.
+ * 
+ * Key architectural features:
+ * - Dependency injection pattern for loose coupling
+ * - Strategy pattern for execution methods (Direct/Docker/Optimized)
+ * - Builder pattern for DTOs (TestRequest/TestResult)
+ * - Clean separation of concerns across focused components
+ * 
+ * Provides comprehensive test execution with retry logic, flaky detection,
+ * build caching, git synchronization, and multi-level logging.
  */
-public class TesterRefactored {
+public class Tester {
     private final Config config;
     private final Logger logger;
     private final boolean useDocker;
@@ -59,9 +70,9 @@ public class TesterRefactored {
     private final Object dockerManager; // DockerTesterManager
     private final Object imageBuilder; // DockerImageBuilder
 
-    public TesterRefactored(Config config) throws IOException {
+    public Tester(Config config) throws IOException {
         this.config = config;
-        this.logger = Logger.getLogger(TesterRefactored.class.getName());
+        this.logger = Logger.getLogger(Tester.class.getName());
         
         // Initialize request logging
         try {
@@ -160,10 +171,10 @@ public class TesterRefactored {
         try {
             String configFile = "conf/tester.conf";
             Config config = new Config(configFile);
-            TesterRefactored tester = new TesterRefactored(config);
+            Tester tester = new Tester(config);
             tester.start();
         } catch (Exception e) {
-            Logger.getLogger(TesterRefactored.class.getName()).severe("Failed to start tester: " + e.getMessage());
+            Logger.getLogger(Tester.class.getName()).severe("Failed to start tester: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }

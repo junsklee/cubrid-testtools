@@ -8,6 +8,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.logging.*;
 import com.navercorp.cubridqa.builder.logging.*;
+import com.navercorp.cubridqa.builder.docker.DockerUtils;
 
 /**
  * DockerBuildManager - Manages CUBRID builds within Docker containers

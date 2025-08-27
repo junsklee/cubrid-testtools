@@ -6,7 +6,7 @@ A comprehensive, modular test execution service for CUBRID database testing. Thi
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    TesterRefactored                     │
+│                       Tester                           │
 │                   (Main Entry Point)                   │
 └─────────────────┬───────────────────────────────────────┘
                   │
@@ -34,7 +34,7 @@ A comprehensive, modular test execution service for CUBRID database testing. Thi
 
 ```
 src/com/navercorp/cubridqa/builder/
-├── TesterRefactored.java              # Main entry point with dependency injection
+├── Tester.java                        # Main entry point with dependency injection
 ├── tester/
 │   ├── README.md                      # This file - comprehensive documentation
 │   ├── TestOrchestrator.java          # Test coordination and retry logic
@@ -67,6 +67,10 @@ src/com/navercorp/cubridqa/builder/
 │   └── ShellTcSync.java               # Git repository synchronization
 ├── config/
 │   └── Config.java                    # Configuration class alias
+├── docker/
+│   ├── DockerTesterManager.java       # Docker container management
+│   ├── DockerImageBuilder.java        # Optimized Docker image creation
+│   └── DockerUtils.java               # Docker utility operations
 ├── http/
 │   └── HttpUtils.java                 # HTTP utility functions
 ├── logging/
@@ -277,8 +281,8 @@ test.defaultRunMode=until-pass
 
 #### Dependency Injection Pattern
 ```java
-// TesterRefactored constructor assembles components
-public TesterRefactored(Config config) {
+// Tester constructor assembles components
+public Tester(Config config) {
     // Create infrastructure components
     this.buildCache = new BuildCache(config, logger);
     this.shellTcSync = new ShellTcSync(config, logger);
@@ -325,7 +329,7 @@ TestResult result = TestResult.builder()
 
 #### Custom HTTP Endpoints
 1. **Create Handler implementing HttpHandler**
-2. **Register in TesterRefactored**
+2. **Register in Tester**
 
 #### Build Cache Extensions
 1. **Custom Cache Implementation**

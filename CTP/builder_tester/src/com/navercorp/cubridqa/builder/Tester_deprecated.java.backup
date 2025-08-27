@@ -28,7 +28,7 @@ import com.navercorp.cubridqa.builder.impl.MattermostSender;
  * - Test case directories are copied to prevent shared volume conflicts
  * - Database operations are isolated per container
  */
-public class Tester {
+public class Tester_deprecated {
     private static final Logger logger = Logger.getLogger(Tester.class.getName());
     
     private final BuilderConfig config;

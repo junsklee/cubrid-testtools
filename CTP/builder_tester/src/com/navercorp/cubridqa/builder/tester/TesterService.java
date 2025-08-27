@@ -1,8 +1,8 @@
 package com.navercorp.cubridqa.builder.tester;
 
 import com.navercorp.cubridqa.builder.BuilderConfig;
-import com.navercorp.cubridqa.builder.DockerTesterManager;
-import com.navercorp.cubridqa.builder.DockerImageBuilder;
+import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
+import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
 import com.navercorp.cubridqa.builder.logging.LogConfig;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.logs.LogLocator;

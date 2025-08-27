@@ -1,7 +1,7 @@
 /**
  * Copyright (c) 2016, Search Solution Corporation. All rights reserved.
  */
-package com.navercorp.cubridqa.builder;
+package com.navercorp.cubridqa.builder.docker;
 
 import java.io.*;
 import java.nio.file.*;
