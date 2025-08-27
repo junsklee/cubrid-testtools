@@ -330,8 +330,8 @@ public class Tester {
                     lastResult.put("attemptLogMetadata", attemptLogMetadata);
                     return lastResult;
                 }
-                // If we've only seen passes and we have sufficient data (at least 2 passes), exit as stable
-                else if (!sawFailure && attempt >= Math.max(2, minRuns)) {
+                // If we've only seen passes and we have sufficient data, exit as stable
+                else if (!sawFailure && attempt >= minRuns) {
                     lastResult.put("attempts", attempt);
                     testLogger.info("Test appears stable - only passes in " + attempt + " attempts");
                     lastResult.put("attemptLogFiles", attemptLogFiles);
