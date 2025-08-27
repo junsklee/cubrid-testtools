@@ -284,7 +284,7 @@ public class TestOrchestrator {
     private JSONObject convertToJSONObject(TestResult result) {
         JSONObject json = new JSONObject();
         json.put("test", result.getTestName());
-        json.put("status", result.getStatus().getValue());
+        json.put("status", result.getStatus());
         
         if (result.getMessage() != null) {
             json.put("message", result.getMessage());

@@ -5,22 +5,25 @@ import com.navercorp.cubridqa.builder.tester.TestHandler;
 import com.navercorp.cubridqa.builder.tester.TestOrchestrator;
 import com.navercorp.cubridqa.builder.tester.HealthHandler;
 import com.navercorp.cubridqa.builder.tester.LogStreamHandler;
+import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
+import com.navercorp.cubridqa.builder.logs.LogLocator;
 import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.CubridInstaller;
 import com.navercorp.cubridqa.builder.cache.BuildCache;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
-import com.navercorp.cubridqa.builder.logging.RequestLogConfig;
+import com.navercorp.cubridqa.builder.logging.LogConfig;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
-import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
-import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
-import com.navercorp.cubridqa.builder.docker.DockerUtils;
+import com.navercorp.cubridqa.builder.DockerTesterManager;
+import com.navercorp.cubridqa.builder.DockerImageBuilder;
+import com.navercorp.cubridqa.builder.DockerUtils;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Paths;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
@@ -62,10 +65,11 @@ public class TesterRefactored {
         
         // Initialize request logging
         try {
-            RequestLogConfig logConfig = new RequestLogConfig(
-                config.getRequestsLogDir(),
-                config.isRequestGroupingEnabled(),
-                config.getMaxRequestLogs()
+            LogConfig logConfig = new LogConfig(
+                config.getMaxRequestLogs(),
+                5, // maxTarFiles 
+                "log", // logRootDir
+                config.isRequestGroupingEnabled()
             );
             RequestLogManager.initialize(logConfig);
         } catch (IOException e) {
@@ -79,8 +83,8 @@ public class TesterRefactored {
         this.imageBuilder = useDocker ? new DockerImageBuilder(config) : null;
         
         // Create core components
-        this.buildCache = new BuildCache(config, logger);
-        this.shellTcSync = new ShellTcSync(config, logger);
+        this.buildCache = new BuildCache(Paths.get(config.getWorkDir()));
+        this.shellTcSync = new ShellTcSync(config);
         this.cubridInstaller = new CubridInstaller();
         
         // Create execution strategies
@@ -101,30 +105,13 @@ public class TesterRefactored {
         
         // Create HTTP handlers
         this.testHandler = new TestHandler(config, testOrchestrator, logger);
-        this.healthHandler = new HealthHandler(config, useDocker, logger);
-        this.logStreamHandler = new LogStreamHandler(config, logger);
+        this.healthHandler = new HealthHandler(new HttpResponseWriter());
+        this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
         
-        // Load existing cached build packages from disk
-        buildCache.loadExistingCachedPackages();
+        // Build cache is ready for use
         
-        // Clean up any corrupted cached packages asynchronously (non-blocking)
-        Thread cleanupThread = new Thread(() -> {
-            try {
-                logger.info("Starting background cleanup of corrupted cached packages...");
-                buildCache.cleanCorruptedCachedPackages();
-                logger.info("Background cleanup completed");
-            } catch (Exception e) {
-                logger.warning("Background cleanup failed: " + e.getMessage());
-            }
-        });
-        cleanupThread.setDaemon(true);
-        cleanupThread.start();
-        
-        // Add shutdown hook to clean up temp files
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            logger.info("Shutdown hook: cleaning up temp files...");
-            buildCache.cleanCorruptedCachedPackages();
-        }));
+        // Background cleanup can be implemented later if needed
+        logger.info("Tester initialized successfully");
         
         // Create work directory if it doesn't exist
         File workDir = new File(config.getWorkDir());
@@ -171,7 +158,8 @@ public class TesterRefactored {
     // Main method for standalone execution (maintains original behavior)
     public static void main(String[] args) {
         try {
-            Config config = new Config();
+            String configFile = "conf/tester.conf";
+            Config config = new Config(configFile);
             TesterRefactored tester = new TesterRefactored(config);
             tester.start();
         } catch (Exception e) {

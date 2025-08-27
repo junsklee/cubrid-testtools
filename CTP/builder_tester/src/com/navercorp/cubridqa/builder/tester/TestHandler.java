@@ -3,7 +3,8 @@ package com.navercorp.cubridqa.builder.tester;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
-import com.navercorp.cubridqa.builder.http.MultipartHelper;
+import com.navercorp.cubridqa.builder.MultipartHelper;
+import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
 import com.navercorp.cubridqa.builder.http.HttpUtils;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -23,11 +24,13 @@ public class TestHandler implements HttpHandler {
     private final Config config;
     private final TestOrchestrator orchestrator;
     private final Logger logger;
+    private final HttpResponseWriter responseWriter;
 
     public TestHandler(Config config, TestOrchestrator orchestrator, Logger logger) {
         this.config = config;
         this.orchestrator = orchestrator;
         this.logger = logger;
+        this.responseWriter = new HttpResponseWriter();
     }
 
     @Override
@@ -113,13 +116,10 @@ public class TestHandler implements HttpHandler {
                 }
                 
                 // Send multipart response with JSON and log files
-                MultipartHelper.sendMultipartResponse(exchange, httpStatus, responsePayload, files);
-                logger.info("Sent multipart response with " + files.size() + " log files: " + responsePayload.toString());
+                responseWriter.sendMultipart(exchange, httpStatus, responsePayload, logFilesToSend);
             } else {
                 // Send regular JSON response (backward compatibility or no logs)
-                exchange.getResponseHeaders().set("Content-Type", "application/json");
-                HttpUtils.sendResponse(exchange, httpStatus, responsePayload.toString());
-                logger.info("Sent JSON response: " + responsePayload.toString());
+                responseWriter.sendJson(exchange, httpStatus, responsePayload);
             }
         } catch (IOException ioe) {
             String msg = ioe.getMessage() == null ? "" : ioe.getMessage();

@@ -39,30 +39,44 @@ src/com/navercorp/cubridqa/builder/
 │   ├── README.md                      # This file - comprehensive documentation
 │   ├── TestOrchestrator.java          # Test coordination and retry logic
 │   ├── TestHandler.java               # HTTP request handling
-│   ├── dtos/
-│   │   ├── TestRequest.java           # Request DTO with builder pattern
-│   │   ├── TestResult.java            # Response DTO with attempt metadata
-│   │   └── TestStatus.java            # Status enumeration
-│   ├── exec/
-│   │   ├── DirectExecutor.java        # Host-based test execution
-│   │   ├── StandardDockerExecutor.java# Standard containerized execution
-│   │   └── OptimizedDockerExecutor.java# Performance-optimized containers
-│   ├── cache/
-│   │   └── BuildCache.java            # Thread-safe build package caching
-│   ├── git/
-│   │   └── ShellTcSync.java           # Git repository synchronization
-│   ├── cubrid/
-│   │   └── CubridInstaller.java       # CUBRID installation management
-│   ├── docker/
-│   │   ├── DockerImageBuilder.java    # Optimized Docker image creation
-│   │   ├── DockerManager.java         # Container lifecycle management
-│   │   └── DockerUtils.java           # Docker utility operations
-│   ├── utils/
-│   │   ├── HttpUtils.java             # HTTP response utilities
-│   │   ├── ProcessIO.java             # Process input/output handling
-│   │   └── CtpEnvResolver.java        # CTP environment resolution
-│   └── config/
-│       └── TesterConfig.java          # Configuration management
+│   ├── TestRequest.java               # Request DTO with builder pattern
+│   ├── TestResult.java                # Response DTO with attempt metadata
+│   ├── TestStatus.java                # Status enumeration
+│   ├── HealthHandler.java             # Health check endpoint handler
+│   ├── LogStreamHandler.java          # Log file streaming handler
+│   ├── HttpResponseWriter.java        # HTTP response utilities
+│   ├── ApiServer.java                 # API server management
+│   ├── TesterService.java            # Service lifecycle management
+│   ├── ClientAbortDetector.java      # Client disconnection detection
+│   ├── ExecutionTimeParser.java      # Test execution time parsing
+│   ├── RunMode.java                   # Test run mode enumeration
+│   └── SafeIo.java                    # Safe I/O operations
+├── exec/
+│   ├── DirectExecutor.java            # Host-based test execution
+│   ├── StandardDockerExecutor.java    # Standard containerized execution
+│   ├── OptimizedDockerExecutor.java   # Performance-optimized containers
+│   ├── CubridInstaller.java           # CUBRID installation management
+│   ├── ExecutorStrategy.java          # Execution strategy interface
+│   ├── ProcessIO.java                 # Process input/output handling
+│   ├── CtpEnvResolver.java            # CTP environment resolution
+│   ├── DockerCtl.java                 # Docker control utilities
+│   └── EnvScriptFactory.java          # Environment script generation
+├── cache/
+│   └── BuildCache.java                # Thread-safe build package caching
+├── git/
+│   └── ShellTcSync.java               # Git repository synchronization
+├── config/
+│   └── Config.java                    # Configuration class alias
+├── http/
+│   └── HttpUtils.java                 # HTTP utility functions
+├── logging/
+│   ├── LogConfig.java                 # Logging configuration
+│   ├── RequestLogManager.java         # Request-scoped logging
+│   ├── RequestContext.java            # Request context management
+│   └── LogRotationManager.java        # Log file rotation
+└── logs/
+    ├── LogLocator.java                # Log file location services
+    └── RequestLogBridge.java          # Bridge for request logging
 ```
 
 ## 🚀 Key Features

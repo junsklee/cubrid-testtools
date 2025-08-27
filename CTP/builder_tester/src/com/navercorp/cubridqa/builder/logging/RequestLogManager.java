@@ -132,6 +132,20 @@ public class RequestLogManager {
     }
     
     /**
+     * Get the request log directory path for a specific request ID
+     */
+    public Path getRequestLogDirectory(String requestId) {
+        return Paths.get(config.getRequestDir(requestId));
+    }
+    
+    /**
+     * Check if request grouping is enabled
+     */
+    public boolean isRequestGroupingEnabled() {
+        return config.isRequestGroupingEnabled();
+    }
+    
+    /**
      * Custom formatter that includes request ID
      */
     private static class RequestLogFormatter extends Formatter {
