@@ -208,7 +208,18 @@ public class BuilderTask {
             final String testRequestId = RequestContext.getRequestId();
             
             List<Future<JSONObject>> futuresTests = new ArrayList<>();
-            for (Map.Entry<String, List<Callable<JSONObject>>> entry : workerTestQueues.entrySet()) {
+            
+            // Process workers in priority order: local testers first, then remote testers
+            // This ensures local tests start immediately without waiting for remote workers
+            List<Map.Entry<String, List<Callable<JSONObject>>>> sortedWorkers = new ArrayList<>(workerTestQueues.entrySet());
+            sortedWorkers.sort((e1, e2) -> {
+                boolean isLocal1 = isLocalTester(e1.getKey());
+                boolean isLocal2 = isLocalTester(e2.getKey());
+                // Local testers first (true > false in boolean comparison gives false, so reverse)
+                return Boolean.compare(isLocal2, isLocal1);
+            });
+            
+            for (Map.Entry<String, List<Callable<JSONObject>>> entry : sortedWorkers) {
                 String worker = entry.getKey();
                 List<Callable<JSONObject>> workerTests = entry.getValue();
                 
