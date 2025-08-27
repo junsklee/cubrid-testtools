@@ -1,0 +1,156 @@
+package com.navercorp.cubridqa.builder.git;
+
+import com.navercorp.cubridqa.builder.BuilderConfig;
+import com.navercorp.cubridqa.builder.exec.ProcessIO;
+import java.io.*;
+import java.util.logging.Logger;
+
+public class ShellTcSync {
+    private static final Object SHELL_TC_SYNC_LOCK = new Object();
+    
+    private final BuilderConfig config;
+    
+    public ShellTcSync(BuilderConfig config) {
+        this.config = config;
+    }
+    
+    /**
+     * Ensure the shell testcases repository at shell_tc_dir is checked out to the configured
+     * branch using the preferred remote (upstream), falling back to origin when needed.
+     * This only applies to the shell testcases repo and does not affect other repositories.
+     */
+    public void sync(Logger log) throws IOException, InterruptedException {
+        synchronized (SHELL_TC_SYNC_LOCK) {
+            String repoPath = config.getShellTcDir();
+            String targetBranch = config.getShellTcBranch();
+            File repoDir = new File(repoPath);
+            if (!repoDir.exists() || !repoDir.isDirectory()) {
+                log.warning("shell_tc_dir does not exist: " + repoPath + "; skipping sync");
+                return;
+            }
+
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(repoDir);
+
+            // Verify git repo
+            if (ProcessIO.runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
+                log.warning("shell_tc_dir is not a git repository: " + repoPath + "; skipping sync");
+                return;
+            }
+
+            // Determine preferred remote from config (default: upstream), fallback to origin if missing
+            String preferred = config.getShellTcPreferredRemote();
+            if (preferred == null || preferred.trim().isEmpty()) {
+                preferred = "upstream";
+            }
+            String chosenRemote = preferred;
+            if (ProcessIO.runAndExitCode(pb, new String[]{"git", "remote", "get-url", preferred}) != 0) {
+                chosenRemote = "origin";
+                if (ProcessIO.runAndExitCode(pb, new String[]{"git", "remote", "get-url", chosenRemote}) != 0) {
+                    log.warning("Neither 'upstream' nor 'origin' remotes are configured in " + repoPath + "; skipping sync");
+                    return;
+                }
+            }
+
+            // Prefer upstream if it has the branch; otherwise use origin if available
+            if (!remoteBranchExists(pb, chosenRemote, targetBranch)) {
+                if (!"origin".equals(chosenRemote)
+                    && ProcessIO.runAndExitCode(pb, new String[]{"git", "remote", "get-url", "origin"}) == 0
+                    && remoteBranchExists(pb, "origin", targetBranch)) {
+                    chosenRemote = "origin";
+                } else {
+                    log.warning("Branch '" + targetBranch + "' not found on remote '" + chosenRemote + "'. Skipping sync.");
+                    return;
+                }
+            }
+
+            log.info("Syncing shell testcases repo: branch='" + targetBranch + "' via remote='" + chosenRemote + "'");
+
+            try {
+                // Fetch just the target branch to reduce traffic
+                ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
+                // Create/reset local branch to remote branch
+                ProcessIO.runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
+                // Ensure clean state (avoid untracked noise)
+                ProcessIO.runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+                // Hard reset to remote branch to avoid local drift
+                ProcessIO.runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+            } catch (IOException e) {
+                // If a git index.lock is present, avoid interfering unless it appears stale
+                if (isGitLockPresent(repoDir)) {
+                    long staleThresholdMs = 10L * 60L * 1000L; // 10 minutes
+                    if (isLikelyStaleGitLock(repoDir, staleThresholdMs)) {
+                        log.warning("Detected stale git index lock; removing and retrying sync once...");
+                        removeStaleGitIndexLock(repoDir, log);
+                        // Retry once after cleanup
+                        ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", chosenRemote, targetBranch});
+                        ProcessIO.runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
+                        ProcessIO.runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+                        ProcessIO.runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+                    } else {
+                        log.warning("Git index.lock present; another git process may be running. Skipping repo sync this run to avoid interference.");
+                    }
+                } else {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    /**
+     * Checks if a remote branch exists by using 'git ls-remote --heads <remote> <branch>'.
+     */
+    public boolean remoteBranchExists(ProcessBuilder pb, String remote, String branch) throws IOException, InterruptedException {
+        // Use git ls-remote --heads <remote> <branch> and check for any output lines
+        ProcessBuilder lp = new ProcessBuilder(
+            "git", "ls-remote", "--heads", remote, branch
+        );
+        lp.directory(pb.directory());
+        lp.redirectErrorStream(true);
+        Process p = lp.start();
+        boolean found = false;
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (!line.trim().isEmpty()) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        p.waitFor();
+        return found;
+    }
+
+    public boolean isGitLockError(IOException e) {
+        String msg = e.getMessage();
+        if (msg == null) return false;
+        return msg.contains("index.lock") || msg.contains(".lock");
+    }
+
+    public boolean isGitLockPresent(File repoDir) {
+        File gitDir = new File(repoDir, ".git");
+        File indexLock = new File(gitDir, "index.lock");
+        return indexLock.exists();
+    }
+
+    public boolean isLikelyStaleGitLock(File repoDir, long staleAgeMillis) {
+        File gitDir = new File(repoDir, ".git");
+        File indexLock = new File(gitDir, "index.lock");
+        if (!indexLock.exists()) return false;
+        long age = System.currentTimeMillis() - indexLock.lastModified();
+        return age >= staleAgeMillis;
+    }
+
+    public void removeStaleGitIndexLock(File repoDir, Logger log) {
+        File gitDir = new File(repoDir, ".git");
+        File indexLock = new File(gitDir, "index.lock");
+        if (indexLock.exists()) {
+            if (indexLock.delete()) {
+                log.warning("Removed stale git index lock: " + indexLock.getAbsolutePath());
+            } else {
+                log.warning("Failed to remove stale git index lock: " + indexLock.getAbsolutePath());
+            }
+        }
+    }
+}
