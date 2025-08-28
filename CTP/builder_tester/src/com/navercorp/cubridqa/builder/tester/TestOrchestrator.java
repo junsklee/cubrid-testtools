@@ -188,6 +188,9 @@ public class TestOrchestrator {
         lastResult.put("attemptLogFiles", attemptLogFiles);
         lastResult.put("attemptLogMetadata", attemptLogMetadata);
         lastResult.put("runMode", runMode);
+        
+        // Synchronously verify all log files are accessible before sending response
+        verifyAllLogFilesAccessible(attemptLogFiles, testLogger);
 
         // Check for flakiness when completing without early exit
         if (runMode.equals("until-pass") && sawFailure && sawPass) {
@@ -220,6 +223,70 @@ public class TestOrchestrator {
         }
 
         return lastResult;
+    }
+    
+    /**
+     * Synchronously verify that all log files are accessible via HTTP before sending response.
+     * This ensures the builder can fetch them immediately without timing issues.
+     */
+    private void verifyAllLogFilesAccessible(List<Path> logFiles, Logger testLogger) {
+        if (logFiles == null || logFiles.isEmpty()) {
+            return; // Nothing to verify
+        }
+        
+        testLogger.info("Verifying " + logFiles.size() + " log files are accessible before sending response...");
+        
+        // Create a LogLocator to test file accessibility
+        com.navercorp.cubridqa.builder.logs.LogLocator logLocator = 
+            new com.navercorp.cubridqa.builder.logs.LogLocator();
+        
+        int timeoutSeconds = config.getLogFileVerificationTimeoutSeconds();
+        long startTime = System.currentTimeMillis();
+        long timeoutMs = timeoutSeconds * 1000L;
+        
+        // Verify each log file
+        for (Path logFile : logFiles) {
+            String fileName = logFile.getFileName().toString();
+            testLogger.info("Verifying log file accessibility: " + fileName);
+            
+            boolean verified = false;
+            int attempts = 0;
+            
+            while (!verified && (System.currentTimeMillis() - startTime) < timeoutMs) {
+                attempts++;
+                
+                try {
+                    Path foundFile = logLocator.findLogFile(fileName);
+                    if (foundFile != null && Files.exists(foundFile) && Files.isReadable(foundFile)) {
+                        // Additional check: try to read file size to ensure it's fully written
+                        long fileSize = Files.size(foundFile);
+                        testLogger.info("Log file verified accessible: " + fileName + 
+                                       " (" + fileSize + " bytes, attempt " + attempts + ")");
+                        verified = true;
+                        break;
+                    }
+                } catch (Exception e) {
+                    testLogger.fine("Log file verification attempt " + attempts + " failed for " + fileName + ": " + e.getMessage());
+                }
+                
+                // Wait before next attempt (exponential backoff: 100ms, 200ms, 400ms, etc.)
+                try {
+                    long delay = Math.min(100L * (1L << (attempts - 1)), 1000L); // Cap at 1 second
+                    Thread.sleep(delay);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    testLogger.warning("Log file verification interrupted for " + fileName);
+                    return;
+                }
+            }
+            
+            if (!verified) {
+                testLogger.warning("Log file verification timed out after " + timeoutSeconds + 
+                                  "s for: " + fileName + " (attempts: " + attempts + ")");
+            }
+        }
+        
+        testLogger.info("Log file verification completed");
     }
 
     private JSONObject runTest(JSONObject requestJson, Logger testLogger) throws Exception {

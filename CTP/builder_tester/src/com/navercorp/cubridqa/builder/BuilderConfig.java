@@ -41,6 +41,7 @@ public class BuilderConfig {
     private static final String TEST_READ_TIMEOUT_MINUTES = "test_read_timeout_minutes"; // Tester: HTTP read timeout for /test
     private static final String LOG_FETCH_CONNECT_TIMEOUT_SECONDS = "log_fetch_connect_timeout_seconds";
     private static final String LOG_FETCH_READ_TIMEOUT_SECONDS = "log_fetch_read_timeout_seconds";
+    private static final String LOG_FILE_VERIFICATION_TIMEOUT_SECONDS = "log_file_verification_timeout_seconds";
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String CCACHE_ENABLED = "ccache_enabled";
     private static final String CCACHE_DIR = "ccache_dir";
@@ -351,6 +352,21 @@ public class BuilderConfig {
             value = Integer.parseInt(properties.getProperty(LOG_FETCH_READ_TIMEOUT_SECONDS, "120"));
         } catch (NumberFormatException e) {
             value = 120;
+        }
+        return Math.max(1, value);
+    }
+    
+    /**
+     * Get the timeout for verifying log file availability after write (in seconds).
+     * This prevents timing issues where files are written but not yet accessible via HTTP.
+     * Default is 5 seconds.
+     */
+    public int getLogFileVerificationTimeoutSeconds() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(LOG_FILE_VERIFICATION_TIMEOUT_SECONDS, "5"));
+        } catch (NumberFormatException e) {
+            value = 5;
         }
         return Math.max(1, value);
     }
