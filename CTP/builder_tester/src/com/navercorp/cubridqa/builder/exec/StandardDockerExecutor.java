@@ -247,7 +247,8 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         
         ProcessIO.StreamReader outputGobbler = new ProcessIO.StreamReader(process.getInputStream(), "DOCKER");
         outputGobbler.start();
-        boolean completed = process.waitFor(30, TimeUnit.MINUTES);
+        int timeoutMinutes = Math.max(1, config.getTestReadTimeoutMinutes());
+        boolean completed = process.waitFor(timeoutMinutes, TimeUnit.MINUTES);
         if (!completed) {
             process.destroyForcibly();
             testLogger.severe("Docker test timeout");
@@ -256,7 +257,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             return TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.EXECUTION_ERROR)
-                .message("Docker test timeout after 30 minutes")
+                .message("Docker test timeout after " + timeoutMinutes + " minutes")
                 .build();
         }
         int exitCode = process.exitValue();

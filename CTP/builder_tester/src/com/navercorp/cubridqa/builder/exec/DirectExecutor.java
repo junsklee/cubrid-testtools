@@ -162,14 +162,15 @@ public class DirectExecutor implements ExecutorStrategy {
         outputGobbler.start();
         errorGobbler.start();
         
-        boolean completed = process.waitFor(30, TimeUnit.MINUTES);
+        int timeoutMinutes = Math.max(1, config.getTestReadTimeoutMinutes());
+        boolean completed = process.waitFor(timeoutMinutes, TimeUnit.MINUTES);
         if (!completed) {
             process.destroyForcibly();
             testLogger.severe("Test timeout");
             return TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.EXECUTION_ERROR)
-                .message("Test timeout after 30 minutes")
+                .message("Test timeout after " + timeoutMinutes + " minutes")
                 .build();
         }
         
