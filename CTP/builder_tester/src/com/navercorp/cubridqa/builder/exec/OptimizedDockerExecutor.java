@@ -36,7 +36,15 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         boolean keepAlive = request.isKeepAlive();
         String containerName = request.getContainerName();
         if (containerName == null || containerName.trim().isEmpty()) {
-            containerName = "tester_opt_" + request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis();
+            // Extract commit hash from Docker image name for container naming
+            String commitHash = "unknown";
+            if (request.getCommitShort() != null && !request.getCommitShort().trim().isEmpty()) {
+                commitHash = request.getCommitShort();
+            }
+            
+            // Generate unique container name with timestamp to avoid conflicts
+            String uniqueId = String.valueOf(System.currentTimeMillis());
+            containerName = "tester_" + commitHash + "_" + request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + uniqueId;
         }
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
