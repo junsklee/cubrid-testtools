@@ -48,6 +48,10 @@ public class BuilderConfig {
     private static final String CCACHE_MAX_SIZE = "ccache_max_size";
     private static final String CCACHE_COMPILERCHECK = "ccache_compilercheck";
     private static final String CCACHE_HARDLINK = "ccache_hardlink";
+    private static final String CCACHE_READONLY_DIRECT = "ccache_readonly_direct";
+    private static final String CCACHE_STATS = "ccache_stats";
+    private static final String CCACHE_NAMESPACE = "ccache_namespace";
+    private static final String CCACHE_SLOPPINESS = "ccache_sloppiness";
     private static final String PARALLEL_JOBS = "parallel_jobs";
     
     public BuilderConfig(String configFile) throws IOException {
@@ -392,6 +396,22 @@ public class BuilderConfig {
     
     public boolean getCcacheHardlink() {
         return Boolean.parseBoolean(properties.getProperty(CCACHE_HARDLINK, "true"));
+    }
+    
+    public boolean getCcacheReadonlyDirect() {
+        return Boolean.parseBoolean(properties.getProperty(CCACHE_READONLY_DIRECT, "false"));
+    }
+    
+    public boolean getCcacheStatsEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(CCACHE_STATS, "true"));
+    }
+    
+    public String getCcacheNamespace() {
+        return properties.getProperty(CCACHE_NAMESPACE, "").trim();
+    }
+    
+    public String getCcacheSloppiness() {
+        return properties.getProperty(CCACHE_SLOPPINESS, "").trim();
     }
     
     public int getParallelJobs() {

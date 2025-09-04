@@ -70,9 +70,14 @@ public class DockerBuildManager {
     
     public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit) 
             throws IOException, InterruptedException {
+        return buildCubrid(commitHash, workDir, buildType, baselineCommit, java.util.Collections.emptyMap());
+    }
+
+    public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, Map<String, String> extraEnv)
+            throws IOException, InterruptedException {
         
         if (!dockerAvailable || !imageReady) {
-            return buildCubridDirect(commitHash, workDir, buildType, baselineCommit);
+            return buildCubridDirect(commitHash, workDir, buildType, baselineCommit, extraEnv);
         }
         
         logger.info("Building CUBRID commit " + commitHash + " in Docker container");
@@ -167,11 +172,28 @@ public class DockerBuildManager {
             baseDockerCmd.add("CCACHE_LOGFILE=/work/.ccache/logs/ccache_" + commitShort + ".log");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_TEMPDIR=/work/.ccache/tmp");
+            // Optional tuning knobs
+            if (config.getCcacheReadonlyDirect()) {
+                baseDockerCmd.add("-e");
+                baseDockerCmd.add("CCACHE_READONLY_DIRECT=1");
+            }
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_STATS=" + (config.getCcacheStatsEnabled() ? "true" : "false"));
+            if (!config.getCcacheNamespace().isEmpty()) {
+                baseDockerCmd.add("-e");
+                baseDockerCmd.add("CCACHE_NAMESPACE=" + config.getCcacheNamespace());
+            }
+            if (!config.getCcacheSloppiness().isEmpty()) {
+                baseDockerCmd.add("-e");
+                baseDockerCmd.add("CCACHE_SLOPPINESS=" + config.getCcacheSloppiness());
+            }
         }
         
         // Add parallel jobs configuration
         baseDockerCmd.add("-e");
         baseDockerCmd.add("MAKEFLAGS=-j" + config.getParallelJobs());
+
+        // No per-build extra environment overrides (reverted)
         
         baseDockerCmd.add(config.getDockerBuildImage());
         // Run build script in login shell to ensure git-worktree is available and PATH updated
@@ -257,13 +279,16 @@ public class DockerBuildManager {
                 writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
                 writer.println("  # Set max size (use -M for compatibility)");
                 writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
-                writer.println("  ccache -z  # Clear statistics");
+                writer.println("  # Optionally reset statistics for measurement");
+                writer.println("  if [ \"${CCACHE_RESET_STATS:-0}\" = \"1\" ]; then ccache -z; fi");
                 writer.println("  # hard_link is controlled via CCACHE_HARDLINK env; avoid unsupported ccache flags on older versions");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
                 writer.println("fi");
                 writer.println();
             }
+
+            // Reverted path normalization flags (keep environment unchanged)
             
             writer.println("# Prepare working directory (prefer host-mounted /work if available), per-commit to avoid collisions");
             writer.println("if [ -d /work ]; then");
@@ -335,11 +360,16 @@ public class DockerBuildManager {
             writer.println("  fi");
             writer.println("}");
             writer.println();
-            writer.println("# Determine if it's a merge commit and apply");
-            writer.println("if git rev-list --parents -n1 \"${COMMIT_HASH}\" | awk '{exit (NF>2)?0:1}'; then");
-            writer.println("  apply_commit \"${COMMIT_HASH}\" true || { echo '[FATAL] Failed to apply commit'; exit 1; }");
+            writer.println("# Optionally skip applying commit (baseline-only warm)");
+            writer.println("if [ \"${BUILD_BASELINE_ONLY:-0}\" = \"1\" ]; then");
+            writer.println("  echo 'BUILD_BASELINE_ONLY=1: building baseline without applying commit'");
             writer.println("else");
-            writer.println("  apply_commit \"${COMMIT_HASH}\" false || { echo '[FATAL] Failed to apply commit'; exit 1; }");
+            writer.println("  # Determine if it's a merge commit and apply");
+            writer.println("  if git rev-list --parents -n1 \"${COMMIT_HASH}\" | awk '{exit (NF>2)?0:1}'; then");
+            writer.println("    apply_commit \"${COMMIT_HASH}\" true || { echo '[FATAL] Failed to apply commit'; exit 1; }");
+            writer.println("  else");
+            writer.println("    apply_commit \"${COMMIT_HASH}\" false || { echo '[FATAL] Failed to apply commit'; exit 1; }");
+            writer.println("  fi");
             writer.println("fi");
             writer.println("git submodule sync --recursive");
             writer.println("git submodule update --init --recursive --checkout --force");
@@ -367,15 +397,17 @@ public class DockerBuildManager {
             if (config.isCcacheEnabled()) {
                 writer.println("# Report ccache statistics after build");
                 writer.println("if command -v ccache &> /dev/null; then");
-                writer.println("  echo 'Ccache status after build:'");
-                writer.println("  ccache -s || true");
+                writer.println("  echo 'Ccache status after build (verbose):'");
+                writer.println("  ccache -s -v || true");
+                writer.println("  echo 'Ccache configuration:'");
+                writer.println("  ccache -p || true");
                 writer.println("fi");
                 writer.println();
             }
             
-            writer.println("# Create package");
+            writer.println("# Create package (can be skipped during baseline warm)");
             writer.println("cd " + config.getBuildDir());
-            writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
+            writer.println("if [ \"${BUILD_SKIP_PACKAGE:-0}\" != \"1\" ]; then tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .; fi");
             writer.println();
             writer.println("# Cleanup temporary branch and workspace");
             writer.println("cd \"$target/repo\"");
@@ -411,29 +443,31 @@ public class DockerBuildManager {
         try {
             ProcessBuilder wtPb = new ProcessBuilder();
             wtPb.directory(wtDir);
-            // detect merge commit
+            // Detect merge commit
             String parents = executeAndGet(repoPb, "git", "rev-list", "--parents", "-n1", commitHash).trim();
             boolean isMerge = parents.split("\\s+").length > 2;
             
             boolean cherryPickSucceeded = false;
             Exception cherryPickException = null;
             
-            // First attempt: try cherry-pick
-            if (isMerge) {
-                try { 
-                    executeCommand(wtPb, "git", "cherry-pick", "-m", "1", "-x", commitHash);
-                    cherryPickSucceeded = true;
-                } catch (Exception e) { 
-                    cherryPickException = e;
-                    try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} 
-                }
-            } else {
-                try { 
-                    executeCommand(wtPb, "git", "cherry-pick", "-x", commitHash);
-                    cherryPickSucceeded = true;
-                } catch (Exception e) { 
-                    cherryPickException = e;
-                    try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} 
+            {
+                // First attempt: try cherry-pick
+                if (isMerge) {
+                    try { 
+                        executeCommand(wtPb, "git", "cherry-pick", "-m", "1", "-x", commitHash);
+                        cherryPickSucceeded = true;
+                    } catch (Exception e) { 
+                        cherryPickException = e;
+                        try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} 
+                    }
+                } else {
+                    try { 
+                        executeCommand(wtPb, "git", "cherry-pick", "-x", commitHash);
+                        cherryPickSucceeded = true;
+                    } catch (Exception e) { 
+                        cherryPickException = e;
+                        try { executeCommand(wtPb, "git", "cherry-pick", "--abort"); } catch (Exception ignore) {} 
+                    }
                 }
             }
             
@@ -500,15 +534,24 @@ public class DockerBuildManager {
                 wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
                 wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
                 // Improve reuse across different work dirs and enable logging
-                wtPb.environment().put("CCACHE_BASEDIR", wtDir.getAbsolutePath());
+                wtPb.environment().put("CCACHE_BASEDIR", new File(config.getWorkDir()).getAbsolutePath());
                 wtPb.environment().put("CCACHE_NOHASHDIR", "1");
                 wtPb.environment().put("CCACHE_LOGFILE", new File(config.getCcacheDir(), "logs/ccache_" + commitShort + ".log").getAbsolutePath());
+                if (config.getCcacheReadonlyDirect()) {
+                    wtPb.environment().put("CCACHE_READONLY_DIRECT", "1");
+                }
+                wtPb.environment().put("CCACHE_STATS", config.getCcacheStatsEnabled() ? "true" : "false");
+                if (!config.getCcacheNamespace().isEmpty()) {
+                    wtPb.environment().put("CCACHE_NAMESPACE", config.getCcacheNamespace());
+                }
+                if (!config.getCcacheSloppiness().isEmpty()) {
+                    wtPb.environment().put("CCACHE_SLOPPINESS", config.getCcacheSloppiness());
+                }
                 
                 // Initialize ccache
                 try {
                     // Set max size with legacy-compatible -M
                     executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize());
-                    executeCommand(wtPb, "ccache", "-z");
                     // Ensure hard_link is configured explicitly with fallback
                     // Older ccache (3.1.6) does not support --set-config or -o; rely on CCACHE_HARDLINK env only
                     // TODO: Implement --set-config and/or -o for hard_link when build environment is updated
@@ -531,8 +574,12 @@ public class DockerBuildManager {
             // Report ccache statistics after build
             if (config.isCcacheEnabled()) {
                 try {
-                    String stats = executeAndGet(wtPb, "ccache", "-s");
+                    String stats = executeAndGet(wtPb, "ccache", "-s", "-v");
                     logger.info("Ccache statistics after build:\n" + stats);
+                    try {
+                        String conf = executeAndGet(wtPb, "ccache", "-p");
+                        logger.info("Ccache configuration after build:\n" + conf);
+                    } catch (Exception ignore) {}
                 } catch (Exception e) {
                     logger.warning("Failed to get ccache statistics: " + e.getMessage());
                 }

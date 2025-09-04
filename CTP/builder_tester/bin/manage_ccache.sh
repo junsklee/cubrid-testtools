@@ -11,27 +11,33 @@ if [ -f "$CONFIG_FILE" ]; then
     CCACHE_ENABLED=$(grep "^ccache_enabled=" "$CONFIG_FILE" | cut -d'=' -f2)
     CCACHE_DIR=$(grep "^ccache_dir=" "$CONFIG_FILE" | cut -d'=' -f2 | sed "s|~|$HOME|g")
     CCACHE_MAX_SIZE=$(grep "^ccache_max_size=" "$CONFIG_FILE" | cut -d'=' -f2)
+    DOCKER_HOST_ROOT=$(grep "^docker_host_root=" "$CONFIG_FILE" | cut -d'=' -f2 | sed "s|~|$HOME|g")
 else
     echo "Warning: Configuration file not found at $CONFIG_FILE"
     CCACHE_ENABLED="true"
     CCACHE_DIR="$HOME/ccache"
     CCACHE_MAX_SIZE="5G"
+    DOCKER_HOST_ROOT="$HOME/docker-work"
 fi
 
+# Derive Docker cache directory used by DockerBuildManager (mounted as /work/.ccache)
+DOCKER_CCACHE_DIR="${DOCKER_HOST_ROOT%/}/work/.ccache"
+
 usage() {
-    echo "Usage: $0 {install|setup|status|clear|stats}"
+    echo "Usage: $0 {install|setup|status|clear|stats [host|docker|all]}"
     echo
     echo "Commands:"
     echo "  install  - Install ccache on the system"
     echo "  setup    - Set up ccache directory and configuration"
     echo "  status   - Show ccache status and statistics"
     echo "  clear    - Clear ccache contents"
-    echo "  stats    - Show detailed ccache statistics"
+    echo "  stats    - Show detailed ccache statistics (host, docker, or all)"
     echo
     echo "Current configuration:"
     echo "  Enabled: $CCACHE_ENABLED"
     echo "  Directory: $CCACHE_DIR"
     echo "  Max Size: $CCACHE_MAX_SIZE"
+    echo "  Docker host root: $DOCKER_HOST_ROOT"
     exit 1
 }
 
@@ -220,10 +226,44 @@ show_stats() {
         echo "Error: ccache is not installed"
         return 1
     fi
-    
-    export CCACHE_DIR="$CCACHE_DIR"
+
+    local which="${1:-auto}"
     echo "=== Detailed Ccache Statistics ==="
-    ccache -s
+
+    # helper: print stats for a given directory with a label
+    _print_stats_for_dir() {
+        local dir="$1"; local label="$2"
+        if [ -z "$dir" ]; then return; fi
+        if [ ! -d "$dir" ]; then
+            echo "[$label] Cache directory not found: $dir"
+            return
+        fi
+        echo "[$label] CCACHE_DIR=$dir"
+        CCACHE_DIR="$dir" ccache -s -v | sed 's/^/  /'
+        echo
+    }
+
+    case "$which" in
+        host)
+            _print_stats_for_dir "$CCACHE_DIR" "host"
+            ;;
+        docker)
+            _print_stats_for_dir "$DOCKER_CCACHE_DIR" "docker"
+            ;;
+        all)
+            _print_stats_for_dir "$CCACHE_DIR" "host"
+            _print_stats_for_dir "$DOCKER_CCACHE_DIR" "docker"
+            ;;
+        auto|*)
+            # If docker cache exists, show both; else show host
+            if [ -d "$DOCKER_CCACHE_DIR" ]; then
+                _print_stats_for_dir "$CCACHE_DIR" "host"
+                _print_stats_for_dir "$DOCKER_CCACHE_DIR" "docker"
+            else
+                _print_stats_for_dir "$CCACHE_DIR" "host"
+            fi
+            ;;
+    esac
 }
 
 # Main script
@@ -241,7 +281,7 @@ case "$1" in
         clear_ccache
         ;;
     stats)
-        show_stats
+        show_stats "$2"
         ;;
     *)
         usage
