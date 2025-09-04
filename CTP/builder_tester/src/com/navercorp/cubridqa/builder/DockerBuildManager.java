@@ -70,14 +70,9 @@ public class DockerBuildManager {
     
     public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit) 
             throws IOException, InterruptedException {
-        return buildCubrid(commitHash, workDir, buildType, baselineCommit, java.util.Collections.emptyMap());
-    }
-
-    public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, Map<String, String> extraEnv)
-            throws IOException, InterruptedException {
         
         if (!dockerAvailable || !imageReady) {
-            return buildCubridDirect(commitHash, workDir, buildType, baselineCommit, extraEnv);
+            return buildCubridDirect(commitHash, workDir, buildType, baselineCommit);
         }
         
         logger.info("Building CUBRID commit " + commitHash + " in Docker container");
