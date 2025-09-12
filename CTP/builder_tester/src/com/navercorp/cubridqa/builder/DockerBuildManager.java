@@ -261,6 +261,8 @@ public class DockerBuildManager {
     private File createDockerBuildScript(String commitHash, String buildType, String baselineCommit, File workDir) 
             throws IOException {
         File script = new File(workDir, "docker_build.sh");
+        // Normalize build args to honor requested buildType (debug/release)
+        final String finalBuildArgs = normalizeBuildArg(config.getBuildArg(), buildType);
         
         try (PrintWriter writer = new PrintWriter(new FileWriter(script))) {
             writer.println("#!/bin/bash");
@@ -369,6 +371,8 @@ public class DockerBuildManager {
             writer.println("git submodule sync --recursive");
             writer.println("git submodule update --init --recursive --checkout --force");
             writer.println();
+
+            
             writer.println("# Clean any previous builds");
             writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
@@ -381,10 +385,10 @@ public class DockerBuildManager {
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
             writer.println("  echo 'Using devtoolset-8 for build'");
             writer.println("  source /opt/rh/devtoolset-8/enable");
-            writer.println("  ./build.sh " + config.getBuildArg() + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("else");
             writer.println("  echo 'Building with default toolchain'");
-            writer.println("  ./build.sh " + config.getBuildArg() + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
             writer.println();
             
@@ -561,7 +565,8 @@ public class DockerBuildManager {
             
             java.util.List<String> buildCmd = new java.util.ArrayList<>();
             buildCmd.add("./build.sh");
-            for (String token : config.getBuildArg().trim().split("\\s+")) {
+            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
+            for (String token : normalizedArgs.trim().split("\\s+")) {
                 if (!token.isEmpty()) buildCmd.add(token);
             }
             executeCommand(wtPb, buildCmd.toArray(new String[0]));
@@ -637,5 +642,42 @@ public class DockerBuildManager {
     
     public boolean isReady() {
         return imageReady;
+    }
+
+    // Ensure build_arg honors requested buildType (debug/release) and keeps target (build/dist) last.
+    // Removes any existing -m <mode> pair and inserts our desired one before the target.
+    private String normalizeBuildArg(String buildArg, String buildType) {
+        if (buildArg == null) buildArg = "";
+        String mode = (buildType != null && buildType.trim().equalsIgnoreCase("release")) ? "release" : "debug";
+
+        List<String> options = new ArrayList<>();
+        List<String> targets = new ArrayList<>();
+        String[] parts = buildArg.trim().isEmpty() ? new String[0] : buildArg.trim().split("\\s+");
+
+        boolean skipNext = false;
+        for (int i = 0; i < parts.length; i++) {
+            if (skipNext) { skipNext = false; continue; }
+            String t = parts[i];
+            if ("-m".equals(t)) {
+                // Skip existing -m and its value if present
+                skipNext = (i + 1 < parts.length);
+                continue;
+            }
+            // Classify positional targets (must be last): build | dist | all
+            if (!t.startsWith("-") && ("build".equals(t) || "dist".equals(t) || "all".equals(t))) {
+                targets.add(t);
+                continue;
+            }
+            options.add(t);
+        }
+
+        // Ensure -m <mode> appears before any target
+        options.add("-m");
+        options.add(mode);
+
+        // If no explicit target provided, default to leaving options only
+        List<String> out = new ArrayList<>(options);
+        out.addAll(targets);
+        return String.join(" ", out);
     }
 }
