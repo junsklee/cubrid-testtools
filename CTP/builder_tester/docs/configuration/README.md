@@ -33,7 +33,7 @@ Both services read Properties files with environment expansion (supports `~/` an
 ### Ccache configuration
 - `ccache_enabled` (bool): Enable compiler cache (default true)
 - `ccache_dir` (path): Cache directory (default `~/ccache`)
-- `ccache_max_size` (string): Maximum cache size (default `5G`)
+- `ccache_max_size` (string): Maximum cache size (default `15G`)
 - `ccache_compilercheck` (string): Compiler check method (default `content`)
 - `ccache_hardlink` (bool): Use hard links to save space (default true)
 - `parallel_jobs` (int): Parallel compilation jobs, 0=auto-detect (default 0)

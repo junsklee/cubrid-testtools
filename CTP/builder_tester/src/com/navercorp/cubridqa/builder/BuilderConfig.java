@@ -387,7 +387,7 @@ public class BuilderConfig {
     }
     
     public String getCcacheMaxSize() {
-        return properties.getProperty(CCACHE_MAX_SIZE, "5G");
+        return properties.getProperty(CCACHE_MAX_SIZE, "15G");
     }
     
     public String getCcacheCompilerCheck() {

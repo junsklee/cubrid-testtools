@@ -19,7 +19,7 @@ Add these settings to `conf/builder.conf`:
 # Ccache configuration (compiler cache for faster rebuilds)
 ccache_enabled=true
 ccache_dir=~/ccache
-ccache_max_size=5G
+ccache_max_size=15G
 ccache_compilercheck=content
 ccache_hardlink=true
 
@@ -31,7 +31,7 @@ parallel_jobs=0  # 0 = auto-detect from CPU cores
 
 - **ccache_enabled**: Enable/disable ccache (default: true)
 - **ccache_dir**: Directory to store cache (default: ~/ccache)
-- **ccache_max_size**: Maximum cache size (default: 5G)
+- **ccache_max_size**: Maximum cache size (default: 15G)
 - **ccache_compilercheck**: How ccache checks compiler changes (default: content)
 - **ccache_hardlink**: Use hard links to save space (default: true)
 - **parallel_jobs**: Number of parallel compilation jobs (0 = auto)

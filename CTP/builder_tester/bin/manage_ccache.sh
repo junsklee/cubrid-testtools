@@ -9,16 +9,22 @@ CONFIG_FILE="$PROJECT_ROOT/conf/builder.conf"
 # Read configuration
 if [ -f "$CONFIG_FILE" ]; then
     CCACHE_ENABLED=$(grep "^ccache_enabled=" "$CONFIG_FILE" | cut -d'=' -f2)
-    CCACHE_DIR=$(grep "^ccache_dir=" "$CONFIG_FILE" | cut -d'=' -f2 | sed "s|~|$HOME|g")
+    CCACHE_DIR=$(grep "^ccache_dir=" "$CONFIG_FILE" | cut -d'=' -f2 | sed "s|~|$HOME|g" | sed "s|\$HOME|$HOME|g")
     CCACHE_MAX_SIZE=$(grep "^ccache_max_size=" "$CONFIG_FILE" | cut -d'=' -f2)
-    DOCKER_HOST_ROOT=$(grep "^docker_host_root=" "$CONFIG_FILE" | cut -d'=' -f2 | sed "s|~|$HOME|g")
+    DOCKER_HOST_ROOT=$(grep "^docker_host_root=" "$CONFIG_FILE" | cut -d'=' -f2 | sed "s|~|$HOME|g" | sed "s|\$HOME|$HOME|g")
 else
     echo "Warning: Configuration file not found at $CONFIG_FILE"
     CCACHE_ENABLED="true"
     CCACHE_DIR="$HOME/ccache"
-    CCACHE_MAX_SIZE="5G"
+    CCACHE_MAX_SIZE="15G"
     DOCKER_HOST_ROOT="$HOME/docker-work"
 fi
+
+# Set defaults for any missing values
+[ -z "$CCACHE_ENABLED" ] && CCACHE_ENABLED="true"
+[ -z "$CCACHE_DIR" ] && CCACHE_DIR="$HOME/ccache"
+[ -z "$CCACHE_MAX_SIZE" ] && CCACHE_MAX_SIZE="15G"
+[ -z "$DOCKER_HOST_ROOT" ] && DOCKER_HOST_ROOT="$HOME/docker-work"
 
 # Derive Docker cache directory used by DockerBuildManager (mounted as /work/.ccache)
 DOCKER_CCACHE_DIR="${DOCKER_HOST_ROOT%/}/work/.ccache"

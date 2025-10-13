@@ -186,7 +186,7 @@ Configure in `conf/builder.conf`:
 ```properties
 ccache_enabled=true
 ccache_dir=~/ccache
-ccache_max_size=5G
+ccache_max_size=15G
 parallel_jobs=0  # Auto-detect CPU cores
 ```
 
