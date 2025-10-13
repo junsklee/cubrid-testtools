@@ -16,6 +16,7 @@ router.get('/github/commit/:sha', (req, res) => githubController.getCommitDetail
 
 // Builder API routes
 router.post('/builder/build', (req, res) => builderController.submitBuild(req, res));
+router.post('/builder/build/pr', (req, res) => builderController.submitPrBuild(req, res));
 router.get('/builder/status', (req, res) => builderController.getBuildStatus(req, res));
 router.get('/builder/health', (req, res) => builderController.getHealth(req, res));
 router.all('/builder/*', (req, res) => builderController.proxy(req, res));

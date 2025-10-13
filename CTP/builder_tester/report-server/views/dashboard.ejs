@@ -50,6 +50,9 @@
                     <button id="manualModeBtn" class="mode-btn" onclick="setCommitMode('manual')">
                         Manual Input
                     </button>
+                    <button id="prModeBtn" class="mode-btn" onclick="setCommitMode('pr')">
+                        PR Number
+                    </button>
                 </div>
 
                 <div id="selectCommits" class="commit-section">
@@ -70,13 +73,18 @@
                     <textarea class="form-textarea" id="manualCommitInput" 
                         placeholder="Enter commit SHAs (one per line or comma-separated)&#10;Example:&#10;568fbb5370f4f1b6149218221d7fe4f9daa59168&#10;b534d0a4f28921c8e590f68f606049e1b643e252"></textarea>
                 </div>
+
+                <div id="prCommits" class="commit-section" style="display: none;">
+                    <input type="number" class="form-input" id="prNumberInput" min="1" placeholder="Enter PR number (e.g., 6402)">
+                    <p class="help-text" style="margin-top: 0.5rem; color: var(--text-secondary);">Build the PR head commit resolved against develop baseline.</p>
+                </div>
             </div>
 
             <!-- Test Cases Section -->
             <div class="form-group">
                 <label class="form-label" for="testsInput">Test Cases</label>
                 <textarea class="form-textarea" id="testsInput" 
-                    placeholder="Enter test case paths (one per line)&#10;Example:&#10;/home/cubrid-testtools/CTP/sql/cases/_01_object/_09_partition/_004_pruning/cases/range_hash.sql"></textarea>
+                    placeholder="Enter test case paths (one per line)&#10;Example:&#10;shell/_05_addition/cubridsus1961/cases/cubridsus1961.sh"></textarea>
             </div>
 
             <!-- Worker Configuration -->

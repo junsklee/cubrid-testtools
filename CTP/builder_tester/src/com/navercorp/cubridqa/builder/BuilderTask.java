@@ -60,9 +60,20 @@ public class BuilderTask {
         
         try {
             // Extract request parameters
-            JSONArray commits = request.getJSONArray("commits");
+            JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
             JSONArray tests = request.getJSONArray("tests");
             String buildType = request.optString("buildType", "debug");
+            Integer prNumber = null;
+            if (request.has("prNumber")) {
+                try {
+                    prNumber = request.get("prNumber") instanceof Number ? ((Number) request.get("prNumber")).intValue() : Integer.parseInt(request.get("prNumber").toString());
+                } catch (Exception e) {
+                    throw new IllegalArgumentException("Invalid prNumber value");
+                }
+                if (prNumber == null || prNumber <= 0) {
+                    throw new IllegalArgumentException("prNumber must be a positive integer");
+                }
+            }
             
             // Extract worker IPs (supporting both singular and plural forms)
             List<String> workerIps = new ArrayList<>();
@@ -78,18 +89,36 @@ public class BuilderTask {
             
             String callbackUrl = request.getString("callbackUrl");
             
-            taskLogger.info(String.format("Building %d commits for %d tests across %d tester node(s)", 
-                commits.length(), tests.length(), workerIps.size()));
+            if (prNumber != null) {
+                taskLogger.info(String.format("Building PR #%d for %d tests across %d tester node(s)", 
+                    prNumber, tests.length(), workerIps.size()));
+            } else {
+                taskLogger.info(String.format("Building %d commits for %d tests across %d tester node(s)", 
+                    commits.length(), tests.length(), workerIps.size()));
+            }
             
             // Ensure CUBRID source repository is set up
             setupCubridRepository();
 
-            // Determine common baseline = parent of earliest commit in the list
-            this.baselineCommit = determineBaselineCommit(commits);
-            taskLogger.info("Using baseline (parent of earliest commit): " + this.baselineCommit);
+            Map<String, String> builtPackages;
+            if (prNumber != null) {
+                // Resolve PR head and baseline (merge-base against develop)
+                PRResolution pr = resolvePullRequest(prNumber);
+                this.baselineCommit = pr.baselineSha;
+                taskLogger.info(String.format("Resolved PR #%d → head=%s, baseline=%s", prNumber,
+                    pr.headSha.substring(0, Math.min(7, pr.headSha.length())),
+                    pr.baselineSha.substring(0, Math.min(7, pr.baselineSha.length()))));
 
-            // Build all commits concurrently (each in isolation via worktree + cherry-pick)
-            Map<String, String> builtPackages = buildCommitsConcurrently(commits, buildType, this.baselineCommit);
+                // Build PR snapshot (no cherry-pick)
+                builtPackages = buildPullRequest(pr, buildType);
+            } else {
+                // Determine common baseline = parent of earliest commit in the list
+                this.baselineCommit = determineBaselineCommit(commits);
+                taskLogger.info("Using baseline (parent of earliest commit): " + this.baselineCommit);
+
+                // Build all commits concurrently (each in isolation via worktree + cherry-pick)
+                builtPackages = buildCommitsConcurrently(commits, buildType, this.baselineCommit);
+            }
             
             // Distribute tests across multiple tester nodes
             Map<String, List<Callable<JSONObject>>> workerTestQueues = new HashMap<>();
@@ -270,6 +299,220 @@ public class BuilderTask {
         taskLogger.info(String.format("Builder task %s completed in %d seconds", 
             taskId, duration / 1000));
     }
+
+    private static class PRResolution {
+        final int prNumber;
+        final String prBranch;
+        final String headSha;
+        final String baselineSha;
+        PRResolution(int prNumber, String prBranch, String headSha, String baselineSha) {
+            this.prNumber = prNumber;
+            this.prBranch = prBranch;
+            this.headSha = headSha;
+            this.baselineSha = baselineSha;
+        }
+    }
+
+    private PRResolution resolvePullRequest(int prNumber) {
+        try {
+            File repoRoot = new File(config.getCubridSrcDir());
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(repoRoot);
+
+            // Ensure repository is up-to-date
+            try { executeCommand(pb, "git", "fetch", "--all", "--prune", "--recurse-submodules=on-demand"); } catch (Exception ignore) {}
+
+            String prBranch = "pr_" + prNumber + "_br";
+
+            boolean fetched = false;
+            Exception lastEx = null;
+            // Try origin first
+            try {
+                executeCommand(pb, "git", "fetch", "origin", "pull/" + prNumber + "/head:" + prBranch);
+                fetched = true;
+            } catch (Exception e1) {
+                lastEx = e1;
+                // Fallback to upstream if configured
+                try {
+                    executeCommand(pb, "git", "fetch", "upstream", "pull/" + prNumber + "/head:" + prBranch);
+                    fetched = true;
+                } catch (Exception e2) {
+                    lastEx = e2;
+                }
+            }
+
+            if (!fetched) {
+                throw new RuntimeException("Failed to fetch PR #" + prNumber + " from origin/upstream: " + (lastEx != null ? lastEx.getMessage() : "unknown error"));
+            }
+
+            // Resolve head SHA
+            String headSha = executeCommandAndGetOutput(pb, "git", "rev-parse", prBranch).trim();
+            if (headSha.isEmpty()) {
+                throw new RuntimeException("Failed to resolve head SHA for PR branch: " + prBranch);
+            }
+
+            // Compute baseline as merge-base with develop; fallback to parent
+            String baseline;
+            try {
+                baseline = executeCommandAndGetOutput(pb, "git", "merge-base", headSha, "develop").trim();
+                if (baseline.isEmpty()) throw new RuntimeException("empty");
+            } catch (Exception e) {
+                try {
+                    baseline = executeCommandAndGetOutput(pb, "git", "rev-parse", headSha + "^").trim();
+                } catch (Exception e2) {
+                    throw new RuntimeException("Failed to determine baseline for PR #" + prNumber + ": " + e2.getMessage());
+                }
+            }
+
+            return new PRResolution(prNumber, prBranch, headSha, baseline);
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception e) {
+            throw new RuntimeException("PR resolution failed for #" + prNumber + ": " + e.getMessage(), e);
+        }
+    }
+
+    private Map<String, String> buildPullRequest(PRResolution pr, String buildType) throws Exception {
+        Map<String, String> builtPackages = new ConcurrentHashMap<>();
+
+        String normalizedCommit = pr.headSha;
+        String normalizedShort = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
+
+        // Check in-memory cache (include baseline in key to avoid incorrect reuse)
+        String baselineShort = pr.baselineSha.substring(0, Math.min(7, pr.baselineSha.length()));
+        String cacheKey = normalizedCommit + "_" + buildType + "_" + baselineShort;
+        String cachedPackage = buildCache.get(cacheKey);
+        if (cachedPackage != null && new File(cachedPackage).exists()) {
+            // Validate baseline matches before reusing
+            if (validateCachedBaseline(cachedPackage, normalizedCommit, pr.baselineSha)) {
+                taskLogger.info("Using cached build for PR head " + normalizedCommit + " (baseline: " + baselineShort + ")");
+                builtPackages.put(normalizedCommit, cachedPackage);
+                progress.put(normalizedCommit, 100);
+                createCachedBuildLog(normalizedCommit, cachedPackage, "memory cache");
+                try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, pr.baselineSha); } catch (Exception ignore) {}
+                return builtPackages;
+            } else {
+                taskLogger.warning("Cached build validation failed for PR head " + normalizedCommit + ", will rebuild");
+                buildCache.remove(cacheKey);
+            }
+        }
+
+        // Check disk cache
+        String diskPackage = findExistingBuildPackageOnDisk(normalizedShort, buildType, pr.baselineSha, normalizedCommit);
+        if (diskPackage != null) {
+            taskLogger.info("Using cached build from disk for PR head " + normalizedCommit);
+            builtPackages.put(normalizedCommit, diskPackage);
+            buildCache.put(cacheKey, diskPackage);
+            progress.put(normalizedCommit, 100);
+            createCachedBuildLog(normalizedCommit, diskPackage, "disk cache");
+            try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, pr.baselineSha); } catch (Exception ignore) {}
+            return builtPackages;
+        }
+
+        progress.put(normalizedCommit, 20);
+
+        // Create work directory
+        Path workDir = Files.createTempDirectory(Paths.get(config.getWorkDir()), "build_pr_" + normalizedShort + "_");
+
+        String buildPackage = null;
+        try {
+            if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
+                buildPackage = dockerManager.buildPullRequest(pr.prBranch, normalizedCommit, workDir.toFile(), buildType, pr.baselineSha);
+            } else {
+                // Direct PR build: checkout head SHA and build as-is (no cherry-pick)
+                buildPackage = buildFromHeadDirect(normalizedCommit, buildType, workDir.toFile());
+            }
+
+            if (buildPackage != null) {
+                builtPackages.put(normalizedCommit, buildPackage);
+                buildCache.put(cacheKey, buildPackage);
+                writeBuildMetadata(buildPackage, normalizedCommit, buildType, pr.baselineSha);
+                cleanBuildCache(config.getBuildCacheSize());
+            }
+            progress.put(normalizedCommit, 100);
+        } catch (Exception e) {
+            taskLogger.log(Level.SEVERE, "Failed to build PR #" + pr.prNumber + " (head " + normalizedCommit + ")", e);
+            builtPackages.put(normalizedCommit, "");
+            progress.put(normalizedCommit, -1);
+        }
+
+        return builtPackages;
+    }
+
+    private String buildFromHeadDirect(String headSha, String buildType, File workDir) throws Exception {
+        File repoRoot = new File(config.getCubridSrcDir());
+        ProcessBuilder repoPb = new ProcessBuilder();
+        repoPb.directory(repoRoot);
+        try { executeCommand(repoPb, "git", "fetch", "--all", "--recurse-submodules=on-demand"); } catch (Exception ignore) { }
+
+        String shortCommit = headSha.substring(0, Math.min(headSha.length(), 7));
+        String tempBranch = "isolate_pr_" + shortCommit + "_tmp";
+        File wtDir = new File(workDir, "wt_pr_" + shortCommit);
+        try {
+            executeCommand(repoPb, "git", "worktree", "add", "-b", tempBranch, wtDir.getAbsolutePath(), headSha);
+        } catch (Exception e) {
+            taskLogger.warning("git worktree add -b failed (" + e.getMessage() + "), falling back to manual branch creation");
+            executeCommand(repoPb, "git", "branch", "-f", tempBranch, headSha);
+            executeCommand(repoPb, "git", "worktree", "add", wtDir.getAbsolutePath(), tempBranch);
+        }
+
+        boolean success = false;
+        try {
+            ProcessBuilder wtPb = new ProcessBuilder();
+            wtPb.directory(wtDir);
+
+            executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
+            executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
+            executeCommand(wtPb, "git", "clean", "-xdf");
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", "cubridmanager");
+
+            // ccache setup similar to buildCommit
+            if (config.isCcacheEnabled()) {
+                try {
+                    File logsDir = new File(config.getCcacheDir(), "logs");
+                    if (!logsDir.exists()) logsDir.mkdirs();
+                    File tmpDir = new File(config.getCcacheDir(), "tmp");
+                    if (!tmpDir.exists()) tmpDir.mkdirs();
+                } catch (Exception ignore) {}
+                wtPb.environment().put("CC", "ccache gcc");
+                wtPb.environment().put("CXX", "ccache g++");
+                wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
+                wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
+                wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
+                wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
+                wtPb.environment().put("CCACHE_BASEDIR", new File(config.getWorkDir()).getAbsolutePath());
+                wtPb.environment().put("CCACHE_NOHASHDIR", "1");
+                wtPb.environment().put("CCACHE_LOGFILE", new File(config.getCcacheDir(), "logs/ccache_" + shortCommit + ".log").getAbsolutePath());
+                if (config.getCcacheReadonlyDirect()) wtPb.environment().put("CCACHE_READONLY_DIRECT", "1");
+                wtPb.environment().put("CCACHE_STATS", config.getCcacheStatsEnabled() ? "true" : "false");
+                if (!config.getCcacheNamespace().isEmpty()) wtPb.environment().put("CCACHE_NAMESPACE", config.getCcacheNamespace());
+                if (!config.getCcacheSloppiness().isEmpty()) wtPb.environment().put("CCACHE_SLOPPINESS", config.getCcacheSloppiness());
+                try { executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize()); } catch (Exception ignore) {}
+            }
+
+            wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
+            List<String> buildCmd = new ArrayList<>();
+            buildCmd.add("./build.sh");
+            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
+            for (String token : normalizedArgs.trim().split("\\s+")) {
+                if (!token.isEmpty()) buildCmd.add(token);
+            }
+            executeCommand(wtPb, buildCmd.toArray(new String[0]));
+
+            String packageName = "cubrid_" + shortCommit + ".tar.gz";
+            File packageFile = new File(workDir, packageName);
+            ProcessBuilder tarPb = new ProcessBuilder();
+            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
+            success = true;
+            return packageFile.getAbsolutePath();
+        } finally {
+            try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception e) { taskLogger.warning("Failed to remove worktree " + wtDir.getAbsolutePath() + ": " + e.getMessage()); }
+            try { executeCommand(repoPb, "git", "branch", "-D", tempBranch); } catch (Exception ignore) {}
+            if (!success) { try { deleteRecursively(wtDir); } catch (Exception ignore) {} }
+        }
+    }
     
     private Map<String, String> buildCommitsConcurrently(JSONArray commits, String buildType, String baselineCommit) 
             throws Exception {
@@ -305,20 +548,27 @@ public class BuilderTask {
                     progress.put(commit, 0); // Starting
                     String normalizedShort = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
                     
-                    // Check in-memory cache first using normalized key
-                    String cacheKey = normalizedCommit + "_" + buildType;
+                    // Check in-memory cache first using normalized key (include baseline to avoid incorrect reuse)
+                    String baselineShort = baselineCommit.substring(0, Math.min(7, baselineCommit.length()));
+                    String cacheKey = normalizedCommit + "_" + buildType + "_" + baselineShort;
                     String cachedPackage = buildCache.get(cacheKey);
                     if (cachedPackage != null && new File(cachedPackage).exists()) {
-                        taskLogger.info("Using cached build for commit " + normalizedCommit);
-                        builtPackages.put(commit, cachedPackage);
-                        progress.put(commit, 100); // Complete
-                        
-                        // Create build log for cached build
-                        createCachedBuildLog(commit, cachedPackage, "memory cache");
-                        // Ensure metadata exists for cached package so remote testers can validate without re-download
-                        try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
-                        
-                        return null;
+                        // Validate baseline matches before reusing
+                        if (validateCachedBaseline(cachedPackage, normalizedCommit, baselineCommit)) {
+                            taskLogger.info("Using cached build for commit " + normalizedCommit + " (baseline: " + baselineShort + ")");
+                            builtPackages.put(commit, cachedPackage);
+                            progress.put(commit, 100); // Complete
+                            
+                            // Create build log for cached build
+                            createCachedBuildLog(commit, cachedPackage, "memory cache");
+                            // Ensure metadata exists for cached package so remote testers can validate without re-download
+                            try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
+                            
+                            return null;
+                        } else {
+                            taskLogger.warning("Cached build validation failed for commit " + normalizedCommit + ", will rebuild");
+                            buildCache.remove(cacheKey);
+                        }
                     }
 
                     // Fall back to scanning disk for an existing package if memory cache missed
@@ -562,6 +812,30 @@ public class BuilderTask {
             executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
             executeCommand(wtPb, "rm", "-rf", "cubridmanager"); // temporary fix parity
 
+            // Set up ccache environment if enabled
+            if (config.isCcacheEnabled()) {
+                try {
+                    File logsDir = new File(config.getCcacheDir(), "logs");
+                    if (!logsDir.exists()) logsDir.mkdirs();
+                    File tmpDir = new File(config.getCcacheDir(), "tmp");
+                    if (!tmpDir.exists()) tmpDir.mkdirs();
+                } catch (Exception ignore) {}
+                wtPb.environment().put("CC", "ccache gcc");
+                wtPb.environment().put("CXX", "ccache g++");
+                wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
+                wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
+                wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
+                wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
+                wtPb.environment().put("CCACHE_BASEDIR", new File(config.getWorkDir()).getAbsolutePath());
+                wtPb.environment().put("CCACHE_NOHASHDIR", "1");
+                wtPb.environment().put("CCACHE_LOGFILE", new File(config.getCcacheDir(), "logs/ccache_" + shortCommit + ".log").getAbsolutePath());
+                if (config.getCcacheReadonlyDirect()) wtPb.environment().put("CCACHE_READONLY_DIRECT", "1");
+                wtPb.environment().put("CCACHE_STATS", config.getCcacheStatsEnabled() ? "true" : "false");
+                if (!config.getCcacheNamespace().isEmpty()) wtPb.environment().put("CCACHE_NAMESPACE", config.getCcacheNamespace());
+                if (!config.getCcacheSloppiness().isEmpty()) wtPb.environment().put("CCACHE_SLOPPINESS", config.getCcacheSloppiness());
+                try { executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize()); } catch (Exception ignore) {}
+            }
+
             // Build command with output capture for logging
             List<String> buildCmd = new ArrayList<>();
             buildCmd.add("./build.sh");
@@ -652,6 +926,63 @@ public class BuilderTask {
                 writeBuildMetadata(packagePath, fullCommit, buildType, baselineCommit);
             }
         } catch (Exception ignore) { }
+    }
+
+    /**
+     * Validate that a cached build package matches the expected baseline.
+     * Returns true if baseline matches or if metadata cannot be read (fail-open for backward compatibility).
+     */
+    private boolean validateCachedBaseline(String packagePath, String expectedCommit, String expectedBaseline) {
+        try {
+            File pkg = new File(packagePath);
+            File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
+            
+            if (!meta.exists()) {
+                taskLogger.warning("No metadata found for cached build, cannot validate baseline: " + packagePath);
+                return false; // Fail-closed: reject cache entries without metadata
+            }
+            
+            // Read and parse metadata
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new FileReader(meta))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    sb.append(line);
+                }
+            }
+            JSONObject metadata = new JSONObject(sb.toString());
+            
+            // Validate commit matches
+            String metaCommit = metadata.optString("commit", "");
+            String metaCommitShort = metaCommit.length() > 7 ? metaCommit.substring(0, 7) : metaCommit;
+            String expectedCommitShort = expectedCommit.length() > 7 ? expectedCommit.substring(0, 7) : expectedCommit;
+            
+            if (!metaCommitShort.equals(expectedCommitShort)) {
+                taskLogger.warning(String.format("Cached build rejected: commit mismatch (cached: %s, expected: %s)", 
+                    metaCommitShort, expectedCommitShort));
+                return false;
+            }
+            
+            // Validate baseline matches
+            String metaBaseline = metadata.optString("baseline", "");
+            String metaBaselineShort = metaBaseline.length() > 7 ? metaBaseline.substring(0, 7) : metaBaseline;
+            String expectedBaselineShort = expectedBaseline != null && expectedBaseline.length() > 7 ? 
+                                          expectedBaseline.substring(0, 7) : expectedBaseline;
+            
+            if (expectedBaselineShort != null && !metaBaselineShort.equals(expectedBaselineShort)) {
+                taskLogger.warning(String.format("Cached build rejected: baseline mismatch (cached: %s, expected: %s)", 
+                    metaBaselineShort, expectedBaselineShort));
+                return false;
+            }
+            
+            taskLogger.info(String.format("Cached build validation passed: commit=%s, baseline=%s", 
+                metaCommitShort, metaBaselineShort));
+            return true;
+            
+        } catch (Exception e) {
+            taskLogger.warning("Failed to validate cached build metadata: " + e.getMessage());
+            return false; // Fail-closed on errors
+        }
     }
 
     /**
@@ -1651,5 +1982,42 @@ public class BuilderTask {
             return value.substring(1, value.length() - 1);
         }
         return value;
+    }
+
+    // Ensure build_arg honors requested buildType (debug/release) and keeps target (build/dist) last.
+    // Removes any existing -m <mode> pair and inserts our desired one before the target.
+    private String normalizeBuildArg(String buildArg, String buildType) {
+        if (buildArg == null) buildArg = "";
+        String mode = (buildType != null && buildType.trim().equalsIgnoreCase("release")) ? "release" : "debug";
+
+        List<String> options = new ArrayList<>();
+        List<String> targets = new ArrayList<>();
+        String[] parts = buildArg.trim().isEmpty() ? new String[0] : buildArg.trim().split("\\s+");
+
+        boolean skipNext = false;
+        for (int i = 0; i < parts.length; i++) {
+            if (skipNext) { skipNext = false; continue; }
+            String t = parts[i];
+            if ("-m".equals(t)) {
+                // Skip existing -m and its value if present
+                skipNext = (i + 1 < parts.length);
+                continue;
+            }
+            // Classify positional targets (must be last): build | dist | all
+            if (!t.startsWith("-") && ("build".equals(t) || "dist".equals(t) || "all".equals(t))) {
+                targets.add(t);
+                continue;
+            }
+            options.add(t);
+        }
+
+        // Ensure -m <mode> appears before any target
+        options.add("-m");
+        options.add(mode);
+
+        // If no explicit target provided, default to leaving options only
+        List<String> out = new ArrayList<>(options);
+        out.addAll(targets);
+        return String.join(" ", out);
     }
 }

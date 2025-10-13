@@ -43,6 +43,9 @@
             
             // Update commit count when manual input changes
             document.getElementById('manualCommitInput').addEventListener('input', updateCommitCount);
+            // PR input updates count if present
+            const prInput = document.getElementById('prNumberInput');
+            if (prInput) prInput.addEventListener('input', updateCommitCount);
         }
 
         // Load commits from GitHub
@@ -150,8 +153,15 @@
 
         // Update commit count display
         function updateCommitCount() {
-            const count = commitMode === 'select' ? selectedCommits.size : 
-                          document.getElementById('manualCommitInput').value.split(/[,\n]/).filter(s => s.trim()).length;
+            let count = 0;
+            if (commitMode === 'select') {
+                count = selectedCommits.size;
+            } else if (commitMode === 'manual') {
+                count = document.getElementById('manualCommitInput').value.split(/[\,\n]/).filter(s => s.trim()).length;
+            } else if (commitMode === 'pr') {
+                const prVal = (document.getElementById('prNumberInput').value || '').trim();
+                count = prVal && /^\d+$/.test(prVal) ? 1 : 0;
+            }
             
             const selectedCountSpan = document.getElementById('selectedCount');
             if (selectedCountSpan) {
@@ -196,10 +206,27 @@
                 document.getElementById('selectModeBtn').classList.add('active');
                 document.getElementById('selectCommits').style.display = 'block';
                 document.getElementById('manualCommits').style.display = 'none';
+                const prSection = document.getElementById('prCommits');
+                if (prSection) prSection.style.display = 'none';
+                const prBtn = document.getElementById('prModeBtn');
+                if (prBtn) prBtn.classList.remove('active');
             } else {
-                document.getElementById('manualModeBtn').classList.add('active');
                 document.getElementById('selectCommits').style.display = 'none';
-                document.getElementById('manualCommits').style.display = 'block';
+                const prSection = document.getElementById('prCommits');
+                if (mode === 'manual') {
+                    document.getElementById('manualModeBtn').classList.add('active');
+                    document.getElementById('manualCommits').style.display = 'block';
+                    if (prSection) prSection.style.display = 'none';
+                    const prBtn = document.getElementById('prModeBtn');
+                    if (prBtn) prBtn.classList.remove('active');
+                } else if (mode === 'pr') {
+                    const manualBtn = document.getElementById('manualModeBtn');
+                    if (manualBtn) manualBtn.classList.remove('active');
+                    document.getElementById('manualCommits').style.display = 'none';
+                    if (prSection) prSection.style.display = 'block';
+                    const prBtn = document.getElementById('prModeBtn');
+                    if (prBtn) prBtn.classList.add('active');
+                }
             }
             
             updateCommitCount();
@@ -336,26 +363,28 @@
             button.textContent = 'Processing...';
             
             try {
-                // Gather commits
-                let commitShas = [];
+                // Gather commits or PR
+                let payloadCommits = [];
+                let prNumberPayload = null;
                 if (commitMode === 'select') {
-                    commitShas = Array.from(selectedCommits);
-                } else {
+                    payloadCommits = Array.from(selectedCommits);
+                    if (payloadCommits.length === 0) throw new Error('Please select at least one commit');
+                } else if (commitMode === 'manual') {
                     const manualInput = document.getElementById('manualCommitInput').value;
-                    commitShas = manualInput.split(/[,\n]/)
+                    payloadCommits = manualInput.split(/[\,\n]/)
                         .map(s => s.trim())
                         .filter(s => s.length > 0);
-                    
                     // Validate manual commits
                     showToast('Validating commits...', 'info');
-                    const valid = await validateCommits(commitShas);
+                    const valid = await validateCommits(payloadCommits);
                     if (!valid) {
                         throw new Error('Invalid commits detected');
                     }
-                }
-                
-                if (commitShas.length === 0) {
-                    throw new Error('Please select or enter at least one commit');
+                    if (payloadCommits.length === 0) throw new Error('Please enter at least one commit');
+                } else if (commitMode === 'pr') {
+                    const prVal = (document.getElementById('prNumberInput').value || '').trim();
+                    if (!prVal || !/^\d+$/.test(prVal)) throw new Error('Please enter a valid PR number');
+                    prNumberPayload = prVal;
                 }
                 
                 // Gather tests
@@ -375,7 +404,6 @@
                 
                 // Build request payload
                 const payload = {
-                    commits: commitShas,
                     tests: tests,
                     callbackUrl: document.getElementById('callbackUrl').value,
                     workerIps: workers,
@@ -385,6 +413,11 @@
                     minRuns: parseInt(document.getElementById('minRuns').value),
                     maxRuns: parseInt(document.getElementById('maxRuns').value)
                 };
+                if (prNumberPayload) {
+                    payload.prNumber = prNumberPayload;
+                } else {
+                    payload.commits = payloadCommits;
+                }
                 
                 // Add environment variables if provided
                 const envVars = document.getElementById('envVars').value.trim();
@@ -398,8 +431,8 @@
                 
                 // Send request to builder service
                 showToast('Sending build request...', 'info');
-                
-                const response = await fetch('/api/builder/build', {
+                const endpoint = payload.prNumber ? '/api/builder/build/pr' : '/api/builder/build';
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -484,7 +517,7 @@
                 </div>
                 <div class="info-item">
                     <div class="info-label">Commits</div>
-                    <div class="info-value">${request.commits.length}</div>
+                    <div class="info-value">${request.prNumber ? `PR #${request.prNumber}` : request.commits.length}</div>
                 </div>
                 <div class="info-item">
                     <div class="info-label">Tests</div>
@@ -501,7 +534,8 @@
                 </div>
             `;
             
-            const totalTasks = request.commits.length + (request.commits.length * request.tests.length);
+            const totalCommitCount = request.prNumber ? 1 : request.commits.length;
+            const totalTasks = totalCommitCount + (totalCommitCount * request.tests.length);
             
             
             // Polling function for status updates

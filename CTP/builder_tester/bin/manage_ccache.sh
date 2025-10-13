@@ -239,7 +239,7 @@ show_stats() {
             return
         fi
         echo "[$label] CCACHE_DIR=$dir"
-        CCACHE_DIR="$dir" ccache -s -v | sed 's/^/  /'
+        CCACHE_DIR="$dir" ccache -s | sed 's/^/  /'
         echo
     }
 

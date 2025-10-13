@@ -257,6 +257,349 @@ public class DockerBuildManager {
         String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
         return new File(workDir, packageName).getAbsolutePath();
     }
+
+    public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
+            throws IOException, InterruptedException {
+        if (!dockerAvailable || !imageReady) {
+            return buildPrDirect(prBranch, headSha, workDir, buildType, baselineCommit);
+        }
+
+        logger.info("Building PR branch " + prBranch + " (head " + headSha + ") in Docker container");
+        final String commitShort = headSha.substring(0, Math.min(headSha.length(), 7));
+
+        String githubToken = System.getenv("GITHUB_TOKEN");
+        if (githubToken == null || githubToken.trim().isEmpty()) {
+            throw new IOException("GITHUB_TOKEN environment variable is not set");
+        }
+
+        File hostRoot = new File(config.getDockerHostRoot());
+        if (!hostRoot.exists()) {
+            hostRoot.mkdirs();
+        }
+        File hostWorkDir = new File(hostRoot, "work");
+        if (!hostWorkDir.exists()) {
+            hostWorkDir.mkdirs();
+        }
+        File gradleCacheDir = new File(hostRoot, ".gradle");
+        if (!gradleCacheDir.exists()) {
+            gradleCacheDir.mkdirs();
+        }
+
+        File ccacheDir = null;
+        if (config.isCcacheEnabled()) {
+            ccacheDir = new File(hostWorkDir, ".ccache");
+            if (!ccacheDir.exists()) {
+                ccacheDir.mkdirs();
+                logger.info("Created ccache directory under work mount: " + ccacheDir.getAbsolutePath());
+            }
+            try { new File(ccacheDir, "logs").mkdirs(); } catch (Exception ignore) {}
+            try { new File(ccacheDir, "tmp").mkdirs(); } catch (Exception ignore) {}
+        }
+
+        File buildScript = createDockerPrBuildScript(prBranch, headSha, buildType, baselineCommit, workDir);
+
+        List<String> baseDockerCmd = new ArrayList<>();
+        baseDockerCmd.add("docker");
+        baseDockerCmd.add("run");
+        baseDockerCmd.add("--rm");
+        baseDockerCmd.add("--network=host");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(config.getCubridSrcDir() + ":/cubrid-src:ro");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(workDir.getAbsolutePath() + ":/output:rw");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(hostWorkDir.getAbsolutePath() + ":/work:rw");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(gradleCacheDir.getAbsolutePath() + ":/root/.gradle:rw");
+        baseDockerCmd.add("-v");
+        baseDockerCmd.add(buildScript.getAbsolutePath() + ":/build.sh:ro");
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("COMMIT_HASH=" + headSha);
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("PR_BRANCH=" + prBranch);
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BUILD_TYPE=" + buildType);
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BASELINE_COMMIT=" + baselineCommit);
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("GITHUB_TOKEN=" + githubToken);
+
+        if (config.isCcacheEnabled()) {
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CC=ccache gcc");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CXX=ccache g++");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_DIR=/work/.ccache");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_COMPILERCHECK=" + config.getCcacheCompilerCheck());
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_HARDLINK=" + (config.getCcacheHardlink() ? "1" : "0"));
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_MAXSIZE=" + config.getCcacheMaxSize());
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_BASEDIR=/work");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_NOHASHDIR=1");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_LOGFILE=/work/.ccache/logs/ccache_" + commitShort + ".log");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_TEMPDIR=/work/.ccache/tmp");
+            if (config.getCcacheReadonlyDirect()) {
+                baseDockerCmd.add("-e");
+                baseDockerCmd.add("CCACHE_READONLY_DIRECT=1");
+            }
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_STATS=" + (config.getCcacheStatsEnabled() ? "true" : "false"));
+            if (!config.getCcacheNamespace().isEmpty()) {
+                baseDockerCmd.add("-e");
+                baseDockerCmd.add("CCACHE_NAMESPACE=" + config.getCcacheNamespace());
+            }
+            if (!config.getCcacheSloppiness().isEmpty()) {
+                baseDockerCmd.add("-e");
+                baseDockerCmd.add("CCACHE_SLOPPINESS=" + config.getCcacheSloppiness());
+            }
+        }
+
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("MAKEFLAGS=-j" + config.getParallelJobs());
+
+        baseDockerCmd.add(config.getDockerBuildImage());
+        baseDockerCmd.add("bash");
+        baseDockerCmd.add("-lc");
+        baseDockerCmd.add("/build.sh");
+
+        int attempts = 0;
+        IOException lastError = null;
+        Path perBuildLog = null;
+        try {
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                String buildsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "builds");
+                perBuildLog = Paths.get(buildsDir, "build_" + commitShort + ".log");
+            } else {
+                Path buildsLogDir = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester", "log", "builds");
+                Files.createDirectories(buildsLogDir);
+                perBuildLog = buildsLogDir.resolve("build_" + commitShort + "_" + System.currentTimeMillis() + ".log");
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to create build log directory: " + e.getMessage());
+            perBuildLog = Paths.get(workDir.getAbsolutePath(), "build_" + commitShort + ".log");
+        }
+        while (attempts < 2) {
+            attempts++;
+            List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
+            logger.info("Running Docker PR build [" + commitShort + "] (attempt " + attempts + "): " + String.join(" ", dockerCommand));
+
+            ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                 java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                    logger.info("DOCKER[" + commitShort + "]: " + line);
+                    try {
+                        logWriter.write(line);
+                        logWriter.newLine();
+                    } catch (Exception ignore) {}
+                }
+                try { logWriter.flush(); } catch (Exception ignore) {}
+            }
+
+            int exitCode = process.waitFor();
+            if (exitCode == 0) {
+                lastError = null;
+                break;
+            }
+            lastError = new IOException("Docker PR build failed with exit code: " + exitCode + " (log: " + perBuildLog.toString() + ")");
+            logger.warning("Docker PR build [" + commitShort + "] attempt " + attempts + " failed (exit=" + exitCode + ")." +
+                           (attempts < 2 ? " Retrying..." : " No more retries."));
+            try { Thread.sleep(5000); } catch (InterruptedException ignore) { }
+        }
+        if (lastError != null) {
+            throw lastError;
+        }
+
+        String packageName = "cubrid_" + headSha.substring(0, 7) + ".tar.gz";
+        return new File(workDir, packageName).getAbsolutePath();
+    }
+
+    private File createDockerPrBuildScript(String prBranch, String headSha, String buildType, String baselineCommit, File workDir)
+            throws IOException {
+        File script = new File(workDir, "docker_build_pr.sh");
+        final String finalBuildArgs = normalizeBuildArg(config.getBuildArg(), buildType);
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(script))) {
+            writer.println("#!/bin/bash");
+            writer.println("set -e");
+            writer.println();
+
+            if (config.isCcacheEnabled()) {
+                writer.println("# Configure ccache for faster builds");
+                writer.println("if command -v ccache &> /dev/null; then");
+                writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
+                writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
+                writer.println("  if [ \"${CCACHE_RESET_STATS:-0}\" = \"1\" ]; then ccache -z; fi");
+                writer.println("  echo 'Ccache status before build:'");
+                writer.println("  ccache -s || true");
+                writer.println("fi");
+                writer.println();
+            }
+
+            writer.println("# Prepare working directory");
+            writer.println("if [ -d /work ]; then");
+            writer.println("  target=/work/cubrid-pr_${COMMIT_HASH:0:7}");
+            writer.println("else");
+            writer.println("  target=/tmp/cubrid-pr_${COMMIT_HASH:0:7}");
+            writer.println("fi");
+            writer.println("rm -rf \"$target\"");
+            writer.println("mkdir -p \"$target\"");
+            writer.println("cd \"$target\"");
+            writer.println();
+            writer.println("# Clone repository from host reference");
+            writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
+            writer.println("cd repo");
+            writer.println("git config advice.detachedHead false");
+            writer.println("git config user.email build@localhost");
+            writer.println("git config user.name Build Bot");
+            writer.println();
+            writer.println("# Try to fetch PR head from upstream to ensure commit object exists");
+            writer.println("git remote add upstream https://github.com/CUBRID/cubrid.git 2>/dev/null || true");
+            writer.println("tmp_branch=pr_${COMMIT_HASH:0:7}_tmp");
+            writer.println("# Derive PR number from PR_BRANCH if available (extract digits)");
+            writer.println("prn=''\nif [ -n \"${PR_NUMBER}\" ]; then prn=${PR_NUMBER}; elif [ -n \"${PR_BRANCH}\" ]; then prn=$(echo \"${PR_BRANCH}\" | sed 's/[^0-9]//g'); fi");
+            writer.println("if [ -n \"$prn\" ]; then");
+            writer.println("  echo \"Fetching PR #$prn from upstream\"");
+            writer.println("  git fetch upstream pull/$prn/head:$tmp_branch || git fetch origin pull/$prn/head:$tmp_branch || true");
+            writer.println("fi");
+            writer.println("# Checkout PR head by commit hash as authoritative fallback");
+            writer.println("git checkout -B \"$tmp_branch\" \"${COMMIT_HASH}\" || git checkout \"$tmp_branch\" || true");
+            writer.println();
+            writer.println("git submodule sync --recursive");
+            writer.println("git submodule update --init --recursive --checkout --force");
+            writer.println();
+            writer.println("git clean -xdf");
+            writer.println("rm -rf build_x86_64_*");
+            writer.println("rm -rf cubridmanager/*");
+            writer.println();
+            writer.println("# Build CUBRID");
+            writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
+            writer.println("  echo 'Using devtoolset-8 for build'");
+            writer.println("  source /opt/rh/devtoolset-8/enable");
+            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("else");
+            writer.println("  echo 'Building with default toolchain'");
+            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("fi");
+            writer.println();
+            if (config.isCcacheEnabled()) {
+                writer.println("# Report ccache statistics after build");
+                writer.println("if command -v ccache &> /dev/null; then");
+                writer.println("  echo 'Ccache status after build:'");
+                writer.println("  ccache -s || true");
+                writer.println("  echo 'Ccache configuration (via environment):'");
+                writer.println("  echo \\\"  CCACHE_DIR=$CCACHE_DIR\\\"");
+                writer.println("  echo \\\"  CCACHE_MAXSIZE=$CCACHE_MAXSIZE\\\"");
+                writer.println("  echo \\\"  CCACHE_HARDLINK=$CCACHE_HARDLINK\\\"");
+                writer.println("  echo \\\"  CCACHE_COMPILERCHECK=$CCACHE_COMPILERCHECK\\\"");
+                writer.println("  echo \\\"  CCACHE_LOGFILE=$CCACHE_LOGFILE\\\"");
+                writer.println("fi");
+                writer.println();
+            }
+            writer.println("# Create package");
+            writer.println("cd " + config.getBuildDir());
+            writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
+            writer.println();
+            writer.println("# Cleanup");
+            writer.println("cd \"$target/repo\"");
+            writer.println("git checkout --detach || true");
+            writer.println("git branch -D \"$tmp_branch\" || true");
+            writer.println("cd /");
+            writer.println("rm -rf \"$target\" || true");
+            writer.println("echo 'PR build completed successfully'");
+        }
+
+        script.setExecutable(true);
+        return script;
+    }
+
+    private String buildPrDirect(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
+            throws IOException, InterruptedException {
+        logger.warning("Building PR directly on host");
+
+        File repoRoot = new File(config.getCubridSrcDir());
+        ProcessBuilder repoPb = new ProcessBuilder();
+        repoPb.directory(repoRoot);
+        try { executeCommand(repoPb, "git", "fetch", "--all", "--recurse-submodules=on-demand"); } catch (Exception ignore) {}
+
+        String shortCommit = headSha.substring(0, Math.min(headSha.length(), 7));
+        String tempBranch = "isolate_pr_" + shortCommit + "_tmp";
+        File wtDir = new File(workDir, "wt_pr_" + shortCommit);
+        try {
+            executeCommand(repoPb, "git", "worktree", "add", "-b", tempBranch, wtDir.getAbsolutePath(), headSha);
+        } catch (Exception e) {
+            executeCommand(repoPb, "git", "branch", "-f", tempBranch, headSha);
+            executeCommand(repoPb, "git", "worktree", "add", wtDir.getAbsolutePath(), tempBranch);
+        }
+
+        boolean success = false;
+        try {
+            ProcessBuilder wtPb = new ProcessBuilder();
+            wtPb.directory(wtDir);
+
+            executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
+            executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
+            executeCommand(wtPb, "git", "clean", "-xdf");
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", "cubridmanager");
+
+            if (config.isCcacheEnabled()) {
+                try {
+                    File logsDir = new File(config.getCcacheDir(), "logs");
+                    if (!logsDir.exists()) { logsDir.mkdirs(); }
+                    File tmpDir = new File(config.getCcacheDir(), "tmp");
+                    if (!tmpDir.exists()) { tmpDir.mkdirs(); }
+                } catch (Exception ignore) {}
+                wtPb.environment().put("CC", "ccache gcc");
+                wtPb.environment().put("CXX", "ccache g++");
+                wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
+                wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
+                wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
+                wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
+                wtPb.environment().put("CCACHE_BASEDIR", new File(config.getWorkDir()).getAbsolutePath());
+                wtPb.environment().put("CCACHE_NOHASHDIR", "1");
+                wtPb.environment().put("CCACHE_LOGFILE", new File(config.getCcacheDir(), "logs/ccache_" + shortCommit + ".log").getAbsolutePath());
+                if (config.getCcacheReadonlyDirect()) wtPb.environment().put("CCACHE_READONLY_DIRECT", "1");
+                wtPb.environment().put("CCACHE_STATS", config.getCcacheStatsEnabled() ? "true" : "false");
+                if (!config.getCcacheNamespace().isEmpty()) wtPb.environment().put("CCACHE_NAMESPACE", config.getCcacheNamespace());
+                if (!config.getCcacheSloppiness().isEmpty()) wtPb.environment().put("CCACHE_SLOPPINESS", config.getCcacheSloppiness());
+                try { executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize()); } catch (Exception ignore) {}
+            }
+
+            wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
+            java.util.List<String> buildCmd = new java.util.ArrayList<>();
+            buildCmd.add("./build.sh");
+            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
+            for (String token : normalizedArgs.trim().split("\\s+")) { if (!token.isEmpty()) buildCmd.add(token); }
+            executeCommand(wtPb, buildCmd.toArray(new String[0]));
+
+            String packageName = "cubrid_" + shortCommit + ".tar.gz";
+            File packageFile = new File(workDir, packageName);
+            ProcessBuilder tarPb = new ProcessBuilder();
+            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
+            success = true;
+            return packageFile.getAbsolutePath();
+        } finally {
+            try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception e) { logger.warning("Failed to remove worktree " + wtDir.getAbsolutePath() + ": " + e.getMessage()); }
+            try { executeCommand(repoPb, "git", "branch", "-D", tempBranch); } catch (Exception ignore) {}
+            if (!success) { try { deleteRecursively(wtDir); } catch (Exception ignore) {} }
+        }
+    }
     
     private File createDockerBuildScript(String commitHash, String buildType, String baselineCommit, File workDir) 
             throws IOException {
@@ -396,10 +739,14 @@ public class DockerBuildManager {
             if (config.isCcacheEnabled()) {
                 writer.println("# Report ccache statistics after build");
                 writer.println("if command -v ccache &> /dev/null; then");
-                writer.println("  echo 'Ccache status after build (verbose):'");
-                writer.println("  ccache -s -v || true");
-                writer.println("  echo 'Ccache configuration:'");
-                writer.println("  ccache -p || true");
+                writer.println("  echo 'Ccache status after build:'");
+                writer.println("  ccache -s || true");
+                writer.println("  echo 'Ccache configuration (via environment):'");
+                writer.println("  echo \\\"  CCACHE_DIR=$CCACHE_DIR\\\"");
+                writer.println("  echo \\\"  CCACHE_MAXSIZE=$CCACHE_MAXSIZE\\\"");
+                writer.println("  echo \\\"  CCACHE_HARDLINK=$CCACHE_HARDLINK\\\"");
+                writer.println("  echo \\\"  CCACHE_COMPILERCHECK=$CCACHE_COMPILERCHECK\\\"");
+                writer.println("  echo \\\"  CCACHE_LOGFILE=$CCACHE_LOGFILE\\\"");
                 writer.println("fi");
                 writer.println();
             }
@@ -518,11 +865,15 @@ public class DockerBuildManager {
             
             // Set up environment for ccache if enabled
             if (config.isCcacheEnabled()) {
-                // Ensure logs directory exists
+                // Ensure logs and tmp directories exist
                 try {
                     File logsDir = new File(config.getCcacheDir(), "logs");
                     if (!logsDir.exists()) {
                         logsDir.mkdirs();
+                    }
+                    File tmpDir = new File(config.getCcacheDir(), "tmp");
+                    if (!tmpDir.exists()) {
+                        tmpDir.mkdirs();
                     }
                 } catch (Exception ignore) {}
                 String commitShort = commitHash.substring(0, Math.min(commitHash.length(), 7));
@@ -574,12 +925,17 @@ public class DockerBuildManager {
             // Report ccache statistics after build
             if (config.isCcacheEnabled()) {
                 try {
-                    String stats = executeAndGet(wtPb, "ccache", "-s", "-v");
+                    String stats = executeAndGet(wtPb, "ccache", "-s");
                     logger.info("Ccache statistics after build:\n" + stats);
-                    try {
-                        String conf = executeAndGet(wtPb, "ccache", "-p");
-                        logger.info("Ccache configuration after build:\n" + conf);
-                    } catch (Exception ignore) {}
+                    
+                    // Print active configuration
+                    String commitShort = commitHash.substring(0, Math.min(commitHash.length(), 7));
+                    logger.info("Ccache configuration (via environment):");
+                    logger.info("  CCACHE_DIR=" + config.getCcacheDir());
+                    logger.info("  CCACHE_MAXSIZE=" + config.getCcacheMaxSize());
+                    logger.info("  CCACHE_HARDLINK=" + config.getCcacheHardlink());
+                    logger.info("  CCACHE_COMPILERCHECK=" + config.getCcacheCompilerCheck());
+                    logger.info("  CCACHE_LOGFILE=" + new File(config.getCcacheDir(), "logs/ccache_" + commitShort + ".log").getAbsolutePath());
                 } catch (Exception e) {
                     logger.warning("Failed to get ccache statistics: " + e.getMessage());
                 }

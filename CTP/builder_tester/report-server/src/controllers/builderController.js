@@ -29,6 +29,35 @@ class BuilderController {
     }
 
     /**
+     * Submit PR build request to Builder (accepts { prNumber, tests, ... })
+     */
+    async submitPrBuild(req, res) {
+        try {
+            const builderUrl = `${config.builder.protocol}://${config.builder.host}:${config.builder.port}/build`;
+
+            // Construct body ensuring prNumber is an integer or numeric string
+            const body = { ...req.body };
+            if (!('prNumber' in body)) {
+                return res.status(400).json({ error: 'Missing prNumber' });
+            }
+            // Ensure commits array is omitted to avoid ambiguity
+            if ('commits' in body && Array.isArray(body.commits) && body.commits.length > 0) {
+                delete body.commits;
+            }
+
+            const result = await proxyService.requestJson(builderUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            res.status(result.statusCode).json(result.json);
+        } catch (err) {
+            console.error('Error submitting PR build:', err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    /**
      * Get build status from Builder
      */
     async getBuildStatus(req, res) {

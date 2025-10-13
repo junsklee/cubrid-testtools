@@ -75,6 +75,27 @@ public class Builder {
         if (!workDir.exists()) {
             workDir.mkdirs();
         }
+        
+        // Ensure ccache directory structure exists if ccache is enabled
+        if (config.isCcacheEnabled()) {
+            try {
+                File ccacheDir = new File(config.getCcacheDir());
+                if (!ccacheDir.exists()) {
+                    ccacheDir.mkdirs();
+                }
+                File ccacheLogsDir = new File(config.getCcacheDir(), "logs");
+                if (!ccacheLogsDir.exists()) {
+                    ccacheLogsDir.mkdirs();
+                }
+                File ccacheTmpDir = new File(config.getCcacheDir(), "tmp");
+                if (!ccacheTmpDir.exists()) {
+                    ccacheTmpDir.mkdirs();
+                }
+                logger.info("Ccache directory structure initialized at: " + config.getCcacheDir());
+            } catch (Exception e) {
+                logger.warning("Failed to create ccache directory structure: " + e.getMessage());
+            }
+        }
 
         // Initialize Docker environment if enabled
         if (config.useDocker()) {
@@ -143,8 +164,8 @@ public class Builder {
                 // Validate request
                 validateRequest(request);
                 
-                // Extract parameters
-                JSONArray commits = request.getJSONArray("commits");
+                // Extract parameters (commits optional when using prNumber)
+                JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
                 JSONArray tests = request.getJSONArray("tests");
                 String callbackUrl = request.getString("callbackUrl");
                 
@@ -169,8 +190,13 @@ public class Builder {
                 }
                 
                 // Log request with request ID
-                logger.info(String.format("[%s] Received build request for %d commits and %d tests",
-                    requestId, commits.length(), tests.length()));
+                if (request.has("prNumber")) {
+                    logger.info(String.format("[%s] Received PR build request for PR #%s and %d tests",
+                        requestId, request.get("prNumber").toString(), tests.length()));
+                } else {
+                    logger.info(String.format("[%s] Received build request for %d commits and %d tests",
+                        requestId, commits.length(), tests.length()));
+                }
                 
                 // Create task ID (use request ID as task ID)
                 String taskId = requestId;
@@ -383,8 +409,13 @@ public class Builder {
     }
     
     private void validateRequest(JSONObject request) throws IllegalArgumentException {
-        if (!request.has("commits") || request.getJSONArray("commits").length() == 0) {
-            throw new IllegalArgumentException("Request must contain non-empty 'commits' array");
+        boolean hasCommits = request.has("commits") && request.getJSONArray("commits").length() > 0;
+        boolean hasPrNumber = request.has("prNumber") && (
+            (request.get("prNumber") instanceof Number && ((Number) request.get("prNumber")).intValue() > 0) ||
+            (request.get("prNumber") instanceof String && ((String) request.get("prNumber")).trim().matches("\\d+"))
+        );
+        if (!hasCommits && !hasPrNumber) {
+            throw new IllegalArgumentException("Request must contain non-empty 'commits' array or a valid 'prNumber'");
         }
         if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
             throw new IllegalArgumentException("Request must contain non-empty 'tests' array");
