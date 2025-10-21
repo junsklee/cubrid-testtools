@@ -151,11 +151,30 @@ public class BuilderConfig {
     }
     
     public String getBuildArg() {
-        return properties.getProperty(BUILD_ARG, "-g ninja -m debug build");
+        return properties.getProperty(BUILD_ARG, "-g ninja -c -DENABLE_SYSTEMTAP=OFF build");
     }
-    
+
+    /**
+     * Get build directory for a specific build type.
+     * Build directory is constructed dynamically: build_x86_64_{buildType}
+     *
+     * @param buildType "debug" or "release"
+     * @return build directory path
+     */
+    public String getBuildDir(String buildType) {
+        if (buildType == null || buildType.trim().isEmpty()) {
+            buildType = "debug";
+        }
+        String mode = buildType.trim().equalsIgnoreCase("release") ? "release" : "debug";
+        return "build_x86_64_" + mode;
+    }
+
+    /**
+     * Get build directory with default type (debug).
+     * Kept for backward compatibility.
+     */
     public String getBuildDir() {
-        return properties.getProperty(BUILD_DIR, "build_x86_64_debug");
+        return getBuildDir("debug");
     }
     
     public String getWorkDir() {

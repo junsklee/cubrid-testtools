@@ -464,7 +464,7 @@ public class BuilderTask {
             executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
             executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
             executeCommand(wtPb, "git", "clean", "-xdf");
-            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir(buildType));
             executeCommand(wtPb, "rm", "-rf", "cubridmanager");
 
             // ccache setup similar to buildCommit
@@ -494,7 +494,7 @@ public class BuilderTask {
             wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
             List<String> buildCmd = new ArrayList<>();
             buildCmd.add("./build.sh");
-            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
+            String normalizedArgs = DockerBuildManager.normalizeBuildArg(config.getBuildArg(), buildType);
             for (String token : normalizedArgs.trim().split("\\s+")) {
                 if (!token.isEmpty()) buildCmd.add(token);
             }
@@ -503,7 +503,7 @@ public class BuilderTask {
             String packageName = "cubrid_" + shortCommit + ".tar.gz";
             File packageFile = new File(workDir, packageName);
             ProcessBuilder tarPb = new ProcessBuilder();
-            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            tarPb.directory(new File(wtDir, config.getBuildDir(buildType)));
             executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
             success = true;
             return packageFile.getAbsolutePath();
@@ -809,7 +809,7 @@ public class BuilderTask {
 
             // 4) Clean & build
             executeCommand(wtPb, "git", "clean", "-xdf");
-            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir(buildType));
             executeCommand(wtPb, "rm", "-rf", "cubridmanager"); // temporary fix parity
 
             // Set up ccache environment if enabled
@@ -839,7 +839,8 @@ public class BuilderTask {
             // Build command with output capture for logging
             List<String> buildCmd = new ArrayList<>();
             buildCmd.add("./build.sh");
-            for (String token : config.getBuildArg().trim().split("\\s+")) {
+            String normalizedArgs = DockerBuildManager.normalizeBuildArg(config.getBuildArg(), buildType);
+            for (String token : normalizedArgs.trim().split("\\s+")) {
                 if (!token.isEmpty()) buildCmd.add(token);
             }
             
@@ -865,7 +866,7 @@ public class BuilderTask {
             File packageFile = new File(workDir, packageName);
 
             ProcessBuilder tarPb = new ProcessBuilder();
-            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            tarPb.directory(new File(wtDir, config.getBuildDir(buildType)));
             executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
 
             success = true;
@@ -1982,42 +1983,5 @@ public class BuilderTask {
             return value.substring(1, value.length() - 1);
         }
         return value;
-    }
-
-    // Ensure build_arg honors requested buildType (debug/release) and keeps target (build/dist) last.
-    // Removes any existing -m <mode> pair and inserts our desired one before the target.
-    private String normalizeBuildArg(String buildArg, String buildType) {
-        if (buildArg == null) buildArg = "";
-        String mode = (buildType != null && buildType.trim().equalsIgnoreCase("release")) ? "release" : "debug";
-
-        List<String> options = new ArrayList<>();
-        List<String> targets = new ArrayList<>();
-        String[] parts = buildArg.trim().isEmpty() ? new String[0] : buildArg.trim().split("\\s+");
-
-        boolean skipNext = false;
-        for (int i = 0; i < parts.length; i++) {
-            if (skipNext) { skipNext = false; continue; }
-            String t = parts[i];
-            if ("-m".equals(t)) {
-                // Skip existing -m and its value if present
-                skipNext = (i + 1 < parts.length);
-                continue;
-            }
-            // Classify positional targets (must be last): build | dist | all
-            if (!t.startsWith("-") && ("build".equals(t) || "dist".equals(t) || "all".equals(t))) {
-                targets.add(t);
-                continue;
-            }
-            options.add(t);
-        }
-
-        // Ensure -m <mode> appears before any target
-        options.add("-m");
-        options.add(mode);
-
-        // If no explicit target provided, default to leaving options only
-        List<String> out = new ArrayList<>(options);
-        out.addAll(targets);
-        return String.join(" ", out);
     }
 }

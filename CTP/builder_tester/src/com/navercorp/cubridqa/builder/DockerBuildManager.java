@@ -511,7 +511,7 @@ public class DockerBuildManager {
                 writer.println();
             }
             writer.println("# Create package");
-            writer.println("cd " + config.getBuildDir());
+            writer.println("cd " + config.getBuildDir(buildType));
             writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
             writer.println();
             writer.println("# Cleanup");
@@ -554,7 +554,7 @@ public class DockerBuildManager {
             executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
             executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
             executeCommand(wtPb, "git", "clean", "-xdf");
-            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir(buildType));
             executeCommand(wtPb, "rm", "-rf", "cubridmanager");
 
             if (config.isCcacheEnabled()) {
@@ -590,7 +590,7 @@ public class DockerBuildManager {
             String packageName = "cubrid_" + shortCommit + ".tar.gz";
             File packageFile = new File(workDir, packageName);
             ProcessBuilder tarPb = new ProcessBuilder();
-            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            tarPb.directory(new File(wtDir, config.getBuildDir(buildType)));
             executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
             success = true;
             return packageFile.getAbsolutePath();
@@ -752,7 +752,7 @@ public class DockerBuildManager {
             }
             
             writer.println("# Create package (can be skipped during baseline warm)");
-            writer.println("cd " + config.getBuildDir());
+            writer.println("cd " + config.getBuildDir(buildType));
             writer.println("if [ \"${BUILD_SKIP_PACKAGE:-0}\" != \"1\" ]; then tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .; fi");
             writer.println();
             writer.println("# Cleanup temporary branch and workspace");
@@ -860,9 +860,9 @@ public class DockerBuildManager {
             executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
             executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
             executeCommand(wtPb, "git", "clean", "-xdf");
-            executeCommand(wtPb, "rm", "-rf", config.getBuildDir());
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir(buildType));
             executeCommand(wtPb, "rm", "-rf", "cubridmanager");
-            
+
             // Set up environment for ccache if enabled
             if (config.isCcacheEnabled()) {
                 // Ensure logs and tmp directories exist
@@ -943,7 +943,7 @@ public class DockerBuildManager {
             String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
             File packageFile = new File(workDir, packageName);
             ProcessBuilder tarPb = new ProcessBuilder();
-            tarPb.directory(new File(wtDir, config.getBuildDir()));
+            tarPb.directory(new File(wtDir, config.getBuildDir(buildType)));
             executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
             ok = true;
             return packageFile.getAbsolutePath();
@@ -1000,9 +1000,16 @@ public class DockerBuildManager {
         return imageReady;
     }
 
-    // Ensure build_arg honors requested buildType (debug/release) and keeps target (build/dist) last.
-    // Removes any existing -m <mode> pair and inserts our desired one before the target.
-    private String normalizeBuildArg(String buildArg, String buildType) {
+    /**
+     * Normalize build arguments to honor requested buildType (debug/release).
+     * Removes any existing -m flag and adds the correct one based on buildType.
+     * Keeps build targets (build/dist/all) at the end.
+     *
+     * @param buildArg Base build arguments from configuration
+     * @param buildType "debug" or "release"
+     * @return Normalized build arguments string
+     */
+    public static String normalizeBuildArg(String buildArg, String buildType) {
         if (buildArg == null) buildArg = "";
         String mode = (buildType != null && buildType.trim().equalsIgnoreCase("release")) ? "release" : "debug";
 
