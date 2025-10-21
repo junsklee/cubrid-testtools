@@ -167,6 +167,8 @@ public class DockerBuildManager {
             baseDockerCmd.add("CCACHE_LOGFILE=/work/.ccache/logs/ccache_" + commitShort + ".log");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_TEMPDIR=/work/.ccache/tmp");
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_RESET_STATS=1");
             // Optional tuning knobs
             if (config.getCcacheReadonlyDirect()) {
                 baseDockerCmd.add("-e");
@@ -443,7 +445,8 @@ public class DockerBuildManager {
                 writer.println("if command -v ccache &> /dev/null; then");
                 writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
                 writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
-                writer.println("  if [ \"${CCACHE_RESET_STATS:-0}\" = \"1\" ]; then ccache -z; fi");
+                writer.println("  if [ -n \"$CCACHE_LOGFILE\" ]; then rm -f \"$CCACHE_LOGFILE\" || true; fi");
+                writer.println("  ccache -z || true");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
                 writer.println("fi");
@@ -484,8 +487,7 @@ public class DockerBuildManager {
             writer.println();
             writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
-            writer.println("rm -rf cubridmanager/*");
-            writer.println();
+                        writer.println();
             writer.println("# Build CUBRID");
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
             writer.println("  echo 'Using devtoolset-8 for build'");
@@ -555,7 +557,6 @@ public class DockerBuildManager {
             executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
             executeCommand(wtPb, "git", "clean", "-xdf");
             executeCommand(wtPb, "rm", "-rf", config.getBuildDir(buildType));
-            executeCommand(wtPb, "rm", "-rf", "cubridmanager");
 
             if (config.isCcacheEnabled()) {
                 try {
@@ -572,11 +573,15 @@ public class DockerBuildManager {
                 wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
                 wtPb.environment().put("CCACHE_BASEDIR", new File(config.getWorkDir()).getAbsolutePath());
                 wtPb.environment().put("CCACHE_NOHASHDIR", "1");
-                wtPb.environment().put("CCACHE_LOGFILE", new File(config.getCcacheDir(), "logs/ccache_" + shortCommit + ".log").getAbsolutePath());
+                File ccacheLogFile = new File(config.getCcacheDir(), "logs/ccache_" + shortCommit + ".log");
+                if (ccacheLogFile.exists() && !ccacheLogFile.delete()) { /* ignore */ }
+                wtPb.environment().put("CCACHE_LOGFILE", ccacheLogFile.getAbsolutePath());
+                wtPb.environment().put("CCACHE_RESET_STATS", "1");
                 if (config.getCcacheReadonlyDirect()) wtPb.environment().put("CCACHE_READONLY_DIRECT", "1");
                 wtPb.environment().put("CCACHE_STATS", config.getCcacheStatsEnabled() ? "true" : "false");
                 if (!config.getCcacheNamespace().isEmpty()) wtPb.environment().put("CCACHE_NAMESPACE", config.getCcacheNamespace());
                 if (!config.getCcacheSloppiness().isEmpty()) wtPb.environment().put("CCACHE_SLOPPINESS", config.getCcacheSloppiness());
+                try { executeCommand(wtPb, "ccache", "-z"); } catch (Exception ignore) {}
                 try { executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize()); } catch (Exception ignore) {}
             }
 
@@ -619,8 +624,9 @@ public class DockerBuildManager {
                 writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
                 writer.println("  # Set max size (use -M for compatibility)");
                 writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
-                writer.println("  # Optionally reset statistics for measurement");
-                writer.println("  if [ \"${CCACHE_RESET_STATS:-0}\" = \"1\" ]; then ccache -z; fi");
+                writer.println("  # Reset statistics for per-build reporting and truncate log");
+                writer.println("  if [ -n \"$CCACHE_LOGFILE\" ]; then rm -f \"$CCACHE_LOGFILE\" || true; fi");
+                writer.println("  ccache -z || true");
                 writer.println("  # hard_link is controlled via CCACHE_HARDLINK env; avoid unsupported ccache flags on older versions");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
@@ -719,8 +725,7 @@ public class DockerBuildManager {
             writer.println("# Clean any previous builds");
             writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
-            writer.println("rm -rf cubridmanager/*");
-            writer.println();
+                        writer.println();
             writer.println("# Build CUBRID");
             
             // Check if devtoolset-8 is available and use it
@@ -861,7 +866,6 @@ public class DockerBuildManager {
             executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
             executeCommand(wtPb, "git", "clean", "-xdf");
             executeCommand(wtPb, "rm", "-rf", config.getBuildDir(buildType));
-            executeCommand(wtPb, "rm", "-rf", "cubridmanager");
 
             // Set up environment for ccache if enabled
             if (config.isCcacheEnabled()) {
