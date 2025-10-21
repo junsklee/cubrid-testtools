@@ -120,11 +120,31 @@
             
             const info = document.createElement('div');
             info.className = 'commit-info';
-            info.innerHTML = `
-                <div class="commit-sha">${commit.sha.substring(0, 8)}</div>
-                <div class="commit-message">${escapeHtml(commit.commit.message.split('\n')[0])}</div>
-                <div class="commit-author">${commit.commit.author.name} - ${formatDate(commit.commit.author.date)}</div>
-            `;
+
+            const shaDiv = document.createElement('div');
+            shaDiv.className = 'commit-sha';
+
+            const shaLink = document.createElement('a');
+            shaLink.href = `https://github.com/CUBRID/cubrid/commit/${commit.sha}`;
+            shaLink.target = '_blank';
+            shaLink.rel = 'noopener noreferrer';
+            shaLink.textContent = commit.sha.substring(0, 8);
+            shaLink.title = commit.sha;
+            shaLink.addEventListener('click', (event) => event.stopPropagation());
+
+            shaDiv.appendChild(shaLink);
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'commit-message';
+            messageDiv.textContent = commit.commit.message.split('\n')[0];
+
+            const authorDiv = document.createElement('div');
+            authorDiv.className = 'commit-author';
+            authorDiv.textContent = `${commit.commit.author.name} - ${formatDate(commit.commit.author.date)}`;
+
+            info.appendChild(shaDiv);
+            info.appendChild(messageDiv);
+            info.appendChild(authorDiv);
             
             div.appendChild(checkbox);
             div.appendChild(info);

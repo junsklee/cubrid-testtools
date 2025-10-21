@@ -106,6 +106,46 @@ async function startServer() {
             });
         });
         
+        // Handle unhandled promise rejections
+        process.on('unhandledRejection', (reason, promise) => {
+            console.error('Unhandled Promise Rejection at:', promise);
+            console.error('Reason:', reason);
+            // Log but don't exit - keep the server running
+        });
+        
+        // Handle uncaught exceptions
+        process.on('uncaughtException', (error) => {
+            console.error('Uncaught Exception:', error);
+            console.error('Stack:', error.stack);
+            // Log but don't exit - keep the server running
+            // Only exit on critical errors
+            if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
+                console.error('Critical error - exiting...');
+                process.exit(1);
+            }
+        });
+        
+        // Handle warnings
+        process.on('warning', (warning) => {
+            console.warn('Warning:', warning.name);
+            console.warn('Message:', warning.message);
+            console.warn('Stack:', warning.stack);
+        });
+        
+        // Keep-alive: Set up a heartbeat to ensure process stays alive
+        const heartbeat = setInterval(() => {
+            // This helps detect if the event loop is blocked
+            const timestamp = new Date().toISOString();
+            if (config.app.environment === 'development') {
+                console.log(`[Heartbeat] Server alive at ${timestamp}`);
+            }
+        }, 3600000); // Every hour
+        
+        // Clear heartbeat on shutdown
+        process.on('exit', () => {
+            clearInterval(heartbeat);
+        });
+        
     } catch (err) {
         console.error('Failed to start server:', err);
         process.exit(1);

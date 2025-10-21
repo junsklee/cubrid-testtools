@@ -405,8 +405,18 @@
 
         .commit-sha {
             font-family: 'Courier New', monospace;
-            color: #60a5fa;
+            color: #a79d2c;
             font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .commit-sha a {
+            color: inherit;
+            text-decoration: underline;
+        }
+
+        .commit-sha a:hover {
+            color: #fde047;
         }
 
         .commit-message {
