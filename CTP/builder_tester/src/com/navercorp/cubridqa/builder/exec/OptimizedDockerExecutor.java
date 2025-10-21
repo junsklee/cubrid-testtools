@@ -13,10 +13,15 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Logger;
 
 public class OptimizedDockerExecutor implements ExecutorStrategy {
+    private static final long IMAGE_READY_WAIT_SECONDS = 15;
+
     private final Config config;
     private final BuildCache buildCache;
     private final ShellTcSync shellTcSync;
@@ -41,10 +46,13 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             if (request.getCommitShort() != null && !request.getCommitShort().trim().isEmpty()) {
                 commitHash = request.getCommitShort();
             }
-            
+
+            // Extract build type for container naming
+            String buildType = request.getBuildType() != null ? request.getBuildType() : "debug";
+
             // Generate unique container name with timestamp to avoid conflicts
             String uniqueId = String.valueOf(System.currentTimeMillis());
-            containerName = "tester_" + commitHash + "_" + request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + uniqueId;
+            containerName = "tester_" + buildType + "_" + commitHash + "_" + request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + uniqueId;
         }
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
@@ -70,27 +78,58 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         }
         
         // Build or get Docker image with CUBRID pre-installed
-        String dockerImage;
+        String commitShort = request.getCommitShort() != null ? request.getCommitShort() : "unknown";
+        String baselineShort = request.getBaselineShort() != null ? request.getBaselineShort() : "unknown";
+
+        String dockerImage = null;
         try {
             if (imageBuilder != null) {
-                // Use reflection to call getOrBuildImage method
-                dockerImage = (String) imageBuilder.getClass()
-                    .getMethod("getOrBuildImage", String.class, String.class, Path.class)
-                    .invoke(imageBuilder, 
-                           request.getCommitShort() != null ? request.getCommitShort() : "unknown", 
-                           request.getBaselineShort() != null ? request.getBaselineShort() : "unknown", 
-                           localBuildPackage);
+                CompletableFuture<String> imageFuture = null;
+                try {
+                    imageFuture = (CompletableFuture<String>) imageBuilder.getClass()
+                        .getMethod("getOrBuildImageAsync", String.class, String.class, Path.class, Logger.class)
+                        .invoke(imageBuilder, commitShort, baselineShort, localBuildPackage, testLogger);
+                } catch (NoSuchMethodException asyncUnavailable) {
+                    dockerImage = (String) imageBuilder.getClass()
+                        .getMethod("getOrBuildImage", String.class, String.class, Path.class)
+                        .invoke(imageBuilder, commitShort, baselineShort, localBuildPackage);
+                }
+
+                if (imageFuture != null) {
+                    try {
+                        dockerImage = imageFuture.get(IMAGE_READY_WAIT_SECONDS, TimeUnit.SECONDS);
+                    } catch (TimeoutException timeout) {
+                        throw new ImageBuildInProgressException("Optimized Docker image build in progress");
+                    } catch (ExecutionException execException) {
+                        Throwable cause = execException.getCause();
+                        if (cause instanceof Exception) {
+                            throw (Exception) cause;
+                        }
+                        throw new Exception("Failed to build optimized Docker image", cause);
+                    }
+                }
+
+                if (dockerImage == null) {
+                    throw new Exception("Optimized Docker image name was not resolved");
+                }
+
                 testLogger.info("Using Docker image: " + dockerImage);
             } else {
                 testLogger.info("Image builder not available, falling back to standard execution");
                 throw new Exception("Image builder not available");
             }
+        } catch (ImageBuildInProgressException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Exception("Interrupted while waiting for optimized Docker image", e);
         } catch (Exception e) {
             testLogger.warning("Failed to build optimized Docker image: " + e.getMessage());
             throw e;  // Let the calling method handle fallback
         }
-        
-        // Ensure shell testcases repository is on the requested branch
+
+
+// Ensure shell testcases repository is on the requested branch
         try {
             shellTcSync.sync(testLogger);
         } catch (Exception e) {
@@ -386,4 +425,11 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             return String.format("docker_opt_%s_%s.%d.log", commitShort, safeTestName, attemptNumber);
         }
     }
+
+    public static class ImageBuildInProgressException extends Exception {
+        public ImageBuildInProgressException(String message) {
+            super(message);
+        }
+    }
+
 }

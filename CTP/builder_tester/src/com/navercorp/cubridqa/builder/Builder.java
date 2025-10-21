@@ -494,8 +494,9 @@ public class Builder {
             logger.info("Docker not available; skipping container cleanup");
             return;
         }
-        // 1) Remove tester debug containers kept alive from previous runs
+        // 1) Remove tester containers kept alive from previous runs (both debug and release)
         removeByNamePrefix("tester_debug_");
+        removeByNamePrefix("tester_release_");
         // 2) Prune exited containers for our known images (safe)
         removeExitedByAncestor(config.getDockerBuildImage());
         removeExitedByAncestor(config.getDockerTestImage());

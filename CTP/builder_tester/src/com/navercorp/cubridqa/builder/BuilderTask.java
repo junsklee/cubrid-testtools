@@ -125,12 +125,15 @@ public class BuilderTask {
             for (String worker : workerIps) {
                 workerTestQueues.put(worker, new ArrayList<>());
             }
-            
+
             // Calculate total number of test executions for proper distribution
             int totalTestExecutions = builtPackages.size() * tests.length();
             taskLogger.info(String.format("Distributing %d test executions (%d commits × %d tests) across %d workers",
                 totalTestExecutions, builtPackages.size(), tests.length(), workerIps.size()));
-            
+
+            // Make buildType final for use in lambda
+            final String finalBuildType = buildType;
+
             // FIX: Use a global test index that properly distributes tests regardless of commit count
             int globalTestIndex = 0;
             
@@ -178,8 +181,8 @@ public class BuilderTask {
                         commit.substring(0, Math.min(7, commit.length())), assignedWorker));
                     
                     // Create test callable with appropriate build package reference
-                    workerTestQueues.get(assignedWorker).add(() -> 
-                        runTest(commit, buildPackage, testPath, assignedWorker, this.baselineCommit));
+                    workerTestQueues.get(assignedWorker).add(() ->
+                        runTest(commit, buildPackage, testPath, assignedWorker, this.baselineCommit, finalBuildType));
                 }
             }
             
@@ -1157,8 +1160,8 @@ public class BuilderTask {
         return parts.length > 2;
     }
     
-    private JSONObject runTest(String commit, String buildPackage, String testPath, 
-                               String workerIp, String baselineCommit) {
+    private JSONObject runTest(String commit, String buildPackage, String testPath,
+                               String workerIp, String baselineCommit, String buildType) {
         try {
             // Parse host and port from workerIp (supports "host:port" format)
             String host = workerIp;
@@ -1223,6 +1226,7 @@ public class BuilderTask {
                 .put("baseline", baselineCommit)  // Add baseline commit for Docker image differentiation
                 .put("baselineShort", baselineCommit.substring(0, Math.min(baselineCommit.length(), 7)))  // Add short baseline
                 .put("expectedBuildVersion", commit.substring(0, 7))
+                .put("buildType", buildType != null ? buildType : "debug")  // Add build type for container naming
                 .put("keepAlive", false)
                 .put("runMode", runModeOverride)
                 .put("minRuns", minRunsOverride)

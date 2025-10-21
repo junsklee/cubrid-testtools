@@ -36,7 +36,8 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         boolean keepAlive = request.isKeepAlive();
         String containerName = request.getContainerName();
         if (containerName == null || containerName.trim().isEmpty()) {
-            containerName = "tester_debug_" + request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis();
+            String buildType = request.getBuildType() != null ? request.getBuildType() : "debug";
+            containerName = "tester_" + buildType + "_" + request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_") + "_" + System.currentTimeMillis();
         }
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");

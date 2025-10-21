@@ -21,6 +21,7 @@ public class TestRequest {
     private final String testName;
     private final String containerName;
     private final int attemptNumber;
+    private final String buildType;
     
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
@@ -40,7 +41,8 @@ public class TestRequest {
         this.testName = json.optString("testName", null);
         this.containerName = json.optString("containerName", null);
         this.attemptNumber = json.optInt("attemptNumber", 1);
-        
+        this.buildType = json.optString("buildType", "debug");
+
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
             this.timeBudgetMs = tb >= 1 ? tb : null;
@@ -67,4 +69,5 @@ public class TestRequest {
     public String getTestName() { return testName; }
     public String getContainerName() { return containerName; }
     public int getAttemptNumber() { return attemptNumber; }
+    public String getBuildType() { return buildType; }
 }

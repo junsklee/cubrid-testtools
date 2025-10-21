@@ -324,6 +324,9 @@ public class TestOrchestrator {
                 testLogger.info("Attempting optimized Docker execution with pre-built image...");
                 TestResult result = optimizedDockerExecutor.execute(request, workDir, testLogger);
                 return convertToJSONObject(result);
+            } catch (OptimizedDockerExecutor.ImageBuildInProgressException e) {
+                testLogger.info("Optimized Docker image is still building; falling back to standard execution for now.");
+                // Fall through to standard execution once the warm image is ready
             } catch (Exception e) {
                 testLogger.warning("Optimized Docker execution failed, falling back to standard: " + e.getMessage());
                 // Fall through to standard execution

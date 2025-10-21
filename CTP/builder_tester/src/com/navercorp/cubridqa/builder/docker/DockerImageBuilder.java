@@ -26,13 +26,20 @@ public class DockerImageBuilder {
     private final Path workDir;
     private final Map<String, String> imageCache = new ConcurrentHashMap<>();
     private final Map<String, Long> imageBuildTime = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<String>> inProgressBuilds = new ConcurrentHashMap<>();
     private final int maxCachedImages;
     private final Object buildLock = new Object();
+    private final ExecutorService buildExecutor;
     
     public DockerImageBuilder(BuilderConfig config) {
         this.config = config;
         this.workDir = Paths.get(config.getWorkDir()).resolve("docker_images");
         this.maxCachedImages = config.getBuildCacheSize() > 0 ? config.getBuildCacheSize() : 20;
+        this.buildExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "docker-image-builder");
+            t.setDaemon(true);
+            return t;
+        });
         
         try {
             Files.createDirectories(workDir);
@@ -78,6 +85,56 @@ public class DockerImageBuilder {
         return imageName;
     }
     
+    /**
+     * Asynchronously build (or reuse) the Docker image for the provided commit/baseline combination.
+     * Returns a future that completes once the image is ready.
+     */
+    public CompletableFuture<String> getOrBuildImageAsync(String commitHash, String baselineHash, Path buildPackage, Logger requestLogger) {
+        String imageKey = commitHash + "_" + baselineHash;
+        String imageName = "cubrid-test:" + imageKey;
+
+        if (imageExists(imageName)) {
+            updateCacheEntry(imageKey, imageName);
+            if (requestLogger != null) {
+                requestLogger.info("Optimized Docker image already available: " + imageName);
+            } else {
+                logger.info("Optimized Docker image already available: " + imageName);
+            }
+            return CompletableFuture.completedFuture(imageName);
+        }
+
+        return inProgressBuilds.computeIfAbsent(imageKey, key ->
+            startAsyncImageBuild(imageKey, imageName, buildPackage, requestLogger)
+        );
+    }
+
+    private CompletableFuture<String> startAsyncImageBuild(String imageKey, String imageName, Path buildPackage, Logger requestLogger) {
+        Logger activeLogger = requestLogger != null ? requestLogger : logger;
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                synchronized (buildLock) {
+                    if (imageExists(imageName)) {
+                        updateCacheEntry(imageKey, imageName);
+                        activeLogger.info("Optimized Docker image became available while waiting: " + imageName);
+                        return imageName;
+                    }
+
+                    activeLogger.info("Optimized Docker image not found, building: " + imageName);
+                    long start = System.currentTimeMillis();
+                    buildImageFromPackage(imageKey, buildPackage);
+                    long duration = System.currentTimeMillis() - start;
+                    activeLogger.info(String.format("Optimized Docker image ready (%s) in %d ms", imageName, duration));
+                }
+                return imageName;
+            } catch (IOException e) {
+                activeLogger.severe("Failed to build optimized Docker image " + imageName + ": " + e.getMessage());
+                throw new CompletionException(e);
+            } finally {
+                inProgressBuilds.remove(imageKey);
+            }
+        }, buildExecutor);
+    }
+
     /**
      * Backward compatibility method - use with caution as it may reuse images incorrectly
      * @deprecated Use getOrBuildImage(String, String, Path) instead to specify baseline
