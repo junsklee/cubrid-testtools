@@ -27,6 +27,7 @@
             
             // Check for active sessions on page load
             checkForActiveSessions();
+            updateBaselineDisplay();
         });
 
         // Setup event listeners
@@ -187,6 +188,59 @@
             if (selectedCountSpan) {
                 selectedCountSpan.textContent = count;
             }
+            updateBaselineDisplay();
+        }
+
+        // Update baseline commit display
+        function updateBaselineDisplay() {
+            const baselineContainer = document.getElementById('baselineInfo');
+            const baselineValue = document.getElementById('baselineSha');
+            if (!baselineContainer || !baselineValue) return;
+
+            baselineContainer.classList.remove('has-baseline', 'baseline-error');
+            baselineValue.textContent = '';
+
+            if (commitMode !== 'select') {
+                baselineValue.textContent = 'Available in Browse & Select mode.';
+                return;
+            }
+
+            let earliestCommit = null;
+            let earliestIndex = -1;
+
+            commits.forEach((commit, index) => {
+                if (selectedCommits.has(commit.sha) && index > earliestIndex) {
+                    earliestCommit = commit;
+                    earliestIndex = index;
+                }
+            });
+
+            if (!earliestCommit) {
+                baselineValue.textContent = 'Select commits to determine baseline.';
+                return;
+            }
+
+            const parent = Array.isArray(earliestCommit.parents) ? earliestCommit.parents[0] : null;
+            if (!parent || !parent.sha) {
+                baselineValue.textContent = 'Unable to determine baseline for selected commits.';
+                baselineContainer.classList.add('baseline-error');
+                return;
+            }
+
+            const link = document.createElement('a');
+            link.href = `https://github.com/CUBRID/cubrid/commit/${parent.sha}`;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = parent.sha.substring(0, 8);
+            link.title = parent.sha;
+
+            const note = document.createElement('span');
+            note.className = 'baseline-note';
+            note.textContent = ' (parent of earliest selected commit)';
+
+            baselineValue.appendChild(link);
+            baselineValue.appendChild(note);
+            baselineContainer.classList.add('has-baseline');
         }
 
         // Select all commits
@@ -250,7 +304,12 @@
             }
             
             updateCommitCount();
-            showToast(`Switched to ${mode === 'select' ? 'Browse & Select' : 'Manual Input'} mode`, 'info');
+            const modeLabelMap = {
+                select: 'Browse & Select',
+                manual: 'Manual Input',
+                pr: 'PR Number'
+            };
+            showToast(`Switched to ${modeLabelMap[mode] || mode} mode`, 'info');
         }
 
         // Toggle advanced configuration panel

@@ -405,18 +405,83 @@
 
         .commit-sha {
             font-family: 'Courier New', monospace;
-            color: #a79d2c;
+            color: #60a5fa;
             font-size: 0.875rem;
+        }
+
+        .commit-item .commit-sha {
+            color: #facc15;
             font-weight: 600;
         }
 
-        .commit-sha a {
+        .commit-item .commit-sha a {
             color: inherit;
             text-decoration: underline;
         }
 
-        .commit-sha a:hover {
+        .commit-item .commit-sha a:hover {
             color: #fde047;
+        }
+
+        .baseline-info {
+            margin-top: 1rem;
+            padding: 0.75rem 1rem;
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 8px;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .baseline-info .baseline-label {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .baseline-info .baseline-value {
+            color: inherit;
+        }
+
+        .baseline-info .baseline-value a {
+            color: #facc15;
+            font-weight: 600;
+            text-decoration: underline;
+        }
+
+        .baseline-info .baseline-value a:hover {
+            color: #fde047;
+        }
+
+        .baseline-info .baseline-note {
+            color: var(--secondary);
+            margin-left: 0.25rem;
+        }
+
+        .baseline-info.has-baseline {
+            border-color: rgba(250, 204, 21, 0.4);
+            background: rgba(30, 41, 59, 0.75);
+        }
+
+        .baseline-info.has-baseline .baseline-label {
+            color: #fef3c7;
+        }
+
+        .baseline-info.baseline-error {
+            border-color: rgba(239, 68, 68, 0.5);
+            color: var(--error);
+        }
+
+        .baseline-info.baseline-error .baseline-label,
+        .baseline-info.baseline-error .baseline-value {
+            color: var(--error);
+        }
+
+        .baseline-info.baseline-error .baseline-value a {
+            color: var(--error);
         }
 
         .commit-message {
