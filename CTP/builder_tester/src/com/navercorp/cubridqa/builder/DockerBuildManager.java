@@ -167,8 +167,6 @@ public class DockerBuildManager {
             baseDockerCmd.add("CCACHE_LOGFILE=/work/.ccache/logs/ccache_" + commitShort + ".log");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_TEMPDIR=/work/.ccache/tmp");
-            baseDockerCmd.add("-e");
-            baseDockerCmd.add("CCACHE_RESET_STATS=1");
             // Optional tuning knobs
             if (config.getCcacheReadonlyDirect()) {
                 baseDockerCmd.add("-e");
@@ -576,7 +574,6 @@ public class DockerBuildManager {
                 File ccacheLogFile = new File(config.getCcacheDir(), "logs/ccache_" + shortCommit + ".log");
                 if (ccacheLogFile.exists() && !ccacheLogFile.delete()) { /* ignore */ }
                 wtPb.environment().put("CCACHE_LOGFILE", ccacheLogFile.getAbsolutePath());
-                wtPb.environment().put("CCACHE_RESET_STATS", "1");
                 if (config.getCcacheReadonlyDirect()) wtPb.environment().put("CCACHE_READONLY_DIRECT", "1");
                 wtPb.environment().put("CCACHE_STATS", config.getCcacheStatsEnabled() ? "true" : "false");
                 if (!config.getCcacheNamespace().isEmpty()) wtPb.environment().put("CCACHE_NAMESPACE", config.getCcacheNamespace());
@@ -721,13 +718,12 @@ public class DockerBuildManager {
             writer.println("git submodule update --init --recursive --checkout --force");
             writer.println();
 
-            
             writer.println("# Clean any previous builds");
             writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
                         writer.println();
             writer.println("# Build CUBRID");
-            
+
             // Check if devtoolset-8 is available and use it
             writer.println("# Try to use devtoolset-8 if available");
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
