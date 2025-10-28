@@ -160,7 +160,7 @@ public class DockerBuildManager {
             baseDockerCmd.add("CCACHE_MAXSIZE=" + config.getCcacheMaxSize());
             // Improve reuse across different work dirs and enable logging
             baseDockerCmd.add("-e");
-            baseDockerCmd.add("CCACHE_BASEDIR=/work");
+            baseDockerCmd.add("CCACHE_BASEDIR=/tmp/cubrid-build");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_NOHASHDIR=1");
             baseDockerCmd.add("-e");
@@ -338,7 +338,7 @@ public class DockerBuildManager {
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_MAXSIZE=" + config.getCcacheMaxSize());
             baseDockerCmd.add("-e");
-            baseDockerCmd.add("CCACHE_BASEDIR=/work");
+            baseDockerCmd.add("CCACHE_BASEDIR=/tmp/cubrid-build");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_NOHASHDIR=1");
             baseDockerCmd.add("-e");
@@ -461,8 +461,11 @@ public class DockerBuildManager {
             writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
-            writer.println("echo \"Using build workspace: $target\"");
-            writer.println("cd \"$target\"");
+            writer.println("stable_root=/tmp/cubrid-build");
+            writer.println("rm -rf \"$stable_root\"");
+            writer.println("ln -s \"$target\" \"$stable_root\"");
+            writer.println("echo \"Using build workspace: $target (stable path: $stable_root)\"");
+            writer.println("cd \"$stable_root\"");
             writer.println();
             writer.println("# Clone repository from host reference");
             writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
@@ -553,6 +556,7 @@ public class DockerBuildManager {
             writer.println("git checkout --detach || true");
             writer.println("git branch -D \"$tmp_branch\" || true");
             writer.println("cd /");
+            writer.println("rm -f \"$stable_root\" 2>/dev/null || true");
             writer.println("rm -rf \"$target\" || true");
             writer.println("echo 'PR build completed successfully'");
         }
@@ -677,8 +681,11 @@ public class DockerBuildManager {
             writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
-            writer.println("echo \"Using build workspace: $target\"");
-            writer.println("cd \"$target\"");
+            writer.println("stable_root=/tmp/cubrid-build");
+            writer.println("rm -rf \"$stable_root\"");
+            writer.println("ln -s \"$target\" \"$stable_root\"");
+            writer.println("echo \"Using build workspace: $target (stable path: $stable_root)\"");
+            writer.println("cd \"$stable_root\"");
             writer.println();
             writer.println("# Clone source into writable target using local reference to avoid network fetches");
             writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
@@ -692,7 +699,7 @@ public class DockerBuildManager {
             writer.println("git checkout -B \"$tmp_branch\" \"${BASELINE_COMMIT}\"");
             writer.println();
             writer.println("# Store the current repo path for patch creation");
-            writer.println("current_repo=\"$target/repo\"");
+            writer.println("current_repo=\"$stable_root/repo\"");
             writer.println();
             writer.println("# Function to apply commit with fallback");
             writer.println("apply_commit() {");
@@ -829,6 +836,7 @@ public class DockerBuildManager {
             writer.println("git checkout --detach || true");
             writer.println("git branch -D \"$tmp_branch\" || true");
             writer.println("cd /");
+            writer.println("rm -f \"$stable_root\" 2>/dev/null || true");
             writer.println("rm -rf \"$target\" || true");
             writer.println("echo \"Build completed successfully\"");
         }
