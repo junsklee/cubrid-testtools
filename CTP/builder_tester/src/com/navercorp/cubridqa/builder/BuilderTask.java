@@ -181,7 +181,7 @@ public class BuilderTask {
                         commit.substring(0, Math.min(7, commit.length())), assignedWorker));
                     
                     // Create test callable with appropriate build package reference
-                    workerTestQueues.get(assignedWorker).add(() ->
+                    workerTestQueues.get(assignedWorker).add(() -> 
                         runTest(commit, buildPackage, testPath, assignedWorker, this.baselineCommit, finalBuildType));
                 }
             }
@@ -1160,7 +1160,7 @@ public class BuilderTask {
         return parts.length > 2;
     }
     
-    private JSONObject runTest(String commit, String buildPackage, String testPath,
+    private JSONObject runTest(String commit, String buildPackage, String testPath, 
                                String workerIp, String baselineCommit, String buildType) {
         try {
             // Parse host and port from workerIp (supports "host:port" format)

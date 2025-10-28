@@ -42,7 +42,7 @@ public class TestRequest {
         this.containerName = json.optString("containerName", null);
         this.attemptNumber = json.optInt("attemptNumber", 1);
         this.buildType = json.optString("buildType", "debug");
-
+        
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
             this.timeBudgetMs = tb >= 1 ? tb : null;
