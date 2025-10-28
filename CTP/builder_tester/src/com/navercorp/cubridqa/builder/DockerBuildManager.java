@@ -451,11 +451,11 @@ public class DockerBuildManager {
                 writer.println();
             }
 
-            writer.println("# Prepare working directory");
+            writer.println("# Prepare working directory with FIXED name for ccache path consistency");
             writer.println("if [ -d /work ]; then");
-            writer.println("  target=/work/cubrid-pr_${COMMIT_HASH:0:7}");
+            writer.println("  target=/work/cubrid-build");
             writer.println("else");
-            writer.println("  target=/tmp/cubrid-pr_${COMMIT_HASH:0:7}");
+            writer.println("  target=/tmp/cubrid-build");
             writer.println("fi");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
@@ -485,7 +485,30 @@ public class DockerBuildManager {
             writer.println();
             writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
-                        writer.println();
+            writer.println();
+
+            // Add git shim for deterministic version if ccache is enabled
+            if (config.isCcacheEnabled()) {
+                writer.println("# Create git shim for deterministic version (ccache optimization)");
+                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
+                writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
+                writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
+                writer.println("#!/usr/bin/env bash");
+                writer.println("# Intercept version queries and return deterministic values");
+                writer.println("if [[ \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ]]; then");
+                writer.println("  echo \"0000000\"");
+                writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
+                writer.println("  echo \"0\"");
+                writer.println("else");
+                writer.println("  exec /usr/bin/git \"$@\"");
+                writer.println("fi");
+                writer.println("GITSHIMEOF");
+                writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
+                writer.println("export PATH=\"$GIT_SHIM_DIR:$PATH\"");
+                writer.println("echo \"Git shim active for deterministic version\"");
+                writer.println();
+            }
+
             writer.println("# Build CUBRID");
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
             writer.println("  echo 'Using devtoolset-8 for build'");
@@ -496,6 +519,14 @@ public class DockerBuildManager {
             writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
             writer.println();
+
+            // Cleanup git shim if it was created
+            if (config.isCcacheEnabled()) {
+                writer.println("# Cleanup git shim");
+                writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
+                writer.println();
+            }
+
             if (config.isCcacheEnabled()) {
                 writer.println("# Report ccache statistics after build");
                 writer.println("if command -v ccache &> /dev/null; then");
@@ -633,11 +664,11 @@ public class DockerBuildManager {
 
             // Reverted path normalization flags (keep environment unchanged)
             
-            writer.println("# Prepare working directory (prefer host-mounted /work if available), per-commit to avoid collisions");
+            writer.println("# Prepare working directory with FIXED name for ccache path consistency");
             writer.println("if [ -d /work ]; then");
-            writer.println("  target=/work/cubrid-build_${COMMIT_HASH:0:7}");
+            writer.println("  target=/work/cubrid-build");
             writer.println("else");
-            writer.println("  target=/tmp/cubrid-build_${COMMIT_HASH:0:7}");
+            writer.println("  target=/tmp/cubrid-build");
             writer.println("fi");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\" ");
@@ -721,7 +752,30 @@ public class DockerBuildManager {
             writer.println("# Clean any previous builds");
             writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
-                        writer.println();
+            writer.println();
+
+            // Add git shim for deterministic version if ccache is enabled
+            if (config.isCcacheEnabled()) {
+                writer.println("# Create git shim for deterministic version (ccache optimization)");
+                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
+                writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
+                writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
+                writer.println("#!/usr/bin/env bash");
+                writer.println("# Intercept version queries and return deterministic values");
+                writer.println("if [[ \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ]]; then");
+                writer.println("  echo \"0000000\"");
+                writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
+                writer.println("  echo \"0\"");
+                writer.println("else");
+                writer.println("  exec /usr/bin/git \"$@\"");
+                writer.println("fi");
+                writer.println("GITSHIMEOF");
+                writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
+                writer.println("export PATH=\"$GIT_SHIM_DIR:$PATH\"");
+                writer.println("echo \"Git shim active for deterministic version\"");
+                writer.println();
+            }
+
             writer.println("# Build CUBRID");
 
             // Check if devtoolset-8 is available and use it
