@@ -457,7 +457,7 @@ public class DockerBuildManager {
             writer.println("else");
             writer.println("  work_root=/tmp");
             writer.println("fi");
-            writer.println("build_slot=${BUILD_INSTANCE_ID:-$$}");
+            writer.println("build_slot=${BUILD_INSTANCE_ID:-$(date +%s%N 2>/dev/null || echo $$)}");
             writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
@@ -673,7 +673,7 @@ public class DockerBuildManager {
             writer.println("else");
             writer.println("  work_root=/tmp");
             writer.println("fi");
-            writer.println("build_slot=${BUILD_INSTANCE_ID:-$$}");
+            writer.println("build_slot=${BUILD_INSTANCE_ID:-$(date +%s%N 2>/dev/null || echo $$)}");
             writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
@@ -732,9 +732,17 @@ public class DockerBuildManager {
             writer.println("    commit_msg=$(git log --format=%B -n 1 \"$commit_hash\")");
             writer.println("    git add -A");
             writer.println("    git commit -m \"$commit_msg\"");
+            writer.println("    rm -f /tmp/commit.patch 2>/dev/null || true");
             writer.println("    echo 'Format-patch fallback succeeded'");
             writer.println("    return 0");
             writer.println("  else");
+            writer.println("    echo 'Format-patch fallback failed; trying direct checkout'");
+            writer.println("    rm -f /tmp/commit.patch 2>/dev/null || true");
+            writer.println("    git reset --hard HEAD 2>/dev/null || true");
+            writer.println("    if git checkout -f --detach \"$commit_hash\" 2>/dev/null; then");
+            writer.println("      echo 'Direct checkout of commit succeeded'");
+            writer.println("      return 0");
+            writer.println("    fi");
             writer.println("    echo 'Both cherry-pick and format-patch failed'");
             writer.println("    return 1");
             writer.println("  fi");
