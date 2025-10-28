@@ -451,14 +451,17 @@ public class DockerBuildManager {
                 writer.println();
             }
 
-            writer.println("# Prepare working directory with FIXED name for ccache path consistency");
+            writer.println("# Prepare an isolated working directory per build to avoid collisions");
             writer.println("if [ -d /work ]; then");
-            writer.println("  target=/work/cubrid-build");
+            writer.println("  work_root=/work");
             writer.println("else");
-            writer.println("  target=/tmp/cubrid-build");
+            writer.println("  work_root=/tmp");
             writer.println("fi");
+            writer.println("build_slot=${BUILD_INSTANCE_ID:-$$}");
+            writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
+            writer.println("echo \"Using build workspace: $target\"");
             writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone repository from host reference");
@@ -664,14 +667,17 @@ public class DockerBuildManager {
 
             // Reverted path normalization flags (keep environment unchanged)
             
-            writer.println("# Prepare working directory with FIXED name for ccache path consistency");
+            writer.println("# Prepare an isolated working directory per build to avoid collisions");
             writer.println("if [ -d /work ]; then");
-            writer.println("  target=/work/cubrid-build");
+            writer.println("  work_root=/work");
             writer.println("else");
-            writer.println("  target=/tmp/cubrid-build");
+            writer.println("  work_root=/tmp");
             writer.println("fi");
+            writer.println("build_slot=${BUILD_INSTANCE_ID:-$$}");
+            writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
-            writer.println("mkdir -p \"$target\" ");
+            writer.println("mkdir -p \"$target\"");
+            writer.println("echo \"Using build workspace: $target\"");
             writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone source into writable target using local reference to avoid network fetches");
