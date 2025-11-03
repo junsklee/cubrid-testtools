@@ -452,20 +452,16 @@ public class DockerBuildManager {
             }
 
             writer.println("# Prepare an isolated working directory per build to avoid collisions");
+            writer.println("# Use fixed build directory for ccache optimization");
             writer.println("if [ -d /work ]; then");
-            writer.println("  work_root=/work");
+            writer.println("  target=/work/cubrid-build");
             writer.println("else");
-            writer.println("  work_root=/tmp");
+            writer.println("  target=/tmp/cubrid-build");
             writer.println("fi");
-            writer.println("build_slot=${BUILD_INSTANCE_ID:-$(date +%s%N 2>/dev/null || echo $$)}");
-            writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
-            writer.println("stable_root=/tmp/cubrid-build");
-            writer.println("rm -rf \"$stable_root\"");
-            writer.println("ln -s \"$target\" \"$stable_root\"");
-            writer.println("echo \"Using build workspace: $target (stable path: $stable_root)\"");
-            writer.println("cd \"$stable_root\"");
+            writer.println("echo \"Using build workspace: $target\"");
+            writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone repository from host reference");
             writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
@@ -556,8 +552,7 @@ public class DockerBuildManager {
             writer.println("git checkout --detach || true");
             writer.println("git branch -D \"$tmp_branch\" || true");
             writer.println("cd /");
-            writer.println("rm -f \"$stable_root\" 2>/dev/null || true");
-            writer.println("rm -rf \"$target\" || true");
+            writer.println("# Note: Not removing $target to preserve ccache-friendly paths");
             writer.println("echo 'PR build completed successfully'");
         }
 
@@ -672,20 +667,16 @@ public class DockerBuildManager {
             // Reverted path normalization flags (keep environment unchanged)
             
             writer.println("# Prepare an isolated working directory per build to avoid collisions");
+            writer.println("# Use fixed build directory for ccache optimization");
             writer.println("if [ -d /work ]; then");
-            writer.println("  work_root=/work");
+            writer.println("  target=/work/cubrid-build");
             writer.println("else");
-            writer.println("  work_root=/tmp");
+            writer.println("  target=/tmp/cubrid-build");
             writer.println("fi");
-            writer.println("build_slot=${BUILD_INSTANCE_ID:-$(date +%s%N 2>/dev/null || echo $$)}");
-            writer.println("target=\"${work_root}/cubrid-build_${COMMIT_HASH:0:7}_${build_slot}\"");
             writer.println("rm -rf \"$target\"");
             writer.println("mkdir -p \"$target\"");
-            writer.println("stable_root=/tmp/cubrid-build");
-            writer.println("rm -rf \"$stable_root\"");
-            writer.println("ln -s \"$target\" \"$stable_root\"");
-            writer.println("echo \"Using build workspace: $target (stable path: $stable_root)\"");
-            writer.println("cd \"$stable_root\"");
+            writer.println("echo \"Using build workspace: $target\"");
+            writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone source into writable target using local reference to avoid network fetches");
             writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
@@ -699,7 +690,7 @@ public class DockerBuildManager {
             writer.println("git checkout -B \"$tmp_branch\" \"${BASELINE_COMMIT}\"");
             writer.println();
             writer.println("# Store the current repo path for patch creation");
-            writer.println("current_repo=\"$stable_root/repo\"");
+            writer.println("current_repo=\"$target/repo\"");
             writer.println();
             writer.println("# Function to apply commit with fallback");
             writer.println("apply_commit() {");
@@ -810,7 +801,14 @@ public class DockerBuildManager {
             writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
             writer.println();
-            
+
+            // Cleanup git shim if it was created
+            if (config.isCcacheEnabled()) {
+                writer.println("# Cleanup git shim");
+                writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
+                writer.println();
+            }
+
             // Report ccache statistics after build
             if (config.isCcacheEnabled()) {
                 writer.println("# Report ccache statistics after build");
@@ -836,8 +834,7 @@ public class DockerBuildManager {
             writer.println("git checkout --detach || true");
             writer.println("git branch -D \"$tmp_branch\" || true");
             writer.println("cd /");
-            writer.println("rm -f \"$stable_root\" 2>/dev/null || true");
-            writer.println("rm -rf \"$target\" || true");
+            writer.println("# Note: Not removing $target to preserve ccache-friendly paths");
             writer.println("echo \"Build completed successfully\"");
         }
         

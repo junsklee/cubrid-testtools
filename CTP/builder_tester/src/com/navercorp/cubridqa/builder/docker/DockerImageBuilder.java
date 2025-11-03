@@ -4,6 +4,7 @@
 package com.navercorp.cubridqa.builder.docker;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
@@ -93,128 +94,121 @@ public class DockerImageBuilder {
      */
     private void buildImageFromPackage(String imageKey, Path buildPackage) throws IOException {
         String imageName = "cubrid-test:" + imageKey;
-        Path dockerfileDir = workDir.resolve(imageKey);
+        String sanitizedKey = sanitizeName(imageKey);
+        Path stagingDir = workDir.resolve(sanitizedKey + "_setup");
+        Files.createDirectories(stagingDir);
+        Path setupScript = stagingDir.resolve("setup.sh");
+        Files.write(setupScript, createSetupScript().getBytes(StandardCharsets.UTF_8));
+        setupScript.toFile().setExecutable(true);
+        
+        String containerName = "cubrid_img_" + sanitizedKey + "_" + System.currentTimeMillis();
+        List<String> runCommand = new ArrayList<>();
+        runCommand.add("docker");
+        runCommand.add("run");
+        runCommand.add("--name");
+        runCommand.add(containerName);
+        runCommand.add("-v");
+        runCommand.add(buildPackage.toAbsolutePath().toString() + ":/mnt/build.tar.gz:ro");
+        runCommand.add("-v");
+        runCommand.add(setupScript.toAbsolutePath().toString() + ":/mnt/setup.sh:ro");
+        runCommand.add(config.getDockerTestImage());
+        runCommand.add("bash");
+        runCommand.add("/mnt/setup.sh");
+        
+        List<String> commitCommand = new ArrayList<>();
+        commitCommand.add("docker");
+        commitCommand.add("commit");
+        commitCommand.add("--change");
+        commitCommand.add("ENV CUBRID=/opt/cubrid");
+        commitCommand.add("--change");
+        commitCommand.add("ENV CUBRID_DATABASES=/opt/cubrid/databases");
+        commitCommand.add("--change");
+        commitCommand.add("ENV PATH=/opt/cubrid/bin:/home/cubrid-testtools/CTP/shell/init_path:$PATH");
+        commitCommand.add("--change");
+        commitCommand.add("ENV LD_LIBRARY_PATH=/opt/cubrid/lib:/opt/cubrid/cci/lib:$LD_LIBRARY_PATH");
+        commitCommand.add("--change");
+        commitCommand.add("ENV CUBRID_LANG=en_US");
+        commitCommand.add("--change");
+        commitCommand.add("ENV CUBRID_CHARSET=en_US");
+        commitCommand.add("--change");
+        commitCommand.add("WORKDIR /workspace");
+        commitCommand.add(containerName);
+        commitCommand.add(imageName);
         
         try {
-            Files.createDirectories(dockerfileDir);
-            
-            // Copy build package to docker context
-            Path packageInContext = dockerfileDir.resolve("build.tar.gz");
-            Files.copy(buildPackage, packageInContext, StandardCopyOption.REPLACE_EXISTING);
-            
-            // Create optimized Dockerfile that extracts and sets up CUBRID
-            String dockerfile = createOptimizedDockerfile();
-            Path dockerfilePath = dockerfileDir.resolve("Dockerfile");
-            Files.write(dockerfilePath, dockerfile.getBytes());
-            
-            // Build the image
-            List<String> buildCommand = new ArrayList<>();
-            buildCommand.add("docker");
-            buildCommand.add("build");
-            buildCommand.add("-t");
-            buildCommand.add(imageName);
-            buildCommand.add("--no-cache");  // Ensure fresh build for each commit
-            buildCommand.add(".");
-            
-            ProcessBuilder pb = new ProcessBuilder(buildCommand);
-            pb.directory(dockerfileDir.toFile());
-            pb.redirectErrorStream(true);
-            
-            logger.info("Building Docker image: " + String.join(" ", buildCommand));
-            Process process = pb.start();
-            
-            // Log build output
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    logger.info("Docker build: " + line);
-                }
-            }
-            
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                throw new IOException("Failed to build Docker image, exit code: " + exitCode);
-            }
-            
-            // Update cache
+            long start = System.currentTimeMillis();
+            logger.info("Building Docker image by provisioning container: " + imageName);
+            runCommand(runCommand, "[docker-run]");
+            runCommand(commitCommand, "[docker-commit]");
             updateCacheEntry(imageKey, imageName);
-            
-            logger.info("Successfully built Docker image: " + imageName);
-            
-            // Clean up build context to save space
-            deleteDirectory(dockerfileDir);
-            
+            long elapsed = System.currentTimeMillis() - start;
+            logger.info("Successfully built Docker image: " + imageName + " (" + (elapsed / 1000) + "s)");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Docker image build interrupted", e);
         } catch (IOException e) {
-            // Clean up on failure
-            try { deleteDirectory(dockerfileDir); } catch (Exception ignore) {}
             throw e;
+        } finally {
+            try {
+                runCommand(Arrays.asList("docker", "rm", "-f", containerName), null);
+            } catch (Exception ignore) { }
+            try { deleteDirectory(stagingDir); } catch (Exception ignore) {}
         }
     }
     
-    /**
-     * Create optimized Dockerfile that extracts and installs CUBRID during image build
-     */
-    private String createOptimizedDockerfile() {
-        StringBuilder dockerfile = new StringBuilder();
-        
-        // Use the test image as base
-        dockerfile.append("FROM ").append(config.getDockerTestImage()).append("\n\n");
-        
-        // Copy build package
-        dockerfile.append("# Copy CUBRID build package\n");
-        dockerfile.append("COPY build.tar.gz /tmp/build.tar.gz\n\n");
-        
-        // Extract and setup CUBRID
-        dockerfile.append("# Extract CUBRID build package\n");
-        dockerfile.append("RUN mkdir -p /opt/cubrid && \\\n");
-        dockerfile.append("    cd /opt/cubrid && \\\n");
-        dockerfile.append("    tar -xzf /tmp/build.tar.gz && \\\n");
-        dockerfile.append("    rm /tmp/build.tar.gz\n\n");
-        
-        dockerfile.append("# Find and move CUBRID installation\n");
-        dockerfile.append("RUN CUBRID_DIR=$(find /opt/cubrid -path '*/_install/CUBRID' -type d | head -1) && \\\n");
-        dockerfile.append("    if [ -z \"$CUBRID_DIR\" ]; then \\\n");
-        dockerfile.append("        CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname); \\\n");
-        dockerfile.append("    fi && \\\n");
-        dockerfile.append("    echo \"Found CUBRID at: $CUBRID_DIR\" && \\\n");
-        dockerfile.append("    if [ \"$CUBRID_DIR\" != \"/opt/cubrid\" ] && [ -d \"$CUBRID_DIR\" ]; then \\\n");
-        dockerfile.append("        echo \"Moving CUBRID installation to /opt/cubrid\" && \\\n");
-        dockerfile.append("        cp -rf \"$CUBRID_DIR\"/* /opt/cubrid/ && \\\n");
-        dockerfile.append("        rm -rf /opt/cubrid/_install; \\\n");
-        dockerfile.append("    fi\n\n");
-        
-        dockerfile.append("# Setup CUBRID environment\n");
-        dockerfile.append("RUN if [ -f /opt/cubrid/share/scripts/setup.sh ]; then \\\n");
-        dockerfile.append("        cd /opt/cubrid && \\\n");
-        dockerfile.append("        echo 'y' | sh share/scripts/setup.sh /opt/cubrid || true; \\\n");
-        dockerfile.append("    elif [ -f /opt/cubrid/setup.sh ]; then \\\n");
-        dockerfile.append("        cd /opt/cubrid && \\\n");
-        dockerfile.append("        echo 'y' | sh setup.sh /opt/cubrid || true; \\\n");
-        dockerfile.append("    fi\n\n");
-        
-        dockerfile.append("# Prepare databases directory and verify installation\n");
-        dockerfile.append("RUN mkdir -p /opt/cubrid/databases && \\\n");
-        dockerfile.append("    touch /opt/cubrid/databases/databases.txt && \\\n");
-        dockerfile.append("    ls -la /opt/cubrid/bin/ && \\\n");
-        dockerfile.append("    /opt/cubrid/bin/cubrid_rel || echo \"cubrid_rel check failed\"\n\n");
-        
-        // Set environment variables
-        dockerfile.append("# Set CUBRID environment\n");
-        dockerfile.append("ENV CUBRID=/opt/cubrid\n");
-        dockerfile.append("ENV CUBRID_DATABASES=/opt/cubrid/databases\n");
-        dockerfile.append("ENV PATH=/opt/cubrid/bin:$PATH\n");
-        dockerfile.append("ENV LD_LIBRARY_PATH=/opt/cubrid/lib:/opt/cubrid/cci/lib:$LD_LIBRARY_PATH\n");
-        dockerfile.append("ENV CUBRID_LANG=en_US\n");
-        dockerfile.append("ENV CUBRID_CHARSET=en_US\n\n");
-        
-        // Set working directory
-        dockerfile.append("WORKDIR /workspace\n");
-        
-        return dockerfile.toString();
+    private String createSetupScript() {
+        return "#!/bin/bash\n" +
+               "set -euo pipefail\n" +
+               "echo \"[setup] Preparing CUBRID installation inside container\"\n" +
+               "rm -rf /opt/cubrid\n" +
+               "mkdir -p /opt/cubrid\n" +
+               "tar -xzf /mnt/build.tar.gz -C /opt/cubrid\n" +
+               "CUBRID_DIR=$(find /opt/cubrid -path '*/_install/CUBRID' -type d | head -1)\n" +
+               "if [[ -z \"$CUBRID_DIR\" ]]; then\n" +
+               "  CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname)\n" +
+               "fi\n" +
+               "echo \"[setup] Found CUBRID directory: $CUBRID_DIR\"\n" +
+               "if [[ -n \"$CUBRID_DIR\" && \"$CUBRID_DIR\" != \"/opt/cubrid\" && -d \"$CUBRID_DIR\" ]]; then\n" +
+               "  echo \"[setup] Syncing CUBRID contents into /opt/cubrid\"\n" +
+               "  cp -rf \"$CUBRID_DIR\"/* /opt/cubrid/\n" +
+               "  rm -rf /opt/cubrid/_install\n" +
+               "fi\n" +
+               "if [[ -f /opt/cubrid/share/scripts/setup.sh ]]; then\n" +
+               "  echo \"[setup] Running share/scripts/setup.sh\"\n" +
+               "  (cd /opt/cubrid && printf 'y\\n' | sh share/scripts/setup.sh /opt/cubrid) || true\n" +
+               "elif [[ -f /opt/cubrid/setup.sh ]]; then\n" +
+               "  echo \"[setup] Running top-level setup.sh\"\n" +
+               "  (cd /opt/cubrid && printf 'y\\n' | sh setup.sh /opt/cubrid) || true\n" +
+               "fi\n" +
+               "mkdir -p /opt/cubrid/databases\n" +
+               "touch /opt/cubrid/databases/databases.txt\n" +
+               "ls -la /opt/cubrid/bin/ || true\n" +
+               "/opt/cubrid/bin/cubrid_rel || echo \"[setup] WARNING: cubrid_rel check failed\"\n";
+    }
+    
+    private String sanitizeName(String value) {
+        return value.replaceAll("[^a-zA-Z0-9_.-]", "_");
+    }
+    
+    private void runCommand(List<String> command, String logPrefix) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append(System.lineSeparator());
+                if (logPrefix != null && !logPrefix.isEmpty()) {
+                    logger.info(logPrefix + " " + line);
+                }
+            }
+        }
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            throw new IOException("Command failed with exit code " + exitCode + ": " +
+                    String.join(" ", command) + "\n" + output);
+        }
     }
     
     /**

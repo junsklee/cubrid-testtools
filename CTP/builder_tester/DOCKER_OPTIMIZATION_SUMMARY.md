@@ -16,8 +16,8 @@ We implemented a two-phase optimization focusing on **Docker Image Caching** (Op
 
 1. **DockerImageBuilder Component** (`DockerImageBuilder.java`)
    - Builds custom Docker images for each commit with CUBRID pre-installed
-   - Caches images locally with LRU eviction
-   - Manages image lifecycle and cleanup
+   - Provisions images by running the base tester image with the build package mounted and then committing the container (no Dockerfile build step)
+   - Caches images locally with LRU eviction and manages cleanup
 
 2. **Optimized Test Execution** (`Tester.java` - `runTestInDockerOptimized`)
    - Uses pre-built images instead of base images
@@ -90,9 +90,9 @@ build_cache_size=20
 1. Tester receives test request with build package
 2. Checks if Docker image exists for commit
 3. If not, builds new image:
-   - Creates Dockerfile with build extraction steps
-   - Builds image with CUBRID pre-installed
-   - Tags as `cubrid-test:COMMIT_HASH`
+   - Launches the base tester image with the build tarball mounted read-only
+   - Runs a provisioning script inside the container to extract/configure CUBRID
+   - Commits the running container as `cubrid-test:COMMIT_HASH_BASELINE`
 4. Runs test using pre-built image
 5. Caches image for future tests
 
@@ -103,7 +103,7 @@ build_cache_size=20
 
 ### Image Cache Management
 - LRU eviction when cache exceeds limit
-- Automatic cleanup of old images
+- Automatic cleanup of old images and temporary provisioning containers
 - ~1-2GB per image (full CUBRID installation)
 
 ## Testing and Verification
@@ -122,10 +122,11 @@ The implementation has been:
 docker images "cubrid-test:*"
 
 # Check logs for optimization
-grep "optimized" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
+grep "optimized Docker command" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
 
-# Monitor cache hits
+# Monitor cache hits / provisioning runs
 grep "Using existing Docker image" tester.log | wc -l
+grep "Building Docker image by provisioning container" tester.log | wc -l
 ```
 
 ### Manual Cache Management
@@ -140,10 +141,11 @@ docker system df
 ## Benefits
 
 1. **Dramatic Performance Improvement**: 80-90% reduction in test overhead
-2. **Transparent Operation**: No changes to existing workflows
-3. **Remote Compatible**: Works with distributed testing
-4. **Automatic Fallback**: Graceful degradation on failures
-5. **Configurable**: Can be disabled or tuned as needed
+2. **Faster Image Provisioning**: Avoids expensive `docker build` processing on large tarballs
+3. **Transparent Operation**: No changes to existing workflows
+4. **Remote Compatible**: Works with distributed testing
+5. **Automatic Fallback**: Graceful degradation on failures
+6. **Configurable**: Can be disabled or tuned as needed
 
 ## Future Enhancements (Not Implemented)
 
@@ -154,6 +156,6 @@ docker system df
 
 ## Conclusion
 
-The Docker optimization successfully addresses the performance bottleneck in test execution. By building and caching Docker images with pre-installed CUBRID, we've eliminated the most time-consuming parts of test execution while maintaining full compatibility with existing systems and remote servers.
+The Docker optimization successfully addresses the performance bottleneck in test execution. By building and caching Docker images with pre-installed CUBRID—now provisioned within a live container and committed without a Dockerfile build—we've eliminated the most time-consuming parts of test execution while maintaining full compatibility with existing systems and remote servers.
 
 The solution is production-ready, well-documented, and provides significant performance improvements that will dramatically reduce overall test execution time in the Builder-Tester system.

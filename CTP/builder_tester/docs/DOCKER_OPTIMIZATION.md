@@ -26,8 +26,8 @@ The Builder-Tester system now includes advanced Docker optimization that dramati
 
 ### 1. Docker Image Building
 When a test request arrives for a commit:
-1. System checks if a Docker image exists for that commit (`cubrid-test:COMMIT_HASH`)
-2. If not, builds a new image with CUBRID pre-extracted and configured
+1. System checks if a Docker image exists for that commit/baseline pair (`cubrid-test:<commit>_<baseline>`)
+2. If not, launches the baseline test image with the build tarball mounted, runs an in-container provisioning script to extract/configure CUBRID, and commits the live container as the new image
 3. Caches the image for future tests on the same commit
 
 ### 2. Optimized Test Execution
@@ -39,7 +39,7 @@ For each test:
 
 ### 3. Image Cache Management
 - Keeps up to 20 images by default (configurable)
-- Automatically evicts oldest images when limit reached
+- Automatically evicts oldest images and removes provisioning containers when limit reached
 - Each image is ~1-2GB (includes full CUBRID installation)
 
 ## Configuration
@@ -88,11 +88,11 @@ docker images --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}" | grep cubrid
 
 Check logs for optimization:
 ```bash
-# Look for "optimized" in logs
-grep "optimized" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
+# Look for optimized Docker runs
+grep "optimized Docker command" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
 
-# Check image building
-grep "Building Docker image" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
+# Check image provisioning
+grep "Building Docker image by provisioning container" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
 ```
 
 ### Manual Cache Management
@@ -105,7 +105,7 @@ docker rmi $(docker images -q "cubrid-test:*")
 
 Remove specific image:
 ```bash
-docker rmi cubrid-test:COMMIT_HASH
+docker rmi cubrid-test:<commit>_<baseline>
 ```
 
 ## Remote Server Compatibility
@@ -135,8 +135,20 @@ The optimization works seamlessly with remote tester nodes:
 If image building fails:
 1. Check Docker daemon is running: `docker ps`
 2. Check disk space: `df -h`
-3. Check logs: `grep "Failed to build" tester.log`
-4. Manually test build: `docker build -t test:manual /path/to/dockerfile/dir`
+3. Check logs: `grep "provisioning container" tester.log`
+4. Manually test provisioning by running the base test image with the build tarball mounted (copy the setup script from `DockerImageBuilder#createSetupScript`):
+   ```bash
+   cat > /tmp/cubrid_setup.sh <<'EOF'
+   #!/bin/bash
+   set -euo pipefail
+   # ...script contents from DockerImageBuilder#createSetupScript...
+   EOF
+   chmod +x /tmp/cubrid_setup.sh
+   docker run --rm \
+     -v /path/to/cubrid.tar.gz:/mnt/build.tar.gz:ro \
+     -v /tmp/cubrid_setup.sh:/mnt/setup.sh:ro \
+     <docker_test_image> bash /mnt/setup.sh
+   ```
 
 ### Fallback Behavior
 
@@ -181,8 +193,8 @@ grep "Docker test completed" tester.log | grep optimized
 # Count cache hits (using existing image)
 grep "Using existing Docker image" tester.log | wc -l
 
-# Count cache misses (building new image)
-grep "Building Docker image for commit" tester.log | wc -l
+# Count cache misses (provisioning new image)
+grep "Building Docker image by provisioning container" tester.log | wc -l
 ```
 
 ## Best Practices
@@ -214,8 +226,8 @@ build_cache_size=50
 ## Implementation Details
 
 ### Image Naming Convention
-- Format: `cubrid-test:COMMIT_HASH`
-- Example: `cubrid-test:6ea587e`
+- Format: `cubrid-test:<commit>_<baseline>`
+- Example: `cubrid-test:6ea587e_4b045a6` (baseline may be `unknown`)
 
 ### Image Contents
 Each image contains:
@@ -225,12 +237,11 @@ Each image contains:
 - Clean database directory
 
 ### Build Process
-1. Creates temporary Dockerfile
-2. Copies build package
-3. Extracts and installs CUBRID
-4. Runs setup.sh
-5. Sets environment
-6. Creates image
+1. Generates a provisioning script on the host
+2. Launches the base tester image with the build tarball and script mounted (`docker run`)
+3. Extracts and installs CUBRID inside the running container
+4. Runs setup steps within the container
+5. Commits the container as `cubrid-test:<commit>_<baseline>` and cleans up temporary artifacts
 
 ## Summary
 
