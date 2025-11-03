@@ -32,6 +32,8 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
   - See docs/CCACHE_GUIDE.md for details
 - **Parallel Compilation**: Auto-detects CPU cores for optimal parallelization
 - **Build Artifact Caching**: Reuses previous builds when possible
+- **Lean Build Packages**: Tarballs include only `_install/CUBRID`, shrinking transfer and extraction time while preserving legacy fallbacks
+- **Shell Testcase Sync Throttling**: Configurable `shell_tc_sync_interval_seconds` prevents redundant git fetches during heavy retry cycles
 - **Docker Image Optimization**: Pre-built images with CUBRID installed
   - 80-90% reduction in test execution overhead
   - Automatic image caching per commit

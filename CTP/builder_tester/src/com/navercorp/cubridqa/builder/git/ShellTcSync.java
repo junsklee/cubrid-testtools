@@ -3,10 +3,13 @@ package com.navercorp.cubridqa.builder.git;
 import com.navercorp.cubridqa.builder.BuilderConfig;
 import com.navercorp.cubridqa.builder.exec.ProcessIO;
 import java.io.*;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 public class ShellTcSync {
     private static final Object SHELL_TC_SYNC_LOCK = new Object();
+    private static volatile long lastSuccessfulSyncMs = 0L;
+    private static volatile String lastSyncedBranch = null;
     
     private final BuilderConfig config;
     
@@ -31,6 +34,18 @@ public class ShellTcSync {
 
             ProcessBuilder pb = new ProcessBuilder();
             pb.directory(repoDir);
+
+            long intervalSeconds = config.getShellTcSyncIntervalSeconds();
+            if (intervalSeconds > 0) {
+                long now = System.currentTimeMillis();
+                long intervalMs = TimeUnit.SECONDS.toMillis(intervalSeconds);
+                if (lastSyncedBranch != null
+                    && lastSyncedBranch.equals(targetBranch)
+                    && (now - lastSuccessfulSyncMs) < intervalMs) {
+                    log.fine("Skipping shell testcases git sync (last sync " + (now - lastSuccessfulSyncMs) / 1000 + "s ago < " + intervalSeconds + "s interval)");
+                    return;
+                }
+            }
 
             // Verify git repo
             if (ProcessIO.runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
@@ -75,6 +90,8 @@ public class ShellTcSync {
                 ProcessIO.runAndExitCode(pb, new String[]{"git", "clean", "-df"});
                 // Hard reset to remote branch to avoid local drift
                 ProcessIO.runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+                lastSuccessfulSyncMs = System.currentTimeMillis();
+                lastSyncedBranch = targetBranch;
             } catch (IOException e) {
                 // If a git index.lock is present, avoid interfering unless it appears stale
                 if (isGitLockPresent(repoDir)) {
@@ -87,6 +104,8 @@ public class ShellTcSync {
                         ProcessIO.runOrThrow(pb, new String[]{"git", "checkout", "-B", targetBranch, chosenRemote + "/" + targetBranch});
                         ProcessIO.runAndExitCode(pb, new String[]{"git", "clean", "-df"});
                         ProcessIO.runOrThrow(pb, new String[]{"git", "reset", "--hard", chosenRemote + "/" + targetBranch});
+                        lastSuccessfulSyncMs = System.currentTimeMillis();
+                        lastSyncedBranch = targetBranch;
                     } else {
                         log.warning("Git index.lock present; another git process may be running. Skipping repo sync this run to avoid interference.");
                     }

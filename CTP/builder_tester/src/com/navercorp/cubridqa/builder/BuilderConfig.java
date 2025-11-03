@@ -53,6 +53,7 @@ public class BuilderConfig {
     private static final String CCACHE_NAMESPACE = "ccache_namespace";
     private static final String CCACHE_SLOPPINESS = "ccache_sloppiness";
     private static final String PARALLEL_JOBS = "parallel_jobs";
+    private static final String SHELL_TC_SYNC_INTERVAL_SECONDS = "shell_tc_sync_interval_seconds";
     
     public BuilderConfig(String configFile) throws IOException {
         this.properties = new Properties();
@@ -196,6 +197,10 @@ public class BuilderConfig {
     
     public boolean useDocker() {
         return Boolean.parseBoolean(properties.getProperty(USE_DOCKER, "true"));
+    }
+
+    public long getShellTcSyncIntervalSeconds() {
+        return Long.parseLong(properties.getProperty(SHELL_TC_SYNC_INTERVAL_SECONDS, "300"));
     }
 
     public boolean usePrebuiltDockerImages() {

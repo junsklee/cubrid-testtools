@@ -28,8 +28,17 @@ public class CubridInstaller {
         
         // Extract the build package
         testLogger.info("Extracting to: " + cubridInstallDir);
-        ProcessBuilder pb = new ProcessBuilder("tar", "-xzf", buildPackage, 
-                                              "-C", cubridInstallDir.toString());
+        boolean hasInstallRoot = archiveHasInstallRoot(buildPackage);
+        ProcessBuilder pb;
+        if (hasInstallRoot) {
+            pb = new ProcessBuilder("tar", "-xzf", buildPackage,
+                                    "-C", cubridInstallDir.toString(),
+                                    "--strip-components=2",
+                                    "_install/CUBRID");
+        } else {
+            pb = new ProcessBuilder("tar", "-xzf", buildPackage,
+                                    "-C", cubridInstallDir.toString());
+        }
         pb.redirectErrorStream(true);
         
         Process process = pb.start();
@@ -46,6 +55,25 @@ public class CubridInstaller {
         int exitCode = process.exitValue();
         outputGobbler.join(1000);
         
+        if (exitCode != 0) {
+            if (hasInstallRoot) {
+                testLogger.warning("Lean extraction failed, retrying with full archive");
+                ProcessBuilder fallbackPb = new ProcessBuilder("tar", "-xzf", buildPackage,
+                                                               "-C", cubridInstallDir.toString());
+                fallbackPb.redirectErrorStream(true);
+                process = fallbackPb.start();
+                outputGobbler = new ProcessIO.StreamReader(process.getInputStream(), "EXTRACT");
+                outputGobbler.start();
+                completed = process.waitFor(5, TimeUnit.MINUTES);
+                if (!completed) {
+                    process.destroyForcibly();
+                    throw new IOException("CUBRID extraction timeout (fallback)");
+                }
+                exitCode = process.exitValue();
+                outputGobbler.join(1000);
+            }
+        }
+
         if (exitCode != 0) {
             String output = outputGobbler.getOutput();
             throw new IOException("CUBRID extraction failed: " + exitCode);
@@ -138,6 +166,28 @@ public class CubridInstaller {
         }
         
         return null;
+    }
+    
+    private boolean archiveHasInstallRoot(String buildPackage) {
+        ProcessBuilder pb = new ProcessBuilder("tar", "-tf", buildPackage);
+        pb.redirectErrorStream(true);
+        try {
+            Process process = pb.start();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("_install/CUBRID/") || line.equals("_install/CUBRID")) {
+                        process.destroy();
+                        return true;
+                    }
+                }
+            }
+            process.waitFor();
+        } catch (Exception ignore) {
+            // Fall back to default behavior
+        }
+        return false;
     }
     
     /**

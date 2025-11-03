@@ -436,6 +436,7 @@ public class DockerBuildManager {
         try (PrintWriter writer = new PrintWriter(new FileWriter(script))) {
             writer.println("#!/bin/bash");
             writer.println("set -e");
+            writer.println("set -o pipefail");
             writer.println();
 
             if (config.isCcacheEnabled()) {
@@ -464,11 +465,43 @@ public class DockerBuildManager {
             writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone repository from host reference");
-            writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
+            writer.println("if ! git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo; then");
+            writer.println("  echo '[WARN] Reference clone failed; falling back to standard clone' >&2");
+            writer.println("  rm -rf repo 2>/dev/null || true");
+            writer.println("  git clone --no-checkout /cubrid-src repo");
+            writer.println("fi");
             writer.println("cd repo");
             writer.println("git config advice.detachedHead false");
             writer.println("git config user.email build@localhost");
             writer.println("git config user.name Build Bot");
+            writer.println();
+            writer.println("GIT_VERSION_RAW=$(git --version 2>/dev/null)");
+            writer.println("GIT_VERSION=$(echo \"$GIT_VERSION_RAW\" | awk '{print $3}')");
+            writer.println("if [ -z \"$GIT_VERSION\" ]; then");
+            writer.println("  GIT_MAJOR=0");
+            writer.println("  GIT_MINOR=0");
+            writer.println("  GIT_VERSION_DISPLAY=${GIT_VERSION_RAW:-unknown}");
+            writer.println("else");
+            writer.println("  GIT_MAJOR=${GIT_VERSION%%.*}");
+            writer.println("  GIT_MINOR_TMP=${GIT_VERSION#*.}");
+            writer.println("  GIT_MINOR=${GIT_MINOR_TMP%%.*}");
+            writer.println("  GIT_VERSION_DISPLAY=$GIT_VERSION");
+            writer.println("fi");
+            writer.println("SUPPORTS_SUBMODULE_JOBS=0");
+            writer.println("SUPPORTS_SUBMODULE_DEPTH=0");
+            writer.println("if [ \"${GIT_MAJOR:-0}\" -gt 2 ] || { [ \"${GIT_MAJOR:-0}\" -eq 2 ] && [ \"${GIT_MINOR:-0}\" -ge 8 ]; }; then");
+            writer.println("  SUPPORTS_SUBMODULE_JOBS=1");
+            writer.println("fi");
+            writer.println("if [ \"${GIT_MAJOR:-0}\" -gt 2 ] || { [ \"${GIT_MAJOR:-0}\" -eq 2 ] && [ \"${GIT_MINOR:-0}\" -ge 9 ]; }; then");
+            writer.println("  SUPPORTS_SUBMODULE_DEPTH=1");
+            writer.println("fi");
+            writer.println("supports_submodule_jobs() {");
+            writer.println("  [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]");
+            writer.println("}");
+            writer.println("supports_submodule_depth() {");
+            writer.println("  [ \"$SUPPORTS_SUBMODULE_DEPTH\" = \"1\" ]");
+            writer.println("}");
+            writer.println("echo \"Detected git version: ${GIT_VERSION_DISPLAY}\"");
             writer.println();
             writer.println("# Try to fetch PR head from upstream to ensure commit object exists");
             writer.println("git remote add upstream https://github.com/CUBRID/cubrid.git 2>/dev/null || true");
@@ -483,7 +516,22 @@ public class DockerBuildManager {
             writer.println("git checkout -B \"$tmp_branch\" \"${COMMIT_HASH}\" || git checkout \"$tmp_branch\" || true");
             writer.println();
             writer.println("git submodule sync --recursive");
-            writer.println("git submodule update --init --recursive --checkout --force");
+            writer.println("SUBMODULE_JOBS=${SUBMODULE_JOBS:-$(nproc 2>/dev/null || echo 4)}");
+            writer.println("SUBMODULE_ARGS=(--init --recursive --checkout --force)");
+            writer.println("if [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]; then");
+            writer.println("  SUBMODULE_ARGS+=(--jobs \"$SUBMODULE_JOBS\")");
+            writer.println("else");
+            writer.println("  echo \"[INFO] git submodule --jobs not supported in git ${GIT_VERSION_DISPLAY}\"");
+            writer.println("fi");
+            writer.println("if [ \"$SUPPORTS_SUBMODULE_DEPTH\" = \"1\" ]; then");
+            writer.println("  SUBMODULE_ARGS+=(--depth 1)");
+            writer.println("else");
+            writer.println("  echo \"[INFO] git submodule --depth not supported in git ${GIT_VERSION_DISPLAY}\"");
+            writer.println("fi");
+            writer.println("if ! git submodule update \"${SUBMODULE_ARGS[@]}\"; then");
+            writer.println("  echo '[WARN] Parallel/shallow submodule update failed; retrying with defaults' >&2");
+            writer.println("  git submodule update --init --recursive --checkout --force");
+            writer.println("fi");
             writer.println();
             writer.println("git clean -xdf");
             writer.println("rm -rf build_x86_64_*");
@@ -545,7 +593,7 @@ public class DockerBuildManager {
             }
             writer.println("# Create package");
             writer.println("cd " + config.getBuildDir(buildType));
-            writer.println("tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .");
+            writer.println("create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
             writer.println();
             writer.println("# Cleanup");
             writer.println("cd \"$target/repo\"");
@@ -665,6 +713,26 @@ public class DockerBuildManager {
             }
 
             // Reverted path normalization flags (keep environment unchanged)
+
+            writer.println("create_package() {");
+            writer.println("  local dest=\"$1\"");
+            writer.println("  echo \"Creating build package at $dest\"");
+            writer.println("  if [ ! -d _install/CUBRID ]; then");
+            writer.println("    echo '[WARN] Expected _install/CUBRID not found; packaging entire build directory' >&2");
+            writer.println("    if command -v pigz >/dev/null 2>&1; then");
+            writer.println("      tar cf - . | pigz -1 > \"$dest\"");
+            writer.println("    else");
+            writer.println("      tar cf - . | gzip -1 > \"$dest\"");
+            writer.println("    fi");
+            writer.println("    return");
+            writer.println("  fi");
+            writer.println("  if command -v pigz >/dev/null 2>&1; then");
+            writer.println("    tar cf - _install/CUBRID | pigz -1 > \"$dest\"");
+            writer.println("  else");
+            writer.println("    tar cf - _install/CUBRID | gzip -1 > \"$dest\"");
+            writer.println("  fi");
+            writer.println("}");
+            writer.println();
             
             writer.println("# Prepare an isolated working directory per build to avoid collisions");
             writer.println("# Use fixed build directory for ccache optimization");
@@ -679,7 +747,11 @@ public class DockerBuildManager {
             writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone source into writable target using local reference to avoid network fetches");
-            writer.println("git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo || git clone --no-checkout /cubrid-src repo");
+            writer.println("if ! git clone --no-checkout --reference /cubrid-src /cubrid-src repo; then");
+            writer.println("  echo '[WARN] Reference clone failed; falling back to standard clone' >&2");
+            writer.println("  rm -rf repo 2>/dev/null || true");
+            writer.println("  git clone --no-checkout /cubrid-src repo");
+            writer.println("fi");
             writer.println("cd repo");
             writer.println("git config advice.detachedHead false");
             writer.println("git config user.email build@localhost");
@@ -757,8 +829,50 @@ public class DockerBuildManager {
             writer.println("    apply_commit \"${COMMIT_HASH}\" false || { echo '[FATAL] Failed to apply commit'; exit 1; }");
             writer.println("  fi");
             writer.println("fi");
+            writer.println("GIT_VERSION_RAW=$(git --version 2>/dev/null)");
+            writer.println("GIT_VERSION=$(echo \"$GIT_VERSION_RAW\" | awk '{print $3}')");
+            writer.println("if [ -z \"$GIT_VERSION\" ]; then");
+            writer.println("  GIT_MAJOR=0");
+            writer.println("  GIT_MINOR=0");
+            writer.println("  GIT_VERSION_DISPLAY=${GIT_VERSION_RAW:-unknown}");
+            writer.println("else");
+            writer.println("  GIT_MAJOR=${GIT_VERSION%%.*}");
+            writer.println("  GIT_MINOR_TMP=${GIT_VERSION#*.}");
+            writer.println("  GIT_MINOR=${GIT_MINOR_TMP%%.*}");
+            writer.println("  GIT_VERSION_DISPLAY=$GIT_VERSION");
+            writer.println("fi");
+            writer.println("SUPPORTS_SUBMODULE_JOBS=0");
+            writer.println("SUPPORTS_SUBMODULE_DEPTH=0");
+            writer.println("if [ \"${GIT_MAJOR:-0}\" -gt 2 ] || { [ \"${GIT_MAJOR:-0}\" -eq 2 ] && [ \"${GIT_MINOR:-0}\" -ge 8 ]; }; then");
+            writer.println("  SUPPORTS_SUBMODULE_JOBS=1");
+            writer.println("fi");
+            writer.println("if [ \"${GIT_MAJOR:-0}\" -gt 2 ] || { [ \"${GIT_MAJOR:-0}\" -eq 2 ] && [ \"${GIT_MINOR:-0}\" -ge 9 ]; }; then");
+            writer.println("  SUPPORTS_SUBMODULE_DEPTH=1");
+            writer.println("fi");
+            writer.println("supports_submodule_jobs() {");
+            writer.println("  [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]");
+            writer.println("}");
+            writer.println("supports_submodule_depth() {");
+            writer.println("  [ \"$SUPPORTS_SUBMODULE_DEPTH\" = \"1\" ]");
+            writer.println("}");
+            writer.println("echo \"Detected git version: ${GIT_VERSION_DISPLAY}\"");
             writer.println("git submodule sync --recursive");
-            writer.println("git submodule update --init --recursive --checkout --force");
+            writer.println("SUBMODULE_JOBS=${SUBMODULE_JOBS:-$(nproc 2>/dev/null || echo 4)}");
+            writer.println("SUBMODULE_ARGS=(--init --recursive --checkout --force)");
+            writer.println("if [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]; then");
+            writer.println("  SUBMODULE_ARGS+=(--jobs \"$SUBMODULE_JOBS\")");
+            writer.println("else");
+            writer.println("  echo \"[INFO] git submodule --jobs not supported in git ${GIT_VERSION_DISPLAY}\"");
+            writer.println("fi");
+            writer.println("if [ \"$SUPPORTS_SUBMODULE_DEPTH\" = \"1\" ]; then");
+            writer.println("  SUBMODULE_ARGS+=(--depth 1)");
+            writer.println("else");
+            writer.println("  echo \"[INFO] git submodule --depth not supported in git ${GIT_VERSION_DISPLAY}\"");
+            writer.println("fi");
+            writer.println("if ! git submodule update \"${SUBMODULE_ARGS[@]}\"; then");
+            writer.println("  echo '[WARN] Parallel/shallow submodule update failed; retrying with defaults' >&2");
+            writer.println("  git submodule update --init --recursive --checkout --force");
+            writer.println("fi");
             writer.println();
 
             writer.println("# Clean any previous builds");
@@ -827,7 +941,9 @@ public class DockerBuildManager {
             
             writer.println("# Create package (can be skipped during baseline warm)");
             writer.println("cd " + config.getBuildDir(buildType));
-            writer.println("if [ \"${BUILD_SKIP_PACKAGE:-0}\" != \"1\" ]; then tar czf /output/cubrid_${COMMIT_HASH:0:7}.tar.gz .; fi");
+            writer.println("if [ \"${BUILD_SKIP_PACKAGE:-0}\" != \"1\" ]; then");
+            writer.println("  create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
+            writer.println("fi");
             writer.println();
             writer.println("# Cleanup temporary branch and workspace");
             writer.println("cd \"$target/repo\"");

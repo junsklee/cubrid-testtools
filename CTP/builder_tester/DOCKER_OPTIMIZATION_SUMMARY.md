@@ -41,6 +41,8 @@ We implemented a two-phase optimization focusing on **Docker Image Caching** (Op
    - No changes to existing APIs or workflows
    - Automatic fallback on failures
    - Configurable via `optimized_docker_enabled` flag
+4. **Reduced Host Churn**
+   - Shell testcase repository syncs are throttled (`shell_tc_sync_interval_seconds`) to avoid redundant fetches during multi-test runs
 
 ## Implementation Details
 
@@ -64,6 +66,9 @@ optimized_docker_enabled=true
 
 # Maximum Docker images to cache
 build_cache_size=20
+
+# Minimum seconds between shell testcase repo syncs (per branch)
+shell_tc_sync_interval_seconds=300
 ```
 
 ## Performance Results
@@ -104,7 +109,7 @@ build_cache_size=20
 ### Image Cache Management
 - LRU eviction when cache exceeds limit
 - Automatic cleanup of old images and temporary provisioning containers
-- ~1-2GB per image (full CUBRID installation)
+- ~1GB per image (only `_install/CUBRID` contents)
 
 ## Testing and Verification
 
@@ -141,7 +146,7 @@ docker system df
 ## Benefits
 
 1. **Dramatic Performance Improvement**: 80-90% reduction in test overhead
-2. **Faster Image Provisioning**: Avoids expensive `docker build` processing on large tarballs
+2. **Faster Image Provisioning**: Avoids expensive `docker build` processing on large tarballs and only ships `_install/CUBRID`
 3. **Transparent Operation**: No changes to existing workflows
 4. **Remote Compatible**: Works with distributed testing
 5. **Automatic Fallback**: Graceful degradation on failures

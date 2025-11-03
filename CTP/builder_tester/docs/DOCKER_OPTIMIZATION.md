@@ -27,7 +27,7 @@ The Builder-Tester system now includes advanced Docker optimization that dramati
 ### 1. Docker Image Building
 When a test request arrives for a commit:
 1. System checks if a Docker image exists for that commit/baseline pair (`cubrid-test:<commit>_<baseline>`)
-2. If not, launches the baseline test image with the build tarball mounted, runs an in-container provisioning script to extract/configure CUBRID, and commits the live container as the new image
+2. If not, launches the baseline test image with the build tarball mounted, runs an in-container provisioning script to extract/configure CUBRID (only the `_install/CUBRID` payload is shipped), and commits the live container as the new image
 3. Caches the image for future tests on the same commit
 
 ### 2. Optimized Test Execution
@@ -40,7 +40,7 @@ For each test:
 ### 3. Image Cache Management
 - Keeps up to 20 images by default (configurable)
 - Automatically evicts oldest images and removes provisioning containers when limit reached
-- Each image is ~1-2GB (includes full CUBRID installation)
+- Each image is ~1GB (only the `_install/CUBRID` install tree)
 
 ## Configuration
 
@@ -53,6 +53,9 @@ optimized_docker_enabled=true
 
 # Maximum number of Docker images to cache
 build_cache_size=20
+
+# Minimum seconds between git syncs of the shell testcase repo
+shell_tc_sync_interval_seconds=300
 ```
 
 ### Performance Tuning
@@ -93,6 +96,9 @@ grep "optimized Docker command" ~/cubrid-testtools/CTP/builder_tester/log/system
 
 # Check image provisioning
 grep "Building Docker image by provisioning container" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
+
+# Verify shell testcase sync throttling
+grep "Skipping shell testcases git sync" ~/cubrid-testtools/CTP/builder_tester/log/system/tester.log
 ```
 
 ### Manual Cache Management
@@ -242,6 +248,10 @@ Each image contains:
 3. Extracts and installs CUBRID inside the running container
 4. Runs setup steps within the container
 5. Commits the container as `cubrid-test:<commit>_<baseline>` and cleans up temporary artifacts
+
+### Build Artifact Packaging
+- Builder packaging now includes only `_install/CUBRID` plus its descendants, trimming archive size and download time
+- Fallback packaging of the entire build directory remains in place if the expected install tree is missing
 
 ## Summary
 

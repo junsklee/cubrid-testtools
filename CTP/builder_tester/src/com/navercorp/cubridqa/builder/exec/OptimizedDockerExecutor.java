@@ -10,10 +10,12 @@ import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class OptimizedDockerExecutor implements ExecutorStrategy {
@@ -89,7 +91,9 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 throw new Exception("Image builder not available");
             }
         } catch (Exception e) {
-            testLogger.warning("Failed to build optimized Docker image: " + e.getMessage());
+            Throwable root = e instanceof InvocationTargetException ? ((InvocationTargetException) e).getTargetException() : e;
+            String message = root != null && root.getMessage() != null ? root.getMessage() : e.toString();
+            testLogger.log(Level.WARNING, "Failed to build optimized Docker image: " + message, root != null ? root : e);
             throw e;  // Let the calling method handle fallback
         }
         

@@ -111,8 +111,9 @@ public class DockerImageBuilder {
         runCommand.add(buildPackage.toAbsolutePath().toString() + ":/mnt/build.tar.gz:ro");
         runCommand.add("-v");
         runCommand.add(setupScript.toAbsolutePath().toString() + ":/mnt/setup.sh:ro");
+        runCommand.add("--entrypoint");
+        runCommand.add("/bin/bash");
         runCommand.add(config.getDockerTestImage());
-        runCommand.add("bash");
         runCommand.add("/mnt/setup.sh");
         
         List<String> commitCommand = new ArrayList<>();
@@ -162,17 +163,26 @@ public class DockerImageBuilder {
                "echo \"[setup] Preparing CUBRID installation inside container\"\n" +
                "rm -rf /opt/cubrid\n" +
                "mkdir -p /opt/cubrid\n" +
-               "tar -xzf /mnt/build.tar.gz -C /opt/cubrid\n" +
-               "CUBRID_DIR=$(find /opt/cubrid -path '*/_install/CUBRID' -type d | head -1)\n" +
-               "if [[ -z \"$CUBRID_DIR\" ]]; then\n" +
-               "  CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname)\n" +
+               "if tar -tf /mnt/build.tar.gz 2>/dev/null | grep -m1 -q '^_install/CUBRID/'; then\n" +
+               "  echo \"[setup] Detected packaged _install/CUBRID layout\"\n" +
+               "  tar -xzf /mnt/build.tar.gz -C /opt/cubrid --strip-components=2\n" +
+               "  CUBRID_DIR=/opt/cubrid\n" +
+               "else\n" +
+               "  echo \"[setup] Extracting full archive\"\n" +
+               "  tar -xzf /mnt/build.tar.gz -C /opt/cubrid\n" +
+               "  CUBRID_DIR=$(find /opt/cubrid -path '*/_install/CUBRID' -type d | head -1)\n" +
+               "  if [[ -z \"$CUBRID_DIR\" ]]; then\n" +
+               "    CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname)\n" +
+               "  fi\n" +
+               "  echo \"[setup] Found CUBRID directory: $CUBRID_DIR\"\n" +
+               "  if [[ -n \"$CUBRID_DIR\" && \"$CUBRID_DIR\" != \"/opt/cubrid\" && -d \"$CUBRID_DIR\" ]]; then\n" +
+               "    echo \"[setup] Syncing CUBRID contents into /opt/cubrid\"\n" +
+               "    cp -rf \"$CUBRID_DIR\"/* /opt/cubrid/\n" +
+               "    rm -rf /opt/cubrid/_install\n" +
+               "    CUBRID_DIR=/opt/cubrid\n" +
+               "  fi\n" +
                "fi\n" +
-               "echo \"[setup] Found CUBRID directory: $CUBRID_DIR\"\n" +
-               "if [[ -n \"$CUBRID_DIR\" && \"$CUBRID_DIR\" != \"/opt/cubrid\" && -d \"$CUBRID_DIR\" ]]; then\n" +
-               "  echo \"[setup] Syncing CUBRID contents into /opt/cubrid\"\n" +
-               "  cp -rf \"$CUBRID_DIR\"/* /opt/cubrid/\n" +
-               "  rm -rf /opt/cubrid/_install\n" +
-               "fi\n" +
+               "echo \"[setup] Final CUBRID_DIR=$CUBRID_DIR\"\n" +
                "if [[ -f /opt/cubrid/share/scripts/setup.sh ]]; then\n" +
                "  echo \"[setup] Running share/scripts/setup.sh\"\n" +
                "  (cd /opt/cubrid && printf 'y\\n' | sh share/scripts/setup.sh /opt/cubrid) || true\n" +
