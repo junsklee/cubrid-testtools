@@ -50,6 +50,7 @@ public class Builder {
         // Create HTTP server
         this.server = HttpServer.create(new InetSocketAddress(config.getListenPort()), 0);
         this.server.createContext("/build", new BuildRequestHandler());
+        this.server.createContext("/build-single", new SingleBuildHandler());
         this.server.createContext("/status", new StatusHandler());
         this.server.createContext("/health", new HealthCheckHandler());
         this.server.createContext("/download/build/", new BuildDownloadHandler());
@@ -334,7 +335,7 @@ public class Builder {
                 sendResponse(exchange, 405, "Method not allowed");
                 return;
             }
-            
+
             try {
                 // Extract filename from path: /download/build/{filename}
                 String path = exchange.getRequestURI().getPath();
@@ -343,25 +344,25 @@ public class Builder {
                     sendResponse(exchange, 404, "Not found");
                     return;
                 }
-                
+
                 String filename = path.substring(prefix.length());
                 if (filename.isEmpty() || filename.contains("..")) {
                     sendResponse(exchange, 400, "Invalid filename");
                     return;
                 }
-                
+
                 // Look for file in work directory build subdirectories
                 File buildFile = findBuildFile(config.getWorkDir(), filename);
                 if (buildFile == null || !buildFile.exists() || !buildFile.isFile()) {
                     sendResponse(exchange, 404, "Build package not found");
                     return;
                 }
-                
+
                 // Send file
                 exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
                 exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
                 exchange.sendResponseHeaders(200, buildFile.length());
-                
+
                 try (OutputStream os = exchange.getResponseBody();
                      FileInputStream fis = new FileInputStream(buildFile)) {
                     byte[] buffer = new byte[8192];
@@ -370,12 +371,85 @@ public class Builder {
                         os.write(buffer, 0, bytesRead);
                     }
                 }
-                
+
                 logger.info("Served build package: " + filename);
-                
+
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Error serving build package", e);
                 sendResponse(exchange, 500, "Internal server error");
+            }
+        }
+    }
+
+    private class SingleBuildHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "Method not allowed");
+                return;
+            }
+
+            try {
+                // Read request body
+                String requestBody = readRequestBody(exchange);
+                JSONObject request = new JSONObject(requestBody);
+
+                // Extract parameters
+                String commit = request.getString("commit");
+                String buildType = request.optString("buildType", "debug");
+                String baselineCommit = request.optString("baselineCommit", null);
+
+                logger.info(String.format("Received single build request: commit=%s, type=%s", commit, buildType));
+
+                // Create unique work directory for this build
+                String workDirPath = config.getWorkDir() + "/build_" + commit.substring(0, 7) + "_" + System.currentTimeMillis();
+                File workDir = new File(workDirPath);
+                workDir.mkdirs();
+
+                try {
+                    // Execute build
+                    String packagePath = dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit);
+
+                    if (packagePath != null && !packagePath.isEmpty()) {
+                        // Build succeeded
+                        logger.info(String.format("Single build succeeded: commit=%s, package=%s", commit, packagePath));
+
+                        JSONObject response = new JSONObject()
+                            .put("status", "success")
+                            .put("commit", commit)
+                            .put("packagePath", packagePath)
+                            .put("message", "Build completed successfully");
+
+                        sendJsonResponse(exchange, 200, response);
+                    } else {
+                        // Build failed
+                        logger.warning(String.format("Single build failed: commit=%s", commit));
+
+                        JSONObject response = new JSONObject()
+                            .put("status", "failed")
+                            .put("commit", commit)
+                            .put("message", "Build failed");
+
+                        sendJsonResponse(exchange, 200, response);
+                    }
+
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, "Error during single build", e);
+
+                    JSONObject error = new JSONObject()
+                        .put("status", "error")
+                        .put("commit", commit)
+                        .put("message", e.getMessage());
+
+                    sendJsonResponse(exchange, 500, error);
+                }
+
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, "Error handling single build request", e);
+                JSONObject error = new JSONObject()
+                    .put("status", "error")
+                    .put("message", e.getMessage());
+                sendJsonResponse(exchange, 400, error);
             }
         }
     }
