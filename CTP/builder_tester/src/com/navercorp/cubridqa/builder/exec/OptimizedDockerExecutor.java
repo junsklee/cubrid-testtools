@@ -288,8 +288,12 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 dockerOptLogFilePath = Paths.get(testsDir, dockerOptLogFileName);
                 Files.write(dockerOptLogFilePath, dockerOutput.getBytes("UTF-8"));
                 testLogger.info("Saved optimized Docker test log to: " + dockerOptLogFilePath);
+            } else {
+                testLogger.warning("Log not saved - requestId: " + requestId + ", groupingEnabled: " + config.isRequestGroupingEnabled());
             }
-        } catch (Exception ignore) {}
+        } catch (Exception e) {
+            testLogger.log(Level.SEVERE, "Failed to save test log: " + e.getMessage(), e);
+        }
         
         // Check for result file
         String resultBase = request.getTestScript().endsWith(".sh") ? 
