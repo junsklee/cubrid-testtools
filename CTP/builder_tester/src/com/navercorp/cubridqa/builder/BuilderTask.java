@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
+import com.navercorp.cubridqa.builder.workload.*;
 
 /**
  * BuilderTask - Builds CUBRID at multiple commits and runs tests
@@ -28,11 +29,12 @@ public class BuilderTask {
     private final Map<String, Integer> progress;
     private Logger taskLogger;
     private String baselineCommit;
-    
+    private WorkloadDistributor workloadDistributor;
+
     // Thread-safe build cache shared across all tasks
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
-    
-    public BuilderTask(String taskId, JSONObject request, BuilderConfig config, 
+
+    public BuilderTask(String taskId, JSONObject request, BuilderConfig config,
                        DockerBuildManager dockerManager) {
         this.taskId = taskId;
         this.request = request;
@@ -40,6 +42,7 @@ public class BuilderTask {
         this.dockerManager = dockerManager;
         this.results = Collections.synchronizedList(new ArrayList<>());
         this.progress = new ConcurrentHashMap<>();
+        this.workloadDistributor = null; // Will be initialized in run()
     }
     
     public void run() {
@@ -86,8 +89,29 @@ public class BuilderTask {
                 // Backward compatibility
                 workerIps.add(request.optString("workerIp", "localhost"));
             }
-            
+
             String callbackUrl = request.getString("callbackUrl");
+
+            // Initialize WorkloadDistributor with all nodes (including localhost)
+            // Format: "host:port" - add default builder port if not specified
+            List<String> nodeIds = new ArrayList<>();
+            for (String workerIp : workerIps) {
+                if (workerIp.contains(":")) {
+                    nodeIds.add(workerIp);
+                } else {
+                    // Add default builder port (8089)
+                    nodeIds.add(workerIp + ":8089");
+                }
+            }
+            // Add localhost if not already in the list
+            boolean hasLocalhost = nodeIds.stream().anyMatch(n ->
+                n.startsWith("localhost:") || n.startsWith("127.0.0.1:"));
+            if (!hasLocalhost) {
+                nodeIds.add(0, "localhost:8089"); // Add at beginning for priority
+            }
+
+            this.workloadDistributor = new WorkloadDistributor(nodeIds);
+            taskLogger.info("Initialized WorkloadDistributor with nodes: " + nodeIds);
             
             if (prNumber != null) {
                 taskLogger.info(String.format("Building PR #%d for %d tests across %d tester node(s)", 
@@ -116,8 +140,8 @@ public class BuilderTask {
                 this.baselineCommit = determineBaselineCommit(commits);
                 taskLogger.info("Using baseline (parent of earliest commit): " + this.baselineCommit);
 
-                // Build all commits concurrently (each in isolation via worktree + cherry-pick)
-                builtPackages = buildCommitsConcurrently(commits, buildType, this.baselineCommit);
+                // Build all commits SEQUENTIALLY using WorkloadDistributor
+                builtPackages = buildCommitsSequentially(commits, buildType, this.baselineCommit);
             }
             
             // Distribute tests across multiple tester nodes
@@ -635,6 +659,147 @@ public class BuilderTask {
         }
         
         executor.shutdown();
+        return builtPackages;
+    }
+
+    /**
+     * Build commits SEQUENTIALLY using WorkloadDistributor
+     * This ensures only one build runs at a time, maximizing ccache hit ratio
+     * and avoiding concurrency issues with shared directories.
+     */
+    private Map<String, String> buildCommitsSequentially(JSONArray commits, String buildType, String baselineCommit)
+            throws Exception {
+        Map<String, String> builtPackages = new ConcurrentHashMap<>();
+
+        // Capture the current request ID
+        final String requestId = RequestContext.getRequestId();
+
+        taskLogger.info(String.format("Building %d commits SEQUENTIALLY (one at a time)", commits.length()));
+
+        // Build each commit one by one
+        for (int i = 0; i < commits.length(); i++) {
+            final String commit = commits.getString(i);
+
+            try {
+                // Set the request context
+                if (requestId != null) {
+                    RequestContext.setRequestId(requestId);
+                }
+
+                // Normalize commit to full SHA
+                String normalizedCommit = resolveFullCommitHashSafe(commit);
+
+                // Skip the baseline commit itself
+                if (normalizedCommit.equals(baselineCommit)) {
+                    taskLogger.info("Skipping baseline commit " + commit + " - it should not be a build target");
+                    continue;
+                }
+
+                progress.put(commit, 0); // Starting
+                String normalizedShort = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
+
+                // Check build cache first
+                String baselineShort = baselineCommit.substring(0, Math.min(7, baselineCommit.length()));
+                String cacheKey = normalizedCommit + "_" + buildType + "_" + baselineShort;
+                String cachedPackage = buildCache.get(cacheKey);
+
+                if (cachedPackage != null && new File(cachedPackage).exists()) {
+                    // Validate baseline matches before reusing
+                    if (validateCachedBaseline(cachedPackage, normalizedCommit, baselineCommit)) {
+                        taskLogger.info("Using cached build for commit " + normalizedCommit + " (baseline: " + baselineShort + ")");
+                        builtPackages.put(commit, cachedPackage);
+                        progress.put(commit, 100);
+
+                        // Since it's cached, we assume localhost has it
+                        workloadDistributor.completeBuild("localhost:8089", normalizedCommit, cachedPackage);
+
+                        createCachedBuildLog(commit, cachedPackage, "memory cache");
+                        try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
+                        continue;
+                    } else {
+                        taskLogger.warning("Cached build validation failed for commit " + normalizedCommit + ", will rebuild");
+                        buildCache.remove(cacheKey);
+                    }
+                }
+
+                // Check disk cache
+                String diskPackage = findExistingBuildPackageOnDisk(normalizedShort, buildType, baselineCommit, normalizedCommit);
+                if (diskPackage != null) {
+                    taskLogger.info("Using cached build from disk for commit " + normalizedCommit);
+                    builtPackages.put(commit, diskPackage);
+                    buildCache.put(cacheKey, diskPackage);
+                    progress.put(commit, 100);
+
+                    // Assume localhost has it
+                    workloadDistributor.completeBuild("localhost:8089", normalizedCommit, diskPackage);
+
+                    createCachedBuildLog(commit, diskPackage, "disk cache");
+                    try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
+                    continue;
+                }
+
+                progress.put(commit, 20); // Building
+
+                // Assign build to a node using WorkloadDistributor
+                String assignedNode = workloadDistributor.assignBuild(normalizedCommit, buildType, baselineCommit);
+                taskLogger.info(String.format("Build %d/%d: commit %s assigned to node %s",
+                    i + 1, commits.length(), normalizedShort, assignedNode));
+
+                String buildPackage = null;
+
+                // Check if assigned node is localhost
+                if (workloadDistributor.isNodeLocal(assignedNode)) {
+                    // Build locally
+                    taskLogger.info("Building locally on " + assignedNode);
+                    Path workDir = Files.createTempDirectory(
+                        Paths.get(config.getWorkDir()), "build_" + normalizedShort + "_");
+                    buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit);
+                } else {
+                    // Build remotely
+                    taskLogger.info("Triggering remote build on " + assignedNode);
+                    try {
+                        JSONObject result = RemoteBuildClient.triggerRemoteBuild(
+                            assignedNode, normalizedCommit, buildType, baselineCommit);
+
+                        if ("success".equals(result.optString("status"))) {
+                            buildPackage = result.optString("packagePath");
+                            taskLogger.info("Remote build succeeded: " + buildPackage);
+                        } else {
+                            taskLogger.warning("Remote build failed: " + result.optString("message"));
+                        }
+                    } catch (IOException e) {
+                        taskLogger.log(Level.SEVERE, "Remote build request failed", e);
+                    }
+                }
+
+                // Mark build complete in WorkloadDistributor
+                workloadDistributor.completeBuild(assignedNode, normalizedCommit, buildPackage);
+
+                if (buildPackage != null && !buildPackage.isEmpty()) {
+                    builtPackages.put(commit, buildPackage);
+                    buildCache.put(cacheKey, buildPackage);
+                    writeBuildMetadata(buildPackage, normalizedCommit, buildType, baselineCommit);
+                    cleanBuildCache(config.getBuildCacheSize());
+                    progress.put(commit, 100);
+                } else {
+                    taskLogger.severe("Build failed for commit " + normalizedCommit);
+                    builtPackages.put(commit, "");
+                    progress.put(commit, -1);
+                }
+
+            } catch (Exception e) {
+                taskLogger.log(Level.SEVERE, "Failed to build commit " + commit, e);
+                builtPackages.put(commit, "");
+                progress.put(commit, -1);
+            } finally {
+                RequestContext.clear();
+            }
+        }
+
+        taskLogger.info("Sequential build completed. Successfully built: " +
+            builtPackages.entrySet().stream().filter(e -> !e.getValue().isEmpty()).count() +
+            "/" + commits.length());
+
         return builtPackages;
     }
 
