@@ -54,6 +54,11 @@ public class BuilderTask {
             // Get request-scoped logger
             taskLogger = RequestLogManager.getInstance().getRequestLogger(requestId, "builder");
             taskLogger.info("Starting builder task: " + taskId);
+            
+            // Ensure tests subdirectory exists up front (even before tests run)
+            if (RequestLogManager.getInstance().isRequestGroupingEnabled()) {
+                RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
+            }
         } catch (IOException e) {
             taskLogger.warning("Failed to create request logger, using system logger: " + e.getMessage());
             taskLogger = logger;
@@ -794,6 +799,10 @@ public class BuilderTask {
             } finally {
                 RequestContext.clear();
             }
+        }
+
+        if (requestId != null) {
+            RequestContext.setRequestId(requestId);
         }
 
         taskLogger.info("Sequential build completed. Successfully built: " +
