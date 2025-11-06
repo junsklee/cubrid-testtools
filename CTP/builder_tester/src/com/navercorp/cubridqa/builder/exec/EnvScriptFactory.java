@@ -97,7 +97,8 @@ public class EnvScriptFactory {
         script.append("export CUBRID_LANG=\"en_US\"\n");
         script.append("export CUBRID_CHARSET=\"en_US\"\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
-        script.append("export init_path=\"").append(initPath).append("\"\n\n");
+        script.append("export init_path=\"").append(initPath).append("\"\n");
+        script.append("export WORKSPACE=\"/workspace\"\n\n");
 
         script.append("# Emit debug env snapshot for docker exec sessions\n");
         script.append("cat > /workspace/debug_env.sh <<'EOS'\n");
@@ -107,6 +108,7 @@ public class EnvScriptFactory {
         script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:$LD_LIBRARY_PATH\"\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
         script.append("export init_path=\"").append(initPath).append("\"\n");
+        script.append("export WORKSPACE=\"/workspace\"\n");
         script.append("EOS\n");
         script.append("chmod +x /workspace/debug_env.sh\n\n");
 
@@ -182,7 +184,8 @@ public class EnvScriptFactory {
         script.append("export CUBRID_LANG=en_US\n");
         script.append("export CUBRID_CHARSET=en_US\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
-        script.append("export init_path=\"").append(initPath).append("\"\n\n");
+        script.append("export init_path=\"").append(initPath).append("\"\n");
+        script.append("export WORKSPACE=\"/workspace\"\n\n");
 
         script.append("# Ensure configuration backups exist for restoration\n");
         script.append("for conf_file in /opt/cubrid/conf/cubrid.conf \\\n");
