@@ -4,7 +4,10 @@
 package com.navercorp.cubridqa.builder;
 
 import java.io.*;
+import java.io.UncheckedIOException;
+import java.nio.file.*;
 import java.util.*;
+import java.util.Locale;
 
 /**
  * BuilderConfig - Configuration for builder/tester services
@@ -16,6 +19,8 @@ public class BuilderConfig {
     private static final String LISTEN_PORT = "listen_port";
     private static final String CUBRID_SRC_DIR = "cubrid_src_dir";
     private static final String SHELL_TC_DIR = "shell_tc_dir";
+    private static final String SHELL_TC_OVERLAY_MODE = "shell_tc_overlay_mode";
+    private static final String SHELL_TC_OVERLAY_DIR = "shell_tc_overlay_dir";
     private static final String SHELL_TC_BRANCH = "shell_tc_branch";
     private static final String SHELL_TC_PREFERRED_REMOTE = "shell_tc_preferred_remote";
     private static final String BUILD_ARG = "build_arg";
@@ -55,10 +60,20 @@ public class BuilderConfig {
     private static final String PARALLEL_JOBS = "parallel_jobs";
     private static final String SHELL_TC_SYNC_INTERVAL_SECONDS = "shell_tc_sync_interval_seconds";
     
+    private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
+
+    private static final Object SHELL_TC_OVERLAY_LOCK = new Object();
+
+    private Path shellTcSourceDir;
+    private Path shellTcEffectiveDir;
+    private Path shellTcOverlayDir;
+    private ShellTcOverlayMode shellTcOverlayMode;
+
     public BuilderConfig(String configFile) throws IOException {
         this.properties = new Properties();
         loadConfiguration(configFile);
         validateConfiguration();
+        initializeShellTestcaseWorkspace();
     }
     
     private void loadConfiguration(String configFile) throws IOException {
@@ -128,6 +143,235 @@ public class BuilderConfig {
                 "Directory does not exist: " + key + " = " + path);
         }
     }
+
+    private void initializeShellTestcaseWorkspace() throws IOException {
+        shellTcSourceDir = resolvePath(properties.getProperty(SHELL_TC_DIR));
+        shellTcOverlayMode = parseShellTcOverlayMode(properties.getProperty(SHELL_TC_OVERLAY_MODE, "auto"));
+
+        if (shellTcSourceDir == null || !Files.exists(shellTcSourceDir.resolve(".git"))) {
+            shellTcEffectiveDir = shellTcSourceDir;
+            shellTcOverlayDir = null;
+            return;
+        }
+
+        boolean useOverlay = shouldUseOverlay(shellTcOverlayMode, shellTcSourceDir);
+        if (!useOverlay) {
+            shellTcEffectiveDir = shellTcSourceDir;
+            shellTcOverlayDir = null;
+            return;
+        }
+
+        String overlayDirProp = properties.getProperty(SHELL_TC_OVERLAY_DIR);
+        Path candidateOverlayDir;
+        if (overlayDirProp != null && !overlayDirProp.trim().isEmpty()) {
+            candidateOverlayDir = resolvePath(overlayDirProp);
+        } else {
+            candidateOverlayDir = resolvePath(Paths.get(getWorkDir()).resolve("shell_tc_overlay").toString());
+        }
+
+        if (candidateOverlayDir.equals(shellTcSourceDir)) {
+            shellTcEffectiveDir = shellTcSourceDir;
+            shellTcOverlayDir = null;
+            return;
+        }
+
+        shellTcOverlayDir = candidateOverlayDir;
+        shellTcEffectiveDir = prepareShellTcOverlay(shellTcSourceDir, shellTcOverlayDir);
+    }
+
+    private Path resolvePath(String rawPath) {
+        if (rawPath == null || rawPath.trim().isEmpty()) {
+            return null;
+        }
+        return Paths.get(rawPath).toAbsolutePath().normalize();
+    }
+
+    private ShellTcOverlayMode parseShellTcOverlayMode(String raw) {
+        if (raw == null) {
+            return ShellTcOverlayMode.AUTO;
+        }
+        String normalized = raw.trim().toLowerCase(Locale.ENGLISH);
+        switch (normalized) {
+            case "enabled":
+            case "enable":
+            case "true":
+                return ShellTcOverlayMode.ENABLED;
+            case "disabled":
+            case "disable":
+            case "false":
+                return ShellTcOverlayMode.DISABLED;
+            case "auto":
+            case "":
+                return ShellTcOverlayMode.AUTO;
+            default:
+                throw new IllegalArgumentException("Invalid shell_tc_overlay_mode: " + raw);
+        }
+    }
+
+    private boolean shouldUseOverlay(ShellTcOverlayMode mode, Path source) {
+        if (mode == ShellTcOverlayMode.ENABLED) {
+            return true;
+        }
+        if (mode == ShellTcOverlayMode.DISABLED) {
+            return false;
+        }
+        try {
+            return source == null || !Files.isWritable(source);
+        } catch (SecurityException e) {
+            return true;
+        }
+    }
+
+    private Path prepareShellTcOverlay(Path source, Path overlay) throws IOException {
+        if (overlay == null) {
+            return source;
+        }
+
+        Path parent = overlay.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+
+        if (source != null && overlay.startsWith(source)) {
+            throw new IOException("shell_tc_overlay_dir must not reside inside shell_tc_dir: " + overlay);
+        }
+
+        synchronized (SHELL_TC_OVERLAY_LOCK) {
+            if (Files.exists(overlay) && !Files.exists(overlay.resolve(".git"))) {
+                deleteRecursively(overlay);
+            }
+            if (!Files.exists(overlay.resolve(".git"))) {
+                cloneShellTestcases(source, overlay);
+            }
+            replicateGitRemotes(source, overlay);
+        }
+        return overlay;
+    }
+
+    private void cloneShellTestcases(Path source, Path overlay) throws IOException {
+        Path parent = overlay.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        runCommand(parent, true,
+            "git", "clone", "--no-hardlinks", source.toString(), overlay.toString());
+    }
+
+    private void replicateGitRemotes(Path source, Path overlay) throws IOException {
+        CommandResult remoteList = runCommand(source, false, "git", "remote");
+        if (!remoteList.isSuccess()) {
+            return;
+        }
+
+        Set<String> remotes = new LinkedHashSet<>();
+        for (String line : remoteList.output.split("\\R")) {
+            String trimmed = line.trim();
+            if (!trimmed.isEmpty()) {
+                remotes.add(trimmed);
+            }
+        }
+        if (remotes.isEmpty()) {
+            remotes.add("origin");
+        }
+
+        for (String remote : remotes) {
+            Optional<String> urlOpt = readGitRemoteUrl(source, remote);
+            if (!urlOpt.isPresent()) {
+                continue;
+            }
+            String url = urlOpt.get().trim();
+            if (url.isEmpty()) {
+                continue;
+            }
+            configureGitRemote(overlay, remote, url);
+        }
+    }
+
+    private Optional<String> readGitRemoteUrl(Path repo, String remote) throws IOException {
+        CommandResult result = runCommand(repo, false,
+            "git", "config", "--get", "remote." + remote + ".url");
+        if (!result.isSuccess()) {
+            return Optional.empty();
+        }
+        String output = result.output.trim();
+        return output.isEmpty() ? Optional.empty() : Optional.of(output);
+    }
+
+    private void configureGitRemote(Path repo, String remote, String url) throws IOException {
+        CommandResult setResult = runCommand(repo, false,
+            "git", "remote", "set-url", remote, url);
+        if (setResult.isSuccess()) {
+            return;
+        }
+        CommandResult addResult = runCommand(repo, false,
+            "git", "remote", "add", remote, url);
+        if (!addResult.isSuccess()) {
+            throw new IOException("Failed to configure git remote '" + remote + "' for " + repo + ": " + addResult.output);
+        }
+    }
+
+    private void deleteRecursively(Path path) throws IOException {
+        if (!Files.exists(path)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(path)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+        } catch (UncheckedIOException e) {
+            throw e.getCause();
+        }
+    }
+
+    private CommandResult runCommand(Path workingDir, String... command) throws IOException {
+        return runCommand(workingDir, true, command);
+    }
+
+    private CommandResult runCommand(Path workingDir, boolean failOnNonZero, String... command) throws IOException {
+        ProcessBuilder pb = new ProcessBuilder(command);
+        if (workingDir != null) {
+            pb.directory(workingDir.toFile());
+        }
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append(System.lineSeparator());
+            }
+        }
+        int exitCode;
+        try {
+            exitCode = process.waitFor();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while running command: " + String.join(" ", command), e);
+        }
+        if (failOnNonZero && exitCode != 0) {
+            throw new IOException("Command failed (" + exitCode + "): " + String.join(" ", command) +
+                (output.length() > 0 ? System.lineSeparator() + output : ""));
+        }
+        return new CommandResult(exitCode, output.toString());
+    }
+
+    private static final class CommandResult {
+        private final int exitCode;
+        private final String output;
+
+        private CommandResult(int exitCode, String output) {
+            this.exitCode = exitCode;
+            this.output = output;
+        }
+
+        private boolean isSuccess() {
+            return exitCode == 0;
+        }
+    }
     
     // Getters with defaults
     
@@ -140,7 +384,22 @@ public class BuilderConfig {
     }
     
     public String getShellTcDir() {
-        return properties.getProperty(SHELL_TC_DIR);
+        if (shellTcEffectiveDir == null) {
+            return properties.getProperty(SHELL_TC_DIR);
+        }
+        return shellTcEffectiveDir.toString();
+    }
+
+    public String getShellTcSourceDir() {
+        return shellTcSourceDir != null ? shellTcSourceDir.toString() : properties.getProperty(SHELL_TC_DIR);
+    }
+
+    public boolean isShellTcOverlayActive() {
+        return shellTcEffectiveDir != null && shellTcSourceDir != null && !shellTcEffectiveDir.equals(shellTcSourceDir);
+    }
+
+    public String getShellTcOverlayDir() {
+        return shellTcOverlayDir != null ? shellTcOverlayDir.toString() : null;
     }
 
     public String getShellTcBranch() {
@@ -458,6 +717,7 @@ public class BuilderConfig {
                "listenPort=" + getListenPort() +
                ", cubridSrcDir='" + getCubridSrcDir() + '\'' +
                ", shellTcDir='" + getShellTcDir() + '\'' +
+               (isShellTcOverlayActive() ? ", shellTcSourceDir='" + getShellTcSourceDir() + '\'' : "") +
                ", buildArg='" + getBuildArg() + '\'' +
                ", buildDir='" + getBuildDir() + '\'' +
                ", workDir='" + getWorkDir() + '\'' +

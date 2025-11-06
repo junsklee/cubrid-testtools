@@ -5,6 +5,7 @@ import com.navercorp.cubridqa.builder.tester.TestResult;
 import com.navercorp.cubridqa.builder.tester.TestStatus;
 import com.navercorp.cubridqa.builder.cache.BuildCache;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
+import com.navercorp.cubridqa.builder.tester.SafeIo;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
@@ -54,6 +55,12 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         testLogger.info("Docker work dir: " + dockerWorkDir.toString());
+
+        Path shellRepoRoot = Paths.get(config.getShellTcDir()).toAbsolutePath().normalize();
+        Path ctpSourceRoot = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP").toAbsolutePath().normalize();
+        Path ctpWorkRoot = dockerWorkDir.resolve("CTP");
+        stageCtpResources(ctpSourceRoot, ctpWorkRoot, testLogger);
+        String ctpHomeInContainer = "/workspace/CTP";
         
         // Download build package if it's a URL
         Path localBuildPackage;
@@ -104,9 +111,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
         }
         
-        // Copy test case directory to isolated workspace
-        Path testCasesDir = dockerWorkDir.resolve("testcases");
-        Files.createDirectories(testCasesDir);
+        // Resolve test case directory within the shell testcases repository
         Path sourceTestDir = Paths.get(request.getTestDir());
         if (!Files.exists(sourceTestDir)) {
             String testPathFull = request.getTestPath();
@@ -125,23 +130,30 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 }
             }
         }
-        
-        try {
-            copyTestCaseDirectory(sourceTestDir, testCasesDir);
-        } catch (IOException e) {
+        if (!Files.isDirectory(sourceTestDir)) {
             return TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Failed to copy test cases: " + e.getMessage())
+                .message("Test directory is not a directory: " + sourceTestDir)
                 .build();
         }
-        testLogger.info("Copied test case directory to isolated workspace");
-        
+        if (!Files.isReadable(sourceTestDir)) {
+            return TestResult.builder()
+                .testName(request.getTestName())
+                .status(TestStatus.ENVIRONMENT_ERROR)
+                .message("Permission denied reading test directory: " + sourceTestDir)
+                .build();
+        }
+        String relativeTestDir = computeRelativeTestDir(shellRepoRoot, sourceTestDir, testLogger);
+        testLogger.info("Using test directory: " + sourceTestDir + " (relative: " + (relativeTestDir.isEmpty() ? "." : relativeTestDir) + ")");
+
         // Create simplified test script (no CUBRID extraction needed!)
         String dockerScript = EnvScriptFactory.createDockerOptimizedScript(
             request.getTestScript(), 
             request.getTestName(), 
-            request.getExpectedBuildVersion()
+            request.getExpectedBuildVersion(),
+            relativeTestDir,
+            ctpHomeInContainer
         );
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());
@@ -201,15 +213,15 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
-        dockerCommand.add(System.getProperty("user.home") + "/cubrid-testtools:/home/cubrid-testtools:ro");
+        dockerCommand.add(shellRepoRoot.toString() + ":/workspace/testcases:rw");
         
         // Environment variables
         dockerCommand.add("-e");
         dockerCommand.add("GITHUB_TOKEN=" + githubToken);
         dockerCommand.add("-e");
-        dockerCommand.add("CTP_HOME=/home/cubrid-testtools/CTP");
+        dockerCommand.add("CTP_HOME=" + ctpHomeInContainer);
         dockerCommand.add("-e");
-        dockerCommand.add("init_path=/home/cubrid-testtools/CTP/shell/init_path");
+        dockerCommand.add("init_path=" + ctpHomeInContainer + "/shell/init_path");
         
         // Working directory
         dockerCommand.add("-w");
@@ -300,6 +312,29 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             request.getTestScript().substring(0, request.getTestScript().length() - 3) : request.getTestScript();
         Path namedResult = dockerWorkDir.resolve(resultBase + ".result");
         
+        if (!Files.exists(namedResult)) {
+            Path testcasesRoot = dockerWorkDir.resolve("testcases");
+            Path fallback = testcasesRoot.resolve(".");
+            if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
+                fallback = testcasesRoot.resolve(relativeTestDir);
+            }
+            fallback = fallback.resolve(resultBase + ".result").normalize();
+            if (Files.exists(fallback)) {
+                namedResult = fallback;
+            }
+        }
+
+        if (!Files.exists(namedResult)) {
+            Path repoResult = shellRepoRoot;
+            if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
+                repoResult = repoResult.resolve(relativeTestDir);
+            }
+            repoResult = repoResult.resolve(resultBase + ".result").normalize();
+            if (Files.exists(repoResult)) {
+                namedResult = repoResult;
+            }
+        }
+
         if (Files.exists(namedResult)) {
             String resultContent = new String(Files.readAllBytes(namedResult));
             testLogger.info("Test result file content: " + resultContent);
@@ -346,44 +381,49 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         } else {
             resultBuilder.status(TestStatus.FAIL).exitCode(exitCode);
         }
-        
+
         return resultBuilder.build();
     }
     
-    private void copyTestCaseDirectory(Path source, Path target) throws IOException {
-        if (!Files.exists(source) || !Files.isDirectory(source)) {
-            throw new IOException("Source test directory does not exist: " + source);
+    private String computeRelativeTestDir(Path repoRoot, Path testDir, Logger logger) {
+        try {
+            Path repoReal;
+            Path testReal;
+            try {
+                repoReal = repoRoot.toRealPath();
+            } catch (IOException e) {
+                repoReal = repoRoot.toAbsolutePath().normalize();
+            }
+            try {
+                testReal = testDir.toRealPath();
+            } catch (IOException e) {
+                testReal = testDir.toAbsolutePath().normalize();
+            }
+
+            if (testReal.startsWith(repoReal)) {
+                String rel = repoReal.relativize(testReal).toString().replace('\\', '/');
+                return rel.isEmpty() ? "" : rel;
+            }
+        } catch (Exception e) {
+            logger.fine("Unable to compute relative path for test directory: " + e.getMessage());
         }
-        Files.walkFileTree(source, new SimpleFileVisitor<Path>() {
-            @Override
-            public FileVisitResult preVisitDirectory(Path dir, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
-                Path targetDir = target.resolve(source.relativize(dir));
-                try {
-                    Files.createDirectories(targetDir);
-                } catch (IOException e) {
-                    throw e;
-                }
-                return FileVisitResult.CONTINUE;
-            }
+        logger.fine("Test directory " + testDir + " is outside repository root " + repoRoot + "; using repo root.");
+        return "";
+    }
 
-            @Override
-            public FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
-                Path targetFile = target.resolve(source.relativize(file));
-                try {
-                    Files.copy(file, targetFile, StandardCopyOption.REPLACE_EXISTING);
-                } catch (IOException e) {
-                    // Fail fast on permission errors to surface clear message
-                    throw e;
-                }
-                return FileVisitResult.CONTINUE;
+    private void stageCtpResources(Path sourceRoot, Path targetRoot, Logger logger) throws IOException {
+        SafeIo.deleteDirectory(targetRoot.toFile());
+        Files.createDirectories(targetRoot);
+        String[] requiredDirs = {"shell", "bin", "common", "conf"};
+        for (String dir : requiredDirs) {
+            Path sourceDir = sourceRoot.resolve(dir);
+            Path targetDir = targetRoot.resolve(dir);
+            if (Files.exists(sourceDir)) {
+                SafeIo.copyTestCaseDirectory(sourceDir, targetDir);
+            } else {
+                logger.fine("CTP component missing: " + sourceDir);
             }
-
-            @Override
-            public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
-                // Propagate AccessDeniedException or any IO error to caller for proper HTTP error response
-                throw exc != null ? exc : new IOException("Failed visiting: " + file);
-            }
-        });
+        }
     }
     
     /**

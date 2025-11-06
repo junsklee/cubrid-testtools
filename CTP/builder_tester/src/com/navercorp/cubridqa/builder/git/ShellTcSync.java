@@ -32,6 +32,11 @@ public class ShellTcSync {
                 return;
             }
 
+            if (config.isShellTcOverlayActive()) {
+                log.fine("Using shell testcases overlay workspace: " + repoPath +
+                         " (source=" + config.getShellTcSourceDir() + ")");
+            }
+
             ProcessBuilder pb = new ProcessBuilder();
             pb.directory(repoDir);
 
