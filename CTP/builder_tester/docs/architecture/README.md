@@ -48,6 +48,14 @@
   - Metadata: `~/cubrid-testtools/CTP/builder_tester/log/.metadata.json`
   - See log/LOG_MANAGEMENT.md for detailed logging architecture
 
+### Shell testcases workspace
+
+- `shell_tc_dir` in the config points to the shared testcases checkout (often mounted read-only when multiple hosts share the same tree).
+- The builder now prepares a writable overlay clone automatically:
+  - `shell_tc_overlay_mode` (default `auto`) decides when to activate it. Options: `auto` (use overlay only when the source is read-only), `enabled`, or `disabled`.
+  - `shell_tc_overlay_dir` sets the target clone/overlay location; default is `<work_dir>/shell_tc_overlay`.
+- All runtime interactions (`git fetch`, branch checkout, copying tests for execution) operate against the overlay when it is active, keeping the original checkout pristine for other runners.
+
 ## Logging Architecture
 
 The system implements a dual logging approach:
@@ -64,12 +72,13 @@ The system implements a dual logging approach:
 ## Docker run details (Tester)
 
 - Mounts:
-  - `/workspace` (writable) – build.tar.gz + generated run_test.sh + copied results
+  - `/workspace` (writable) – build.tar.gz + generated run_test.sh + collected result artifacts
   - `~/cubrid-testtools` → `/home/cubrid-testtools`
-  - `<shell_tc_dir>` → `/home/cubrid-testcases-private-ex` (read-write)
+  - `<shell_tc_dir overlay>` → `/workspace/testcases` (read-write)
 - Env vars: `GITHUB_TOKEN`, `CTP_HOME`, `init_path`
 - Workdir: `/workspace`
 - Entrypoint: `bash -lc /workspace/run_test.sh` (synchronous mode)
+- Shell testcases run in-place on the overlay clone that is mounted into the container at `/workspace/testcases`, avoiding per-test copies while leaving the shared source checkout untouched.
 
 ## Result detection
 
