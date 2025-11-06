@@ -5,7 +5,12 @@ import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class LogLocator {
     private static final Logger logger = Logger.getLogger(LogLocator.class.getName());
@@ -52,14 +57,29 @@ public class LogLocator {
                 Path basePath = Paths.get(searchPath);
                 if (Files.exists(basePath)) {
                     // Search recursively for the file
-                    Path foundFile = Files.walk(basePath)
-                        .filter(path -> path.getFileName().toString().equals(filename))
-                        .findFirst()
-                        .orElse(null);
-                    
-                    if (foundFile != null) {
-                        logger.info("Found log file at: " + foundFile.toString());
-                        return foundFile;
+                    List<Path> matchedFiles;
+                    try (Stream<Path> walk = Files.walk(basePath)) {
+                        matchedFiles = walk
+                            .filter(path -> path.getFileName().toString().equals(filename))
+                            .collect(Collectors.toCollection(ArrayList::new));
+                    }
+
+                    if (!matchedFiles.isEmpty()) {
+                        Path newestFile = matchedFiles.stream()
+                            .max(Comparator.comparingLong(path -> {
+                                try {
+                                    return Files.getLastModifiedTime(path).toMillis();
+                                } catch (Exception e) {
+                                    logger.fine("Unable to read last modified time for " + path + ": " + e.getMessage());
+                                    return Long.MIN_VALUE;
+                                }
+                            }))
+                            .orElse(matchedFiles.get(0));
+
+                        if (newestFile != null) {
+                            logger.info("Found log file at: " + newestFile.toString() + " (latest match)");
+                            return newestFile;
+                        }
                     }
                 }
             } catch (Exception e) {
