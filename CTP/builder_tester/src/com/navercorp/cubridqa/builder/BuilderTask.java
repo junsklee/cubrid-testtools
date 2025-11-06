@@ -280,24 +280,29 @@ public class BuilderTask {
                 return Boolean.compare(isLocal2, isLocal1);
             });
             
+            // Interleave submissions across workers so all nodes start work concurrently
+            int maxQueueLen = 0;
             for (Map.Entry<String, List<Callable<JSONObject>>> entry : sortedWorkers) {
-                String worker = entry.getKey();
-                List<Callable<JSONObject>> workerTests = entry.getValue();
-                
-                taskLogger.info(String.format("Worker %s assigned %d tests", worker, workerTests.size()));
-                
-                for (Callable<JSONObject> ct : workerTests) {
-                    futuresTests.add(testPool.submit(() -> {
-                        // Set request context for this test thread
-                        if (testRequestId != null) {
-                            RequestContext.setRequestId(testRequestId);
-                        }
-                        try {
-                            return ct.call();
-                        } finally {
-                            RequestContext.clear();
-                        }
-                    }));
+                maxQueueLen = Math.max(maxQueueLen, entry.getValue().size());
+                taskLogger.info(String.format("Worker %s assigned %d tests", entry.getKey(), entry.getValue().size()));
+            }
+
+            for (int round = 0; round < maxQueueLen; round++) {
+                for (Map.Entry<String, List<Callable<JSONObject>>> entry : sortedWorkers) {
+                    List<Callable<JSONObject>> workerTests = entry.getValue();
+                    if (round < workerTests.size()) {
+                        Callable<JSONObject> ct = workerTests.get(round);
+                        futuresTests.add(testPool.submit(() -> {
+                            if (testRequestId != null) {
+                                RequestContext.setRequestId(testRequestId);
+                            }
+                            try {
+                                return ct.call();
+                            } finally {
+                                RequestContext.clear();
+                            }
+                        }));
+                    }
                 }
             }
             for (Future<JSONObject> f : futuresTests) {
