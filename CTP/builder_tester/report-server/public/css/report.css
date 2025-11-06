@@ -68,6 +68,7 @@ body {
 .results-table table {
     width: 100%;
     border-collapse: collapse;
+    /* auto layout preserves original spacing */
 }
 
 .results-table th {
@@ -90,6 +91,61 @@ body {
     cursor: pointer;
     color: var(--info-color);
     text-decoration: underline;
+}
+
+/* Constrain and wrap very long test names so the column doesn't expand infinitely */
+.results-table td.test-name {
+    max-width: 420px; /* adjust as needed */
+    white-space: normal;
+    overflow-wrap: anywhere; /* allows wrapping inside long paths */
+    word-break: break-all;   /* hard-break if needed */
+}
+
+/* Ensure the header cell aligns with the constrained first column */
+.results-table thead th:first-child {
+    width: 420px; /* fixed width to match first column */
+    white-space: normal;
+}
+
+/* Optional: define column widths via colgroup for stronger enforcement */
+.results-table thead th:first-child {
+    width: 40%;
+    min-width: 300px;
+    max-width: 640px;
+}
+
+.results-table td.test-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+}
+
+/* Tight commit columns */
+.results-table thead th.commit-col {
+    white-space: nowrap;
+    width: 1%;
+    min-width: 0;
+    text-align: center;
+}
+.results-table td.result-cell {
+    white-space: nowrap;
+    width: 1%;
+    text-align: center;
+}
+
+/* Tight verdict column */
+.results-table thead th:last-child,
+.results-table td:last-child {
+    white-space: nowrap;
+    width: 1%;
+}
+
+/* Tight Fail Num column (second from last) */
+.results-table thead th:nth-last-child(2),
+.results-table td:nth-last-child(2) {
+    white-space: nowrap;
+    width: 1%;
+    text-align: center;
 }
 
 .log-link {

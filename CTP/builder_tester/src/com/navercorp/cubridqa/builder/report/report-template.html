@@ -848,6 +848,7 @@
         table {
             width: 100%;
             border-collapse: collapse;
+            /* auto layout preserves original spacing for other columns */
         }
         
         thead {
@@ -868,7 +869,37 @@
         
         th.commit-col {
             text-align: center;
-            min-width: 120px;
+            white-space: nowrap;
+            width: 1%;
+            min-width: 0;
+        }
+
+        /* Tighten commit result cells */
+        td.result-cell {
+            white-space: nowrap;
+            width: 1%;
+            text-align: center;
+        }
+        
+        /* Make Verdict column fit its text tightly */
+        th:last-child,
+        td:last-child {
+            white-space: nowrap;
+            width: 1%;
+        }
+
+        /* Make Fail Num column fit its text tightly (second from last) */
+        th:nth-last-child(2),
+        td:nth-last-child(2) {
+            white-space: nowrap;
+            width: 1%;
+            text-align: center;
+        }
+        
+        th:first-child {
+            width: 40%;
+            min-width: 300px;
+            max-width: 640px;
         }
         
         tbody tr {
@@ -882,6 +913,17 @@
         
         td {
             padding: 1rem;
+        }
+        
+        td.test-name {
+            white-space: normal;
+            overflow-wrap: anywhere;
+            word-break: break-all;
+        }
+
+        /* Colgroup first column width enforcement */
+        col.col-test {
+            width: 40%;
         }
         
         .test-name {
@@ -1765,9 +1807,19 @@
         function renderTable() {
             const headerRow = document.getElementById('tableHeader');
             const tbody = document.getElementById('tableBody');
+            const table = document.getElementById('resultsTable');
+            // Ensure a colgroup exists to enforce first column width
+            if (table && table.querySelector('colgroup') === null) {
+                const colgroup = document.createElement('colgroup');
+                const colTest = document.createElement('col'); colTest.className = 'col-test'; colgroup.appendChild(colTest);
+                // Add cols for each commit + Fail Num + Verdict
+                const totalExtraCols = commits.length + 2; // fail + verdict
+                for (let i = 0; i < totalExtraCols; i++) { colgroup.appendChild(document.createElement('col')); }
+                table.insertBefore(colgroup, table.firstChild);
+            }
             // Rebuild header explicitly to ensure correct order and column visibility
             headerRow.innerHTML = '';
-            const thTest = document.createElement('th'); thTest.textContent = 'Test Case'; headerRow.appendChild(thTest);
+            const thTest = document.createElement('th'); thTest.textContent = 'Test Case'; thTest.style.width = '40%'; thTest.style.minWidth = '300px'; thTest.style.maxWidth = '640px'; headerRow.appendChild(thTest);
             commits.forEach(commit => {
                 const th = document.createElement('th');
                 th.className = 'commit-col';

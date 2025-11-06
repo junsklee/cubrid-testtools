@@ -230,7 +230,11 @@ function createResultsTable(data) {
     const commits = data.commits || [];
     const tests = Object.keys(data.results);
     
-    let html = '<div class="results-table"><table>';
+    let html = '<div class="results-table"><table class="results">';
+    // Add colgroup to enforce first column width under table-layout: fixed
+    html += '<colgroup><col class="col-test">';
+    commits.forEach(() => { html += '<col>'; });
+    html += '<col></colgroup>';
     
     // Header
     html += '<thead><tr><th>Test Case</th>';
