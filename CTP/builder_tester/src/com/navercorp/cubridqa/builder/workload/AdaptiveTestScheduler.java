@@ -1,117 +1,97 @@
 package com.navercorp.cubridqa.builder.workload;
 
 import java.util.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * AdaptiveTestScheduler assigns tests to tester nodes using a weighted shortest
- * queue strategy. Each node advertises its concurrency capacity (threads it can
- * run in parallel). The scheduler keeps a logical queue length per node and
- * always hands the next test to the node with the lowest load factor
- * (queued/capacity). This allows high-capacity nodes to drain their queues
- * faster and continuously receive more work, maximizing throughput.
+ * AdaptiveTestScheduler hands out worker "leases" dynamically. Each tester
+ * contributes a number of slots equal to its max concurrent capacity. When a
+ * test starts we acquire a lease (blocking if all slots are busy). When the
+ * test finishes we release the lease, immediately making that worker available
+ * for the next pending test. Faster nodes naturally re-enter the available pool
+ * sooner, so they automatically absorb more work without any static partitioning.
  */
 public class AdaptiveTestScheduler {
 
-    private final Map<String, NodeLoad> loadByWorker;
-    private final PriorityQueue<NodeLoad> loadHeap;
+    private final BlockingQueue<NodeLease> availableSlots;
+    private final Map<String, AtomicInteger> inFlight;
+    private final Map<String, Integer> capacities;
 
     public AdaptiveTestScheduler(Map<String, Integer> workerCapacities) {
         if (workerCapacities == null || workerCapacities.isEmpty()) {
             throw new IllegalArgumentException("Worker capacities must not be empty");
         }
-        this.loadByWorker = new LinkedHashMap<>();
-        this.loadHeap = new PriorityQueue<>();
+        this.availableSlots = new LinkedBlockingQueue<>();
+        this.inFlight = new ConcurrentHashMap<>();
+        this.capacities = new LinkedHashMap<>();
 
         for (Map.Entry<String, Integer> entry : workerCapacities.entrySet()) {
             String worker = entry.getKey();
             int capacity = Math.max(1, entry.getValue());
-            NodeLoad nodeLoad = new NodeLoad(worker, capacity);
-            loadByWorker.put(worker, nodeLoad);
-            loadHeap.add(nodeLoad);
+            capacities.put(worker, capacity);
+            inFlight.put(worker, new AtomicInteger(0));
+            for (int i = 0; i < capacity; i++) {
+                availableSlots.offer(new NodeLease(worker, i));
+            }
         }
     }
 
     /**
-     * Assign the next test to the least loaded worker.
-     *
-     * @return assignment metadata including worker id and queue depth
+     * Acquire a worker slot, blocking until some tester has spare capacity.
      */
-    public synchronized Assignment assignWorker() {
-        NodeLoad chosen = loadHeap.poll();
-        if (chosen == null) {
-            throw new IllegalStateException("No workers registered");
-        }
-        chosen.incrementQueue();
-        loadHeap.offer(chosen);
-        return new Assignment(chosen.workerId, chosen.getQueued(), chosen.currentLoadFactor());
+    public NodeLease acquire() throws InterruptedException {
+        NodeLease lease = availableSlots.take();
+        inFlight.get(lease.workerId).incrementAndGet();
+        return lease;
     }
 
     /**
-     * Snapshot of queue lengths per worker for logging.
+     * Release a worker slot so the next pending test can use it.
      */
-    public synchronized Map<String, Integer> snapshotQueueDepths() {
+    public void release(NodeLease lease) {
+        if (lease == null) {
+            return;
+        }
+        AtomicInteger counter = inFlight.get(lease.workerId);
+        if (counter != null) {
+            counter.decrementAndGet();
+        }
+        availableSlots.offer(lease);
+    }
+
+    /**
+     * Snapshot of concurrent tests per worker for logging/metrics.
+     */
+    public Map<String, Integer> snapshotInFlight() {
         Map<String, Integer> snapshot = new LinkedHashMap<>();
-        for (Map.Entry<String, NodeLoad> entry : loadByWorker.entrySet()) {
-            snapshot.put(entry.getKey(), entry.getValue().getQueued());
+        for (Map.Entry<String, AtomicInteger> entry : inFlight.entrySet()) {
+            snapshot.put(entry.getKey(), entry.getValue().get());
         }
         return snapshot;
     }
 
-    public static final class Assignment {
-        private final String workerId;
-        private final int queueDepth;
-        private final double loadFactor;
+    public Map<String, Integer> getCapacities() {
+        return Collections.unmodifiableMap(capacities);
+    }
 
-        private Assignment(String workerId, int queueDepth, double loadFactor) {
+    public static final class NodeLease {
+        private final String workerId;
+        private final int slotIndex;
+
+        private NodeLease(String workerId, int slotIndex) {
             this.workerId = workerId;
-            this.queueDepth = queueDepth;
-            this.loadFactor = loadFactor;
+            this.slotIndex = slotIndex;
         }
 
         public String getWorkerId() {
             return workerId;
         }
 
-        public int getQueueDepth() {
-            return queueDepth;
-        }
-
-        public double getLoadFactor() {
-            return loadFactor;
-        }
-    }
-
-    private static final class NodeLoad implements Comparable<NodeLoad> {
-        private final String workerId;
-        private final int capacity;
-        private int queued;
-
-        private NodeLoad(String workerId, int capacity) {
-            this.workerId = workerId;
-            this.capacity = capacity;
-            this.queued = 0;
-        }
-
-        private void incrementQueue() {
-            this.queued++;
-        }
-
-        private int getQueued() {
-            return queued;
-        }
-
-        private double currentLoadFactor() {
-            // small epsilon prevents divide-by-zero and keeps deterministic ordering
-            return (double) queued / (double) capacity;
-        }
-
-        @Override
-        public int compareTo(NodeLoad other) {
-            int cmp = Double.compare(this.currentLoadFactor(), other.currentLoadFactor());
-            if (cmp != 0) {
-                return cmp;
-            }
-            return this.workerId.compareTo(other.workerId);
+        public int getSlotIndex() {
+            return slotIndex;
         }
     }
 }

@@ -34,9 +34,9 @@
 ### Adaptive test scheduling
 
 - Builder queries every tester’s `/health` endpoint to learn its advertised `maxConcurrentTests`.
-- The new `AdaptiveTestScheduler` keeps a logical queue for each tester and applies a weighted shortest queue strategy (queued ÷ capacity).
-- High-capacity testers receive more tests immediately, while slower nodes keep shorter queues and never block the fleet.
-- Each tester gets its own executor sized to its capacity, so work naturally back-pressures per node without throttling faster peers.
+- The `AdaptiveTestScheduler` materializes one “lease token” per tester slot. Dispatchers block until a token is available, ensuring we never exceed the tester’s capacity.
+- As soon as a tester finishes a job it releases its token back to the pool, so faster nodes naturally acquire the next pending tests and stay saturated.
+- Builder drives a thread pool whose size equals the sum of all tester slots, providing continuous dynamic rebalancing without pre-partitioning the work.
 
 ## Tester keep-alive (debug) mode
 
