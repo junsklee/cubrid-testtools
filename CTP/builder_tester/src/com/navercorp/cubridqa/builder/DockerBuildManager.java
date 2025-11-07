@@ -1200,36 +1200,90 @@ public class DockerBuildManager {
      */
     public static String normalizeBuildArg(String buildArg, String buildType) {
         if (buildArg == null) buildArg = "";
-        String mode = (buildType != null && buildType.trim().equalsIgnoreCase("release")) ? "release" : "debug";
+        String normalizedType = (buildType == null) ? "" : buildType.trim();
+        String mode;
+        if ("release".equalsIgnoreCase(normalizedType)) {
+            mode = "release";
+        } else if ("coverage".equalsIgnoreCase(normalizedType)) {
+            mode = "coverage";
+        } else if ("profile".equalsIgnoreCase(normalizedType)) {
+            mode = "profile";
+        } else if ("debug".equalsIgnoreCase(normalizedType)) {
+            mode = "debug";
+        } else {
+            // Default to debug when buildType is missing or unrecognized
+            mode = "debug";
+        }
 
         List<String> options = new ArrayList<>();
         List<String> targets = new ArrayList<>();
         String[] parts = buildArg.trim().isEmpty() ? new String[0] : buildArg.trim().split("\\s+");
 
-        boolean skipNext = false;
         for (int i = 0; i < parts.length; i++) {
-            if (skipNext) { skipNext = false; continue; }
-            String t = parts[i];
-            if ("-m".equals(t)) {
-                // Skip existing -m and its value if present
-                skipNext = (i + 1 < parts.length);
+            String token = parts[i];
+            if (token.isEmpty()) {
                 continue;
             }
-            // Classify positional targets (must be last): build | dist | all
-            if (!t.startsWith("-") && ("build".equals(t) || "dist".equals(t) || "all".equals(t))) {
-                targets.add(t);
+
+            if ("-m".equals(token)) {
+                // Skip existing -m flag and its value, if any
+                if (i + 1 < parts.length) {
+                    i++;
+                }
                 continue;
             }
-            options.add(t);
+
+            if ("-c".equals(token)) {
+                if (i + 1 < parts.length) {
+                    String value = parts[++i];
+                    if (value != null && value.startsWith("-DCMAKE_BUILD_TYPE=")) {
+                        // Drop existing CMAKE build type overrides; we will add the correct one later
+                        continue;
+                    }
+                    options.add("-c");
+                    options.add(value);
+                    continue;
+                }
+                // Stray -c without value; keep as-is
+                options.add(token);
+                continue;
+            }
+
+            if (token.startsWith("-DCMAKE_BUILD_TYPE=")) {
+                // Drop standalone overrides as well
+                continue;
+            }
+
+            if (!token.startsWith("-") && ("build".equals(token) || "dist".equals(token) || "all".equals(token))) {
+                targets.add(token);
+                continue;
+            }
+
+            options.add(token);
         }
 
         // Ensure -m <mode> appears before any target
         options.add("-m");
         options.add(mode);
 
-        // If no explicit target provided, default to leaving options only
+        String cmakeBuildType = null;
+        if ("release".equals(mode)) {
+            cmakeBuildType = "Release";
+        } else if ("debug".equals(mode)) {
+            cmakeBuildType = "Debug";
+        } else if ("coverage".equals(mode)) {
+            cmakeBuildType = "Coverage";
+        } else if ("profile".equals(mode)) {
+            cmakeBuildType = "Profile";
+        }
+
+        if (cmakeBuildType != null) {
+            options.add("-c");
+            options.add("-DCMAKE_BUILD_TYPE=" + cmakeBuildType);
+        }
+
         List<String> out = new ArrayList<>(options);
         out.addAll(targets);
-        return String.join(" ", out);
+        return String.join(" ", out).trim();
     }
 }
