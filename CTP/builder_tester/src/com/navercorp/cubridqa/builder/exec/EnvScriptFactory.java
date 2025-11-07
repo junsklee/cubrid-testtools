@@ -125,10 +125,55 @@ public class EnvScriptFactory {
         script.append("export init_path=\"").append(initPath).append("\"\n");
         script.append("export WORKSPACE=\"/workspace\"\n\n");
 
+        String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+        script.append("SAFE_TEST_NAME=\"").append(safeTestName).append("\"\n");
+        script.append("RUNTIME_ROOT=\"/workspace/runtime\"\n");
+        script.append("mkdir -p \"$RUNTIME_ROOT\"\n");
+        script.append("TEST_RUNTIME_DIR=\"$RUNTIME_ROOT/${SAFE_TEST_NAME}_$(date +%s%N)\"\n");
+        script.append("mkdir -p \"$TEST_RUNTIME_DIR/databases\"\n");
+        script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
+        script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
+        script.append("OVERLAY_MOUNTED=0\n");
+        script.append("cleanup_runtime() {\n");
+        script.append("  set +e\n");
+        script.append("  if [ \"$OVERLAY_MOUNTED\" = \"1\" ]; then\n");
+        script.append("    cd / >/dev/null 2>&1 || true\n");
+        script.append("    umount \"$TESTCASE_DIR\" >/dev/null 2>&1 || true\n");
+        script.append("    umount \"$TEST_RUNTIME_DIR/merged\" >/dev/null 2>&1 || true\n");
+        script.append("  fi\n");
+        script.append("  if [ \"$KEEP_RUNTIME_DIR\" != \"1\" ] && [ -n \"$TEST_RUNTIME_DIR\" ] && [ -d \"$TEST_RUNTIME_DIR\" ]; then\n");
+        script.append("    rm -rf \"$TEST_RUNTIME_DIR\"\n");
+        script.append("  fi\n");
+        script.append("}\n");
+        script.append("trap cleanup_runtime EXIT\n\n");
+
+        script.append("make_writable_testcase_dir() {\n");
+        script.append("  mkdir -p \"$TEST_RUNTIME_DIR/upper\" \"$TEST_RUNTIME_DIR/work\" \"$TEST_RUNTIME_DIR/merged\"\n");
+        script.append("  if mount -t overlay overlay -o lowerdir=\"$TESTCASE_DIR\",upperdir=\"$TEST_RUNTIME_DIR/upper\",workdir=\"$TEST_RUNTIME_DIR/work\" \"$TEST_RUNTIME_DIR/merged\" 2>/tmp/overlay_setup.err; then\n");
+        script.append("    if mount --bind \"$TEST_RUNTIME_DIR/merged\" \"$TESTCASE_DIR\" 2>>/tmp/overlay_setup.err; then\n");
+        script.append("      OVERLAY_MOUNTED=1\n");
+        script.append("      return 0\n");
+        script.append("    else\n");
+        script.append("      umount \"$TEST_RUNTIME_DIR/merged\" >/dev/null 2>&1 || true\n");
+        script.append("    fi\n");
+        script.append("  fi\n");
+        script.append("  echo \"WARNING: overlayfs unavailable, falling back to writable copy\" >&2\n");
+        script.append("  FALLBACK_DIR=\"$TEST_RUNTIME_DIR/case_copy\"\n");
+        script.append("  rm -rf \"$FALLBACK_DIR\"\n");
+        script.append("  mkdir -p \"$FALLBACK_DIR\"\n");
+        script.append("  if command -v rsync >/dev/null 2>&1; then\n");
+        script.append("    rsync -a \"$TESTCASE_DIR\"/ \"$FALLBACK_DIR\"/\n");
+        script.append("  else\n");
+        script.append("    cp -a \"$TESTCASE_DIR\"/. \"$FALLBACK_DIR\"/\n");
+        script.append("  fi\n");
+        script.append("  export TESTCASE_DIR=\"$FALLBACK_DIR\"\n");
+        script.append("}\n");
+        script.append("make_writable_testcase_dir\n\n");
+
         script.append("# Emit debug env snapshot for docker exec sessions\n");
         script.append("cat > /workspace/debug_env.sh <<'EOS'\n");
         script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
-        script.append("export CUBRID_DATABASES=\"$CUBRID_ROOT/databases\"\n");
+        script.append("export CUBRID_DATABASES=\"$CUBRID_DATABASES\"\n");
         script.append("export PATH=\"$CUBRID_ROOT/bin:$PATH\"\n");
         script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:$LD_LIBRARY_PATH\"\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
@@ -222,7 +267,6 @@ public class EnvScriptFactory {
 
         script.append("# CUBRID is pre-installed in /opt/cubrid\n");
         script.append("export CUBRID=/opt/cubrid\n");
-        script.append("export CUBRID_DATABASES=/opt/cubrid/databases\n");
         script.append("export PATH=\"/opt/cubrid/bin:" + initPath + ":" + ctpHome + "/bin:" + ctpHome + "/common/script:$PATH\"\n");
         script.append("export LD_LIBRARY_PATH=\"/opt/cubrid/lib:/opt/cubrid/cci/lib:" + ctpHome + "/common/lib:$LD_LIBRARY_PATH\"\n");
         script.append("export CUBRID_LANG=en_US\n");
@@ -230,6 +274,51 @@ public class EnvScriptFactory {
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
         script.append("export init_path=\"").append(initPath).append("\"\n");
         script.append("export WORKSPACE=\"/workspace\"\n\n");
+
+        String safeTestNameOpt = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+        script.append("SAFE_TEST_NAME=\"").append(safeTestNameOpt).append("\"\n");
+        script.append("RUNTIME_ROOT=\"/workspace/runtime\"\n");
+        script.append("mkdir -p \"$RUNTIME_ROOT\"\n");
+        script.append("TEST_RUNTIME_DIR=\"$RUNTIME_ROOT/${SAFE_TEST_NAME}_$(date +%s%N)\"\n");
+        script.append("mkdir -p \"$TEST_RUNTIME_DIR/databases\"\n");
+        script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
+        script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
+        script.append("OVERLAY_MOUNTED=0\n");
+        script.append("cleanup_runtime() {\n");
+        script.append("  set +e\n");
+        script.append("  if [ \"$OVERLAY_MOUNTED\" = \"1\" ]; then\n");
+        script.append("    cd / >/dev/null 2>&1 || true\n");
+        script.append("    umount \"$TESTCASE_DIR\" >/dev/null 2>&1 || true\n");
+        script.append("    umount \"$TEST_RUNTIME_DIR/merged\" >/dev/null 2>&1 || true\n");
+        script.append("  fi\n");
+        script.append("  if [ \"$KEEP_RUNTIME_DIR\" != \"1\" ] && [ -n \"$TEST_RUNTIME_DIR\" ] && [ -d \"$TEST_RUNTIME_DIR\" ]; then\n");
+        script.append("    rm -rf \"$TEST_RUNTIME_DIR\"\n");
+        script.append("  fi\n");
+        script.append("}\n");
+        script.append("trap cleanup_runtime EXIT\n\n");
+
+        script.append("make_writable_testcase_dir() {\n");
+        script.append("  mkdir -p \"$TEST_RUNTIME_DIR/upper\" \"$TEST_RUNTIME_DIR/work\" \"$TEST_RUNTIME_DIR/merged\"\n");
+        script.append("  if mount -t overlay overlay -o lowerdir=\"$TESTCASE_DIR\",upperdir=\"$TEST_RUNTIME_DIR/upper\",workdir=\"$TEST_RUNTIME_DIR/work\" \"$TEST_RUNTIME_DIR/merged\" 2>/tmp/overlay_setup.err; then\n");
+        script.append("    if mount --bind \"$TEST_RUNTIME_DIR/merged\" \"$TESTCASE_DIR\" 2>>/tmp/overlay_setup.err; then\n");
+        script.append("      OVERLAY_MOUNTED=1\n");
+        script.append("      return 0\n");
+        script.append("    else\n");
+        script.append("      umount \"$TEST_RUNTIME_DIR/merged\" >/dev/null 2>&1 || true\n");
+        script.append("    fi\n");
+        script.append("  fi\n");
+        script.append("  echo \"WARNING: overlayfs unavailable, falling back to writable copy\" >&2\n");
+        script.append("  FALLBACK_DIR=\"$TEST_RUNTIME_DIR/case_copy\"\n");
+        script.append("  rm -rf \"$FALLBACK_DIR\"\n");
+        script.append("  mkdir -p \"$FALLBACK_DIR\"\n");
+        script.append("  if command -v rsync >/dev/null 2>&1; then\n");
+        script.append("    rsync -a \"$TESTCASE_DIR\"/ \"$FALLBACK_DIR\"/\n");
+        script.append("  else\n");
+        script.append("    cp -a \"$TESTCASE_DIR\"/. \"$FALLBACK_DIR\"/\n");
+        script.append("  fi\n");
+        script.append("  export TESTCASE_DIR=\"$FALLBACK_DIR\"\n");
+        script.append("}\n");
+        script.append("make_writable_testcase_dir\n\n");
 
         script.append("# Ensure configuration backups exist for restoration\n");
         script.append("for conf_file in /opt/cubrid/conf/cubrid.conf \\\n");
@@ -256,9 +345,9 @@ public class EnvScriptFactory {
         }
 
         script.append("# Clean any previous database state\n");
-        script.append("rm -rf /opt/cubrid/databases/*\n");
-        script.append("mkdir -p /opt/cubrid/databases\n");
-        script.append("touch /opt/cubrid/databases/databases.txt\n\n");
+        script.append("rm -rf \"$CUBRID_DATABASES\"/*\n");
+        script.append("mkdir -p \"$CUBRID_DATABASES\"\n");
+        script.append("touch \"$CUBRID_DATABASES/databases.txt\"\n\n");
 
         script.append("# Run the test\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
