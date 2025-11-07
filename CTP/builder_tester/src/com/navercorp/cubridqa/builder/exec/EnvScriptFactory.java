@@ -22,7 +22,7 @@ public class EnvScriptFactory {
 
         script.append("# Execute test\n");
         script.append("set +e\n");
-        script.append("bash \"").append(testScript).append("\"\n");
+        script.append("sh \"").append(testScript).append("\"\n");
         script.append("TEST_EXIT_CODE=$?\n");
         script.append("set -e\n\n");
 
@@ -151,7 +151,7 @@ public class EnvScriptFactory {
         }
         script.append("\n");
         script.append("set +e\n");
-        script.append("bash ").append(testScript).append("\n");
+        script.append("sh ").append(testScript).append("\n");
         script.append("TEST_EXIT=$?\n");
         script.append("set -e\n\n");
 
@@ -223,7 +223,7 @@ public class EnvScriptFactory {
         }
         script.append("\n");
         script.append("set +e\n");
-        script.append("bash ").append(testScript).append("\n");
+        script.append("sh ").append(testScript).append("\n");
         script.append("TEST_EXIT=$?\n");
         script.append("set -e\n\n");
 
