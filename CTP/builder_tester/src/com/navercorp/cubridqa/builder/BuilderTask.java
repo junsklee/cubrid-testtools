@@ -169,6 +169,7 @@ public class BuilderTask {
             // Make buildType final for use in lambda
             final String finalBuildType = buildType;
 
+            final String testRequestId = RequestContext.getRequestId();
             List<Callable<JSONObject>> testCallables = new ArrayList<>();
             int globalTestIndex = 0;
             
@@ -229,7 +230,6 @@ public class BuilderTask {
                 }
             }
 
-            final String testRequestId = RequestContext.getRequestId();
             int totalSlots = Math.max(1, workerCapacities.values().stream().mapToInt(Integer::intValue).sum());
             ExecutorService testPool = Executors.newFixedThreadPool(totalSlots);
             List<Future<JSONObject>> futuresTests = new ArrayList<>();
