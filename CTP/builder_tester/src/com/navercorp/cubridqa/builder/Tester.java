@@ -135,7 +135,7 @@ public class Tester {
         
         // Create HTTP handlers
         this.testHandler = new TestHandler(config, testOrchestrator, logger);
-        this.healthHandler = new HealthHandler(new HttpResponseWriter());
+        this.healthHandler = new HealthHandler(config, new HttpResponseWriter());
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
         
         // Build cache is ready for use

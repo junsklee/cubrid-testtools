@@ -2,6 +2,7 @@ package com.navercorp.cubridqa.builder.tester;
 
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
+import com.navercorp.cubridqa.builder.BuilderConfig;
 import org.json.JSONObject;
 import java.io.IOException;
 import java.util.logging.Logger;
@@ -11,8 +12,10 @@ public class HealthHandler implements HttpHandler {
     private static final Logger logger = Logger.getLogger(HealthHandler.class.getName());
     
     private final HttpResponseWriter responseWriter;
+    private final BuilderConfig config;
     
-    public HealthHandler(HttpResponseWriter responseWriter) {
+    public HealthHandler(BuilderConfig config, HttpResponseWriter responseWriter) {
+        this.config = config;
         this.responseWriter = responseWriter;
     }
     
@@ -21,7 +24,9 @@ public class HealthHandler implements HttpHandler {
         try {
             JSONObject healthStatus = new JSONObject()
                 .put("status", "healthy")
-                .put("timestamp", System.currentTimeMillis());
+                .put("timestamp", System.currentTimeMillis())
+                .put("maxConcurrentTests", Math.max(1, config.getMaxConcurrentTests()))
+                .put("testerPort", config.getTesterPort());
                 
             responseWriter.sendJson(exchange, 200, healthStatus);
         } catch (Exception e) {

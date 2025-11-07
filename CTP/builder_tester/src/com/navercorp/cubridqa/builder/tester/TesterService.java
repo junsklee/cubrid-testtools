@@ -50,7 +50,7 @@ public class TesterService {
         
         // Register real handlers
         this.apiServer.registerHandler("/test", new PlaceholderTestHandler());
-        this.apiServer.registerHandler("/health", new HealthHandler(responseWriter));
+        this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter));
         this.apiServer.registerHandler("/log/", new LogStreamHandler(logLocator, responseWriter));
         
         // Create work directory if it doesn't exist

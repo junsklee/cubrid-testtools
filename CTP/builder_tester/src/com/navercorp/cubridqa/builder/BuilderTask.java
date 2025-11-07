@@ -9,6 +9,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.logging.*;
 import java.util.stream.Collectors;
 import org.json.JSONObject;
@@ -159,19 +160,15 @@ public class BuilderTask {
                 dispatchCounts.put(worker, new AtomicInteger(0));
                 taskLogger.info(String.format("Tester %s reports max_concurrent_tests=%d", worker, concurrency));
             }
-            AdaptiveTestScheduler scheduler = new AdaptiveTestScheduler(workerCapacities);
-
-            // Calculate total number of test executions for proper distribution
+            // Calculate total number of test executions
             int totalTestExecutions = builtPackages.size() * tests.length();
             taskLogger.info(String.format("Distributing %d test executions (%d commits × %d tests) across %d workers",
                 totalTestExecutions, builtPackages.size(), tests.length(), workerIps.size()));
 
-            // Make buildType final for use in lambda
             final String finalBuildType = buildType;
-
             final String testRequestId = RequestContext.getRequestId();
-            List<Callable<JSONObject>> testCallables = new ArrayList<>();
-            int globalTestIndex = 0;
+            ConcurrentLinkedQueue<TestJob> pendingJobs = new ConcurrentLinkedQueue<>();
+            AtomicInteger globalTestIndex = new AtomicInteger(0);
             
             for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
                 final String commit = entry.getKey();
@@ -190,63 +187,63 @@ public class BuilderTask {
                 for (int i = 0; i < tests.length(); i++) {
                     final String raw = tests.getString(i);
                     final String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
-                    globalTestIndex++;
-
-                    final int testNumber = globalTestIndex;
-                    final String commitForTest = commit;
-                    final String buildPackageForTest = buildPackage;
-
-                    testCallables.add(() -> {
-                        AdaptiveTestScheduler.NodeLease lease = null;
-                        try {
-                            lease = scheduler.acquire();
-                            String worker = lease.getWorkerId();
-                            dispatchCounts.get(worker).incrementAndGet();
-                            taskLogger.info(String.format(
-                                "Dispatching test %d/%d: %s (commit %s) → worker %s (slot %d, active=%d/%d)",
-                                testNumber,
-                                totalTestExecutions,
-                                testPath,
-                                commitForTest.substring(0, Math.min(7, commitForTest.length())),
-                                worker,
-                                lease.getSlotIndex(),
-                                scheduler.snapshotInFlight().getOrDefault(worker, 0),
-                                workerCapacities.getOrDefault(worker, 1)));
-
-                            if (testRequestId != null) {
-                                RequestContext.setRequestId(testRequestId);
-                            }
-                            return runTest(commitForTest, buildPackageForTest, testPath, worker, this.baselineCommit, finalBuildType);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw new IllegalStateException("Interrupted while waiting for tester capacity", ie);
-                        } finally {
-                            if (testRequestId != null) {
-                                RequestContext.clear();
-                            }
-                            scheduler.release(lease);
-                        }
-                    });
+                    pendingJobs.offer(new TestJob(commit, buildPackage, testPath));
                 }
             }
 
             int totalSlots = Math.max(1, workerCapacities.values().stream().mapToInt(Integer::intValue).sum());
             ExecutorService testPool = Executors.newFixedThreadPool(totalSlots);
-            List<Future<JSONObject>> futuresTests = new ArrayList<>();
-            for (Callable<JSONObject> callable : testCallables) {
-                futuresTests.add(testPool.submit(callable));
+            List<Future<Void>> slotFutures = new ArrayList<>();
+
+            for (String worker : workerIps) {
+                int capacity = workerCapacities.getOrDefault(worker, 1);
+                for (int slot = 0; slot < capacity; slot++) {
+                    final int slotIndex = slot;
+                    slotFutures.add(testPool.submit(() -> {
+                        while (true) {
+                            TestJob job = pendingJobs.poll();
+                            if (job == null) {
+                                break;
+                            }
+                            int testNumber = globalTestIndex.incrementAndGet();
+                            dispatchCounts.get(worker).incrementAndGet();
+                            taskLogger.info(String.format(
+                                "Dispatching test %d/%d: %s (commit %s) → worker %s (slot %d)",
+                                testNumber,
+                                totalTestExecutions,
+                                job.testPath,
+                                job.commit.substring(0, Math.min(7, job.commit.length())),
+                                worker,
+                                slotIndex));
+
+                            try {
+                                if (testRequestId != null) {
+                                    RequestContext.setRequestId(testRequestId);
+                                }
+                                JSONObject testResult = runTest(job.commit, job.buildPackage, job.testPath,
+                                    worker, this.baselineCommit, finalBuildType);
+                                results.add(testResult);
+                            } catch (Exception e) {
+                                taskLogger.log(Level.WARNING, "Test execution threw", e);
+                                results.add(new JSONObject()
+                                    .put("commit", job.commit)
+                                    .put("test", job.testPath)
+                                    .put("status", "error")
+                                    .put("message", e.getMessage()));
+                            } finally {
+                                RequestContext.clear();
+                            }
+                        }
+                        return null;
+                    }));
+                }
             }
 
-            for (Future<JSONObject> f : futuresTests) {
+            for (Future<Void> f : slotFutures) {
                 try {
-                    results.add(f.get());
+                    f.get();
                 } catch (Exception e) {
-                    taskLogger.log(Level.WARNING, "Test execution threw", e);
-                    results.add(new JSONObject()
-                        .put("commit", "unknown")
-                        .put("test", "unknown")
-                        .put("status", "error")
-                        .put("message", e.getMessage()));
+                    taskLogger.log(Level.WARNING, "Test dispatcher error", e);
                 }
             }
             testPool.shutdown();
@@ -2108,5 +2105,17 @@ public class BuilderTask {
             return value.substring(1, value.length() - 1);
         }
         return value;
+    }
+
+    private static final class TestJob {
+        private final String commit;
+        private final String buildPackage;
+        private final String testPath;
+
+        private TestJob(String commit, String buildPackage, String testPath) {
+            this.commit = commit;
+            this.buildPackage = buildPackage;
+            this.testPath = testPath;
+        }
     }
 }
