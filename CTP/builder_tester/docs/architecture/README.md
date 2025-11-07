@@ -31,6 +31,13 @@
 - Direct fallback:
   - Used when Docker is unavailable; builds/tests execute on the host
 
+### Adaptive test scheduling
+
+- Builder queries every tester’s `/health` endpoint to learn its advertised `maxConcurrentTests`.
+- The new `AdaptiveTestScheduler` keeps a logical queue for each tester and applies a weighted shortest queue strategy (queued ÷ capacity).
+- High-capacity testers receive more tests immediately, while slower nodes keep shorter queues and never block the fleet.
+- Each tester gets its own executor sized to its capacity, so work naturally back-pressures per node without throttling faster peers.
+
 ## Tester keep-alive (debug) mode
 
 - When `keepAlive=true` (or `keep_failed_containers=true`), Tester starts the container detached and returns:
