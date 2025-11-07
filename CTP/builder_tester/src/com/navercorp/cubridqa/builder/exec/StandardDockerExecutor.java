@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 public class StandardDockerExecutor implements ExecutorStrategy {
+    private static final String TESTCASE_MOUNT = EnvScriptFactory.TESTCASE_MOUNT;
     private final Config config;
     private final BuildCache buildCache;
     private final ShellTcSync shellTcSync;
@@ -98,36 +99,15 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             }
         }
         
-        // Resolve test case directory within the shell testcases repository
-        Path sourceTestDir = Paths.get(request.getTestDir());
-        if (!Files.exists(sourceTestDir)) {
-            String testPathFull = request.getTestPath();
-            if (testPathFull != null && testPathFull.contains("/")) {
-                String relDir = testPathFull.substring(0, testPathFull.lastIndexOf("/"));
-                Path fallbackDir = Paths.get(config.getShellTcDir(), relDir);
-                if (Files.exists(fallbackDir)) {
-                    testLogger.warning("Provided testDir not found on tester; using fallback: " + fallbackDir.toString());
-                    sourceTestDir = fallbackDir;
-                } else {
-                    return TestResult.builder()
-                        .testName(request.getTestName())
-                        .status(TestStatus.ENVIRONMENT_ERROR)
-                        .message("Test directory not found on tester: " + sourceTestDir.toString())
-                        .build();
-                }
-            } else {
-                return TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message("Invalid testPath; cannot resolve test directory")
-                    .build();
-            }
-        }
-        if (!Files.isDirectory(sourceTestDir)) {
+        // Resolve test case directory within the local shell testcases checkout
+        Path sourceTestDir;
+        try {
+            sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
+        } catch (IllegalArgumentException e) {
             return TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Test directory is not a directory: " + sourceTestDir)
+                .message(e.getMessage())
                 .build();
         }
         if (!Files.isReadable(sourceTestDir)) {
@@ -197,7 +177,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
-        dockerCommand.add(shellRepoRoot.toString() + ":/workspace/testcases:rw");
+        dockerCommand.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
         dockerCommand.add("-e");
         dockerCommand.add("GITHUB_TOKEN=" + githubToken);
         dockerCommand.add("-e");
@@ -272,12 +252,14 @@ public class StandardDockerExecutor implements ExecutorStrategy {
 
         // Persist full docker output for diagnostics
         Path logFilePath = null;
+        Path requestTestsDir = null;
         String logFileName = null;
+        String safeTestName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
         try {
             String requestId = RequestContext.getRequestId();
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
-                String safeTestName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
+                requestTestsDir = Paths.get(testsDir);
                 // Include commit and attempt number in the log file name for uniqueness
                 int attemptNumber = request.getAttemptNumber();
                 if (attemptNumber == 1) {
@@ -285,9 +267,9 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 } else {
                     logFileName = String.format("docker_%s_%s.%d.log", request.getCommitShort(), safeTestName, attemptNumber);
                 }
-                logFilePath = Paths.get(testsDir, logFileName);
+                logFilePath = requestTestsDir.resolve(logFileName);
                 Files.write(logFilePath, dockerOutput.getBytes("UTF-8"));
-                testLogger.info("Saved full docker test log to: " + logFilePath.toString());
+                testLogger.info("Saved full docker test log to: " + logFilePath);
             }
         } catch (Exception ignore) {
             // Swallow logging persistence issues; primary result below still returned
@@ -298,18 +280,6 @@ public class StandardDockerExecutor implements ExecutorStrategy {
              ? request.getTestScript().substring(0, request.getTestScript().length() - 3)
              : (request.getTestScript().contains(".") ? request.getTestScript().substring(0, request.getTestScript().lastIndexOf('.')) : request.getTestScript());
         Path namedResult = dockerWorkDir.resolve(resultBaseFromScript + ".result");
-        if (!Files.exists(namedResult)) {
-            Path testcasesRoot = dockerWorkDir.resolve("testcases");
-            Path fallback = testcasesRoot.resolve(".");
-            if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
-                fallback = testcasesRoot.resolve(relativeTestDir);
-            }
-            fallback = fallback.resolve(resultBaseFromScript + ".result").normalize();
-            if (Files.exists(fallback)) {
-                namedResult = fallback;
-            }
-        }
-
         if (!Files.exists(namedResult)) {
             Path repoResult = shellRepoRoot;
             if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
@@ -323,7 +293,21 @@ public class StandardDockerExecutor implements ExecutorStrategy {
 
         if (Files.exists(namedResult)) {
             String resultContent = new String(Files.readAllBytes(namedResult));
-            testLogger.info("Test result file (" + namedResult.getFileName() + "): " + resultContent.trim());
+            testLogger.info("Test result file (" + namedResult.toAbsolutePath() + "): " + resultContent.trim());
+            
+            if (requestTestsDir != null) {
+                try {
+                    int attemptNumber = request.getAttemptNumber();
+                    String persistedName = (attemptNumber == 1)
+                        ? String.format("result_%s_%s.result", request.getCommitShort(), safeTestName)
+                        : String.format("result_%s_%s.%d.result", request.getCommitShort(), safeTestName, attemptNumber);
+                    Path persistedResult = requestTestsDir.resolve(persistedName);
+                    Files.copy(namedResult, persistedResult, StandardCopyOption.REPLACE_EXISTING);
+                    testLogger.info("Saved result snapshot to: " + persistedResult);
+                } catch (Exception copyError) {
+                    testLogger.warning("Failed to persist result file: " + copyError.getMessage());
+                }
+            }
              
              // Extract execution time from result if available
              String executionTime = extractExecutionTime(resultContent);
@@ -369,7 +353,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 keepCmd.add("docker"); keepCmd.add("run"); keepCmd.add("-d");
                 keepCmd.add("--name"); keepCmd.add(containerName);
                 keepCmd.add("-v"); keepCmd.add(dockerWorkDir.toString() + ":/workspace");
-                keepCmd.add("-v"); keepCmd.add(shellRepoRoot.toString() + ":/workspace/testcases:rw");
+                keepCmd.add("-v"); keepCmd.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
                 keepCmd.add("-e"); keepCmd.add("GITHUB_TOKEN=" + githubToken);
                 keepCmd.add("-e"); keepCmd.add("CTP_HOME=" + ctpHomeInContainer);
                 keepCmd.add("-e"); keepCmd.add("init_path=" + ctpHomeInContainer + "/shell/init_path");

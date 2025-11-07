@@ -108,29 +108,16 @@ public class DirectExecutor implements ExecutorStrategy {
         }
         
         // Resolve test directory on tester host
-        Path sourceTestDir = Paths.get(request.getTestDir());
-        if (!Files.exists(sourceTestDir)) {
-            String testPathFull = request.getTestPath();
-            if (testPathFull != null && testPathFull.contains("/")) {
-                String relDir = testPathFull.substring(0, testPathFull.lastIndexOf("/"));
-                Path fallbackDir = Paths.get(config.getShellTcDir(), relDir);
-                if (Files.exists(fallbackDir)) {
-                    testLogger.warning("Provided testDir not found on tester; using fallback: " + fallbackDir.toString());
-                    sourceTestDir = fallbackDir;
-                } else {
-                    return TestResult.builder()
-                        .testName(request.getTestName())
-                        .status(TestStatus.ENVIRONMENT_ERROR)
-                        .message("Test directory not found on tester: " + sourceTestDir.toString())
-                        .build();
-                }
-            } else {
-                return TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message("Invalid testPath; cannot resolve test directory")
-                    .build();
-            }
+        Path sourceTestDir;
+        try {
+            Path shellRepoRoot = Paths.get(config.getShellTcDir()).toAbsolutePath().normalize();
+            sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
+        } catch (IllegalArgumentException e) {
+            return TestResult.builder()
+                .testName(request.getTestName())
+                .status(TestStatus.ENVIRONMENT_ERROR)
+                .message(e.getMessage())
+                .build();
         }
 
         // Run the test

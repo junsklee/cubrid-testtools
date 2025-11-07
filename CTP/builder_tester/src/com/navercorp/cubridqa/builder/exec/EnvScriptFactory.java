@@ -2,6 +2,8 @@ package com.navercorp.cubridqa.builder.exec;
 
 public class EnvScriptFactory {
 
+    public static final String TESTCASE_MOUNT = "/workspace/testcases";
+
     public static String createDirectWrapperScript(String testDir, String testScript, String testName, String ctpHome) {
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
@@ -45,13 +47,36 @@ public class EnvScriptFactory {
     }
 
     public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome) {
+        return createDockerScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT);
+    }
+
+    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint) {
         String normalizedRelativeDir = normalizeRelativeDir(relativeTestDir);
         String initPath = ctpHome + "/shell/init_path";
+        String testcaseRoot = (testcaseMountPoint == null || testcaseMountPoint.trim().isEmpty())
+            ? TESTCASE_MOUNT
+            : testcaseMountPoint.trim();
 
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
         script.append("set -e\n");
         script.append("set -x\n\n");
+
+        script.append("# Resolve test directory inside the mounted shell testcase tree\n");
+        script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
+        script.append("if [ ! -d \"$TESTCASE_ROOT\" ]; then\n");
+        script.append("  echo \"ERROR: Shell testcase mount '$TESTCASE_ROOT' is unavailable\" >&2\n");
+        script.append("  exit 2\n");
+        script.append("fi\n");
+        script.append("export TESTCASE_DIR=\"$TESTCASE_ROOT");
+        if (!normalizedRelativeDir.isEmpty()) {
+            script.append("/").append(normalizedRelativeDir);
+        }
+        script.append("\"\n");
+        script.append("if [ ! -d \"$TESTCASE_DIR\" ]; then\n");
+        script.append("  echo \"ERROR: Test directory '$TESTCASE_DIR' not found\" >&2\n");
+        script.append("  exit 2\n");
+        script.append("fi\n\n");
 
         script.append("# Extract CUBRID build\n");
         script.append("echo \"Extracting CUBRID build...\"\n");
@@ -145,11 +170,7 @@ public class EnvScriptFactory {
         }
 
         script.append("# Run test\n");
-        script.append("cd /workspace/testcases");
-        if (!normalizedRelativeDir.isEmpty()) {
-            script.append("/").append(normalizedRelativeDir);
-        }
-        script.append("\n");
+        script.append("cd \"$TESTCASE_DIR\"\n");
         script.append("set +e\n");
         script.append("sh ").append(testScript).append("\n");
         script.append("TEST_EXIT=$?\n");
@@ -168,13 +189,36 @@ public class EnvScriptFactory {
     }
 
     public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome) {
+        return createDockerOptimizedScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT);
+    }
+
+    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint) {
         String normalizedRelativeDir = normalizeRelativeDir(relativeTestDir);
         String initPath = ctpHome + "/shell/init_path";
+        String testcaseRoot = (testcaseMountPoint == null || testcaseMountPoint.trim().isEmpty())
+            ? TESTCASE_MOUNT
+            : testcaseMountPoint.trim();
 
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
         script.append("set -e\n");
         script.append("set -x\n\n");
+
+        script.append("# Resolve test directory inside the mounted shell testcase tree\n");
+        script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
+        script.append("if [ ! -d \"$TESTCASE_ROOT\" ]; then\n");
+        script.append("  echo \"ERROR: Shell testcase mount '$TESTCASE_ROOT' is unavailable\" >&2\n");
+        script.append("  exit 2\n");
+        script.append("fi\n");
+        script.append("export TESTCASE_DIR=\"$TESTCASE_ROOT");
+        if (!normalizedRelativeDir.isEmpty()) {
+            script.append("/").append(normalizedRelativeDir);
+        }
+        script.append("\"\n");
+        script.append("if [ ! -d \"$TESTCASE_DIR\" ]; then\n");
+        script.append("  echo \"ERROR: Test directory '$TESTCASE_DIR' not found\" >&2\n");
+        script.append("  exit 2\n");
+        script.append("fi\n\n");
 
         script.append("# CUBRID is pre-installed in /opt/cubrid\n");
         script.append("export CUBRID=/opt/cubrid\n");
@@ -217,11 +261,7 @@ public class EnvScriptFactory {
         script.append("touch /opt/cubrid/databases/databases.txt\n\n");
 
         script.append("# Run the test\n");
-        script.append("cd /workspace/testcases");
-        if (!normalizedRelativeDir.isEmpty()) {
-            script.append("/").append(normalizedRelativeDir);
-        }
-        script.append("\n");
+        script.append("cd \"$TESTCASE_DIR\"\n");
         script.append("set +e\n");
         script.append("sh ").append(testScript).append("\n");
         script.append("TEST_EXIT=$?\n");

@@ -20,6 +20,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class OptimizedDockerExecutor implements ExecutorStrategy {
+    private static final String TESTCASE_MOUNT = EnvScriptFactory.TESTCASE_MOUNT;
     private final Config config;
     private final BuildCache buildCache;
     private final ShellTcSync shellTcSync;
@@ -111,30 +112,15 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
         }
         
-        // Resolve test case directory within the shell testcases repository
-        Path sourceTestDir = Paths.get(request.getTestDir());
-        if (!Files.exists(sourceTestDir)) {
-            String testPathFull = request.getTestPath();
-            if (testPathFull != null && testPathFull.contains("/")) {
-                String relDir = testPathFull.substring(0, testPathFull.lastIndexOf("/"));
-                Path fallbackDir = Paths.get(config.getShellTcDir(), relDir);
-                if (Files.exists(fallbackDir)) {
-                    testLogger.warning("Provided testDir not found; using fallback: " + fallbackDir);
-                    sourceTestDir = fallbackDir;
-                } else {
-                    return TestResult.builder()
-                        .testName(request.getTestName())
-                        .status(TestStatus.ENVIRONMENT_ERROR)
-                        .message("Test directory not found: " + sourceTestDir)
-                        .build();
-                }
-            }
-        }
-        if (!Files.isDirectory(sourceTestDir)) {
+        // Resolve test case directory within the local shell testcases checkout
+        Path sourceTestDir;
+        try {
+            sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
+        } catch (IllegalArgumentException e) {
             return TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Test directory is not a directory: " + sourceTestDir)
+                .message(e.getMessage())
                 .build();
         }
         if (!Files.isReadable(sourceTestDir)) {
@@ -213,7 +199,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
-        dockerCommand.add(shellRepoRoot.toString() + ":/workspace/testcases:rw");
+        dockerCommand.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
         
         // Environment variables
         dockerCommand.add("-e");
@@ -288,16 +274,18 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         
         // Save output log
         Path dockerOptLogFilePath = null;
+        Path requestTestsDir = null;
         String dockerOptLogFileName = null;
+        String safeTestName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
         try {
             String requestId = RequestContext.getRequestId();
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
-                String safeTestName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
+                requestTestsDir = Paths.get(testsDir);
                 // Include attempt number in the log file name for uniqueness
                 int attemptNumber = request.getAttemptNumber();
                 dockerOptLogFileName = generateDockerOptLogFileName(request.getCommitShort(), request.getTestName(), attemptNumber);
-                dockerOptLogFilePath = Paths.get(testsDir, dockerOptLogFileName);
+                dockerOptLogFilePath = requestTestsDir.resolve(dockerOptLogFileName);
                 Files.write(dockerOptLogFilePath, dockerOutput.getBytes("UTF-8"));
                 testLogger.info("Saved optimized Docker test log to: " + dockerOptLogFilePath);
             } else {
@@ -313,18 +301,6 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         Path namedResult = dockerWorkDir.resolve(resultBase + ".result");
         
         if (!Files.exists(namedResult)) {
-            Path testcasesRoot = dockerWorkDir.resolve("testcases");
-            Path fallback = testcasesRoot.resolve(".");
-            if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
-                fallback = testcasesRoot.resolve(relativeTestDir);
-            }
-            fallback = fallback.resolve(resultBase + ".result").normalize();
-            if (Files.exists(fallback)) {
-                namedResult = fallback;
-            }
-        }
-
-        if (!Files.exists(namedResult)) {
             Path repoResult = shellRepoRoot;
             if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
                 repoResult = repoResult.resolve(relativeTestDir);
@@ -338,6 +314,20 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         if (Files.exists(namedResult)) {
             String resultContent = new String(Files.readAllBytes(namedResult));
             testLogger.info("Test result file content: " + resultContent);
+            
+            if (requestTestsDir != null) {
+                try {
+                    int attemptNumber = request.getAttemptNumber();
+                    String persistedName = (attemptNumber == 1)
+                        ? String.format("result_%s_%s.result", request.getCommitShort(), safeTestName)
+                        : String.format("result_%s_%s.%d.result", request.getCommitShort(), safeTestName, attemptNumber);
+                    Path persistedResult = requestTestsDir.resolve(persistedName);
+                    Files.copy(namedResult, persistedResult, StandardCopyOption.REPLACE_EXISTING);
+                    testLogger.info("Saved optimized result snapshot to: " + persistedResult);
+                } catch (Exception copyError) {
+                    testLogger.warning("Failed to persist optimized result file: " + copyError.getMessage());
+                }
+            }
             
             boolean isPassed = resultContent.contains("OK") || 
                               resultContent.toUpperCase().contains("PASS");
