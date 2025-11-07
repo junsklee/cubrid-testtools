@@ -150,10 +150,15 @@ public class BuilderTask {
             }
             
             // Distribute tests across multiple tester nodes
-            Map<String, List<Callable<JSONObject>>> workerTestQueues = new HashMap<>();
+            Map<String, List<Callable<JSONObject>>> workerTestQueues = new LinkedHashMap<>();
+            Map<String, Integer> workerCapacities = new LinkedHashMap<>();
             for (String worker : workerIps) {
                 workerTestQueues.put(worker, new ArrayList<>());
+                int concurrency = Math.max(1, fetchTesterConcurrency(worker));
+                workerCapacities.put(worker, concurrency);
+                taskLogger.info(String.format("Tester %s reports max_concurrent_tests=%d", worker, concurrency));
             }
+            AdaptiveTestScheduler scheduler = new AdaptiveTestScheduler(workerCapacities);
 
             // Calculate total number of test executions for proper distribution
             int totalTestExecutions = builtPackages.size() * tests.length();
@@ -163,24 +168,7 @@ public class BuilderTask {
             // Make buildType final for use in lambda
             final String finalBuildType = buildType;
 
-            // FIX: Use a global test index that properly distributes tests regardless of commit count
             int globalTestIndex = 0;
-            
-            // Special handling for single commit to ensure proper distribution
-            if (builtPackages.size() == 1 && workerIps.size() > 1) {
-                taskLogger.info("Single commit detected - ensuring even distribution across all workers");
-                
-                // Count remote workers
-                int remoteWorkerCount = 0;
-                for (String worker : workerIps) {
-                    if (!isLocalTester(worker)) {
-                        remoteWorkerCount++;
-                    }
-                }
-                if (remoteWorkerCount > 0) {
-                    taskLogger.info(String.format("Found %d remote worker(s) - will distribute tests evenly", remoteWorkerCount));
-                }
-            }
             
             for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
                 final String commit = entry.getKey();
@@ -195,34 +183,39 @@ public class BuilderTask {
                     }
                     continue;
                 }
-                
+
+                final String normalizedCommit = resolveFullCommitHashSafe(commit);
+                final String shortCommit = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
+
                 for (int i = 0; i < tests.length(); i++) {
                     final String raw = tests.getString(i);
                     final String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
-                    
-                    // FIX: Use global test index for proper round-robin distribution
-                    final String assignedWorker = workerIps.get(globalTestIndex % workerIps.size());
+
+                    AdaptiveTestScheduler.Assignment assignment = scheduler.assignWorker();
+                    final String assignedWorker = assignment.getWorkerId();
                     globalTestIndex++;
-                    
-                    // Log test distribution with more detail
-                    taskLogger.info(String.format("Test %d/%d: %s (commit %s) → worker %s", 
-                        globalTestIndex, totalTestExecutions, testPath, 
-                        commit.substring(0, Math.min(7, commit.length())), assignedWorker));
-                    
+
+                    taskLogger.info(String.format(
+                        "Test %d/%d: %s (commit %s) → worker %s [queue=%d load=%.2f]",
+                        globalTestIndex, totalTestExecutions, testPath,
+                        shortCommit, assignedWorker, assignment.getQueueDepth(), assignment.getLoadFactor()));
+
                     // Create test callable with appropriate build package reference
                     workerTestQueues.get(assignedWorker).add(() -> 
                         runTest(commit, buildPackage, testPath, assignedWorker, this.baselineCommit, finalBuildType));
                 }
             }
             
-            // Log distribution summary to verify even distribution
-            taskLogger.info("Test distribution summary:");
+            // Log distribution summary to verify adaptive balancing
+            Map<String, Integer> queueSnapshot = scheduler.snapshotQueueDepths();
+            taskLogger.info("Test distribution summary (capacity-aware):");
             int localTests = 0;
             int remoteTests = 0;
-            for (Map.Entry<String, List<Callable<JSONObject>>> entry : workerTestQueues.entrySet()) {
-                String worker = entry.getKey();
-                int testCount = entry.getValue().size();
+            for (String worker : workerIps) {
+                int testCount = queueSnapshot.getOrDefault(worker, 0);
                 boolean isLocal = isLocalTester(worker);
+                int capacity = workerCapacities.getOrDefault(worker, 1);
+                double ratio = capacity > 0 ? (double) testCount / capacity : testCount;
                 
                 if (isLocal) {
                     localTests += testCount;
@@ -230,11 +223,13 @@ public class BuilderTask {
                     remoteTests += testCount;
                 }
                 
-                taskLogger.info(String.format("  Worker %s (%s): %d tests (%.1f%%)", 
-                    worker, 
+                taskLogger.info(String.format("  Worker %s (%s): %d tests (%.1f%%) capacity=%d assigned/capacity=%.2f", 
+                    worker,
                     isLocal ? "local" : "remote",
                     testCount,
-                    (100.0 * testCount) / totalTestExecutions));
+                    totalTestExecutions == 0 ? 0.0 : (100.0 * testCount) / totalTestExecutions,
+                    capacity,
+                    ratio));
             }
             
             // Verify distribution for single commit case
@@ -251,60 +246,49 @@ public class BuilderTask {
                 }
                 
                 // Check for imbalanced distribution
-                int maxLoad = workerTestQueues.values().stream().mapToInt(List::size).max().orElse(0);
-                int minLoad = workerTestQueues.values().stream().mapToInt(List::size).min().orElse(0);
+                int maxLoad = queueSnapshot.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+                int minLoad = queueSnapshot.values().stream().mapToInt(Integer::intValue).min().orElse(0);
                 if (maxLoad - minLoad > 1) {
                     taskLogger.warning(String.format("Slightly imbalanced distribution detected: max=%d, min=%d tests per worker", 
                         maxLoad, minLoad));
                 }
             }
-            
-            // Fetch max concurrency from first tester (they should all have same config)
-            int maxTestsPerWorker = Math.max(1, fetchTesterConcurrency(workerIps.get(0)));
-            
-            // Run tests for each worker with bounded concurrency
-            ExecutorService testPool = Executors.newFixedThreadPool(workerIps.size() * maxTestsPerWorker);
-            
+
             // Capture request ID for test threads
             final String testRequestId = RequestContext.getRequestId();
             
             List<Future<JSONObject>> futuresTests = new ArrayList<>();
-            
-            // Process workers in priority order: local testers first, then remote testers
-            // This ensures local tests start immediately without waiting for remote workers
-            List<Map.Entry<String, List<Callable<JSONObject>>>> sortedWorkers = new ArrayList<>(workerTestQueues.entrySet());
-            sortedWorkers.sort((e1, e2) -> {
-                boolean isLocal1 = isLocalTester(e1.getKey());
-                boolean isLocal2 = isLocalTester(e2.getKey());
-                // Local testers first (true > false in boolean comparison gives false, so reverse)
-                return Boolean.compare(isLocal2, isLocal1);
-            });
-            
-            // Interleave submissions across workers so all nodes start work concurrently
-            int maxQueueLen = 0;
-            for (Map.Entry<String, List<Callable<JSONObject>>> entry : sortedWorkers) {
-                maxQueueLen = Math.max(maxQueueLen, entry.getValue().size());
-                taskLogger.info(String.format("Worker %s assigned %d tests", entry.getKey(), entry.getValue().size()));
-            }
 
-            for (int round = 0; round < maxQueueLen; round++) {
-                for (Map.Entry<String, List<Callable<JSONObject>>> entry : sortedWorkers) {
-                    List<Callable<JSONObject>> workerTests = entry.getValue();
-                    if (round < workerTests.size()) {
-                        Callable<JSONObject> ct = workerTests.get(round);
-                        futuresTests.add(testPool.submit(() -> {
-                            if (testRequestId != null) {
-                                RequestContext.setRequestId(testRequestId);
-                            }
-                            try {
-                                return ct.call();
-                            } finally {
-                                RequestContext.clear();
-                            }
-                        }));
-                    }
+            Map<String, ExecutorService> workerExecutors = new LinkedHashMap<>();
+            for (Map.Entry<String, List<Callable<JSONObject>>> entry : workerTestQueues.entrySet()) {
+                String worker = entry.getKey();
+                List<Callable<JSONObject>> workerTests = entry.getValue();
+                if (workerTests.isEmpty()) {
+                    continue;
+                }
+                int capacity = workerCapacities.getOrDefault(worker, 1);
+                ExecutorService executor = Executors.newFixedThreadPool(capacity, runnable -> {
+                    Thread t = new Thread(runnable);
+                    t.setName("tester-" + worker + "-" + t.getId());
+                    t.setDaemon(true);
+                    return t;
+                });
+                workerExecutors.put(worker, executor);
+
+                for (Callable<JSONObject> ct : workerTests) {
+                    futuresTests.add(executor.submit(() -> {
+                        if (testRequestId != null) {
+                            RequestContext.setRequestId(testRequestId);
+                        }
+                        try {
+                            return ct.call();
+                        } finally {
+                            RequestContext.clear();
+                        }
+                    }));
                 }
             }
+
             for (Future<JSONObject> f : futuresTests) {
                 try {
                     results.add(f.get());
@@ -317,7 +301,9 @@ public class BuilderTask {
                         .put("message", e.getMessage()));
                 }
             }
-            testPool.shutdown();
+            for (ExecutorService executor : workerExecutors.values()) {
+                executor.shutdown();
+            }
             
             // Calculate execution time and send callback with results
             long duration = System.currentTimeMillis() - startTime;
