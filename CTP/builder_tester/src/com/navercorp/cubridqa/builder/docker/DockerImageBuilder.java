@@ -182,6 +182,16 @@ public class DockerImageBuilder {
                "    CUBRID_DIR=/opt/cubrid\n" +
                "  fi\n" +
                "fi\n" +
+               "CONF_SNAPSHOT=$(mktemp -d /tmp/cubrid_conf.XXXX)\n" +
+               "DB_SNAPSHOT=$(mktemp -d /tmp/cubrid_db.XXXX)\n" +
+               "if [[ -d /opt/cubrid/conf ]]; then\n" +
+               "  cp -a /opt/cubrid/conf/. \"$CONF_SNAPSHOT\"/\n" +
+               "fi\n" +
+               "if [[ -d /opt/cubrid/databases ]]; then\n" +
+               "  cp -a /opt/cubrid/databases/. \"$DB_SNAPSHOT\"/\n" +
+               "else\n" +
+               "  mkdir -p /opt/cubrid/databases\n" +
+               "fi\n" +
                "echo \"[setup] Final CUBRID_DIR=$CUBRID_DIR\"\n" +
                "if [[ -f /opt/cubrid/share/scripts/setup.sh ]]; then\n" +
                "  echo \"[setup] Running share/scripts/setup.sh\"\n" +
@@ -190,8 +200,23 @@ public class DockerImageBuilder {
                "  echo \"[setup] Running top-level setup.sh\"\n" +
                "  (cd /opt/cubrid && printf 'y\\n' | sh setup.sh /opt/cubrid) || true\n" +
                "fi\n" +
+               "if [[ -d \"$CONF_SNAPSHOT\" ]]; then\n" +
+               "  rsync -a --delete \"$CONF_SNAPSHOT\"/ /opt/cubrid/conf/\n" +
+               "fi\n" +
+               "if [[ -d \"$DB_SNAPSHOT\" ]]; then\n" +
+               "  rsync -a --delete \"$DB_SNAPSHOT\"/ /opt/cubrid/databases/\n" +
+               "fi\n" +
+               "rm -rf \"$CONF_SNAPSHOT\" \"$DB_SNAPSHOT\"\n" +
                "mkdir -p /opt/cubrid/databases\n" +
                "touch /opt/cubrid/databases/databases.txt\n" +
+               "if [[ ! -f /opt/cubrid/databases/databases.txt.sample ]]; then\n" +
+               "  cat <<'SAMPLE' > /opt/cubrid/databases/databases.txt.sample\n" +
+               "# sample databases.txt for demodb\n" +
+               "#\n" +
+               "# db-name vol-path db-host log-path lob-base-path\n" +
+               "demodb ${CUBRID}/demo localhost ${CUBRID}/demo file:${CUBRID}/demo/lob\n" +
+               "SAMPLE\n" +
+               "fi\n" +
                "HOSTS_CONF=/opt/cubrid/conf/cubrid_hosts.conf\n" +
                "if [[ -f \"$HOSTS_CONF\" ]] && ! grep -q \"0.0.0.0\\s\\+your-hostname\" \"$HOSTS_CONF\"; then\n" +
                "  printf '0.0.0.0\\t\\tyour-hostname\\n' >> \"$HOSTS_CONF\"\n" +
