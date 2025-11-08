@@ -481,6 +481,7 @@ public class EnvScriptFactory {
         script.append("else\n");
         script.append("  export CUBRID=\"$CUBRID_INSTALL_ROOT\"\n");
         script.append("fi\n");
+        script.append("export SHELL=/bin/bash\n");
         script.append("export PATH=\"$CUBRID/bin:").append(initPath).append(":").append(ctpHome).append("/bin:").append(ctpHome).append("/common/script:$PATH\"\n");
         script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:").append(ctpHome).append("/common/lib:$LD_LIBRARY_PATH\"\n");
         script.append("export CUBRID_LANG=en_US\n");
