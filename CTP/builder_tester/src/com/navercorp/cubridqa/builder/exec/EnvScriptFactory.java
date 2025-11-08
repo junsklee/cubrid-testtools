@@ -448,10 +448,15 @@ public class EnvScriptFactory {
             script.append("fi\n\n");
         }
 
-        script.append("# Clean any previous database state\n");
-        script.append("rm -rf \"$CUBRID_DATABASES\"/*\n");
+        script.append("# Clean any previous database state but keep reference samples\n");
+        script.append("if [ -d \"$CUBRID_DATABASES\" ]; then\n");
+        script.append("  find \"$CUBRID_DATABASES\" -mindepth 1 ! -name 'databases.txt.sample' -exec rm -rf {} +\n");
+        script.append("fi\n");
         script.append("mkdir -p \"$CUBRID_DATABASES\"\n");
-        script.append("touch \"$CUBRID_DATABASES/databases.txt\"\n\n");
+        script.append(": > \"$CUBRID_DATABASES/databases.txt\"\n");
+        script.append("if [ ! -f \"$CUBRID_DATABASES/databases.txt.sample\" ] && [ -f \"/opt/cubrid/databases/databases.txt.sample\" ]; then\n");
+        script.append("  cp /opt/cubrid/databases/databases.txt.sample \"$CUBRID_DATABASES/databases.txt.sample\"\n");
+        script.append("fi\n\n");
 
         script.append("# Run the test\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
