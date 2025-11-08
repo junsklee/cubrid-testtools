@@ -158,71 +158,110 @@ public class DockerImageBuilder {
     }
     
     private String createSetupScript() {
-        return "#!/bin/bash\n" +
-               "set -euo pipefail\n" +
-               "echo \"[setup] Preparing CUBRID installation inside container\"\n" +
-               "rm -rf /opt/cubrid\n" +
-               "mkdir -p /opt/cubrid\n" +
-               "if tar -tf /mnt/build.tar.gz 2>/dev/null | grep -m1 -q '^_install/CUBRID/'; then\n" +
-               "  echo \"[setup] Detected packaged _install/CUBRID layout\"\n" +
-               "  tar -xzf /mnt/build.tar.gz -C /opt/cubrid --strip-components=2\n" +
-               "  CUBRID_DIR=/opt/cubrid\n" +
-               "else\n" +
-               "  echo \"[setup] Extracting full archive\"\n" +
-               "  tar -xzf /mnt/build.tar.gz -C /opt/cubrid\n" +
-               "  CUBRID_DIR=$(find /opt/cubrid -path '*/_install/CUBRID' -type d | head -1)\n" +
-               "  if [[ -z \"$CUBRID_DIR\" ]]; then\n" +
-               "    CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname)\n" +
-               "  fi\n" +
-               "  echo \"[setup] Found CUBRID directory: $CUBRID_DIR\"\n" +
-               "  if [[ -n \"$CUBRID_DIR\" && \"$CUBRID_DIR\" != \"/opt/cubrid\" && -d \"$CUBRID_DIR\" ]]; then\n" +
-               "    echo \"[setup] Syncing CUBRID contents into /opt/cubrid\"\n" +
-               "    cp -rf \"$CUBRID_DIR\"/* /opt/cubrid/\n" +
-               "    rm -rf /opt/cubrid/_install\n" +
-               "    CUBRID_DIR=/opt/cubrid\n" +
-               "  fi\n" +
-               "fi\n" +
-               "CONF_SNAPSHOT=$(mktemp -d /tmp/cubrid_conf.XXXX)\n" +
-               "DB_SNAPSHOT=$(mktemp -d /tmp/cubrid_db.XXXX)\n" +
-               "if [[ -d /opt/cubrid/conf ]]; then\n" +
-               "  cp -a /opt/cubrid/conf/. \"$CONF_SNAPSHOT\"/\n" +
-               "fi\n" +
-               "if [[ -d /opt/cubrid/databases ]]; then\n" +
-               "  cp -a /opt/cubrid/databases/. \"$DB_SNAPSHOT\"/\n" +
-               "else\n" +
-               "  mkdir -p /opt/cubrid/databases\n" +
-               "fi\n" +
-               "echo \"[setup] Final CUBRID_DIR=$CUBRID_DIR\"\n" +
-               "if [[ -f /opt/cubrid/share/scripts/setup.sh ]]; then\n" +
-               "  echo \"[setup] Running share/scripts/setup.sh\"\n" +
-               "  (cd /opt/cubrid && printf 'y\\n' | sh share/scripts/setup.sh /opt/cubrid) || true\n" +
-               "elif [[ -f /opt/cubrid/setup.sh ]]; then\n" +
-               "  echo \"[setup] Running top-level setup.sh\"\n" +
-               "  (cd /opt/cubrid && printf 'y\\n' | sh setup.sh /opt/cubrid) || true\n" +
-               "fi\n" +
-               "if [[ -d \"$CONF_SNAPSHOT\" ]]; then\n" +
-               "  rsync -a --delete \"$CONF_SNAPSHOT\"/ /opt/cubrid/conf/\n" +
-               "fi\n" +
-               "if [[ -d \"$DB_SNAPSHOT\" ]]; then\n" +
-               "  rsync -a --delete \"$DB_SNAPSHOT\"/ /opt/cubrid/databases/\n" +
-               "fi\n" +
-               "rm -rf \"$CONF_SNAPSHOT\" \"$DB_SNAPSHOT\"\n" +
-               "mkdir -p /opt/cubrid/databases\n" +
-               "touch /opt/cubrid/databases/databases.txt\n" +
-               "if [[ ! -f /opt/cubrid/databases/databases.txt.sample ]]; then\n" +
-               "  cat <<'SAMPLE' > /opt/cubrid/databases/databases.txt.sample\n" +
-               "# sample databases.txt for demodb\n" +
-               "#\n" +
-               "# db-name vol-path db-host log-path lob-base-path\n" +
-               "demodb ${CUBRID}/demo localhost ${CUBRID}/demo file:${CUBRID}/demo/lob\n" +
-               "SAMPLE\n" +
-               "fi\n" +
-               "HOSTS_CONF=/opt/cubrid/conf/cubrid_hosts.conf\n" +
-               "if [[ -f \"$HOSTS_CONF\" ]] && ! grep -q \"0.0.0.0\\s\\+your-hostname\" \"$HOSTS_CONF\"; then\n" +
-               "  printf '0.0.0.0\\t\\tyour-hostname\\n' >> \"$HOSTS_CONF\"\n" +
-               "fi\n" +
-               "ls -la /opt/cubrid/bin/ || true\n" +
-               "/opt/cubrid/bin/cubrid_rel || echo \"[setup] WARNING: cubrid_rel check failed\"\n";
+        StringBuilder script = new StringBuilder();
+        script.append("#!/bin/bash\n");
+        script.append("set -euo pipefail\n");
+        script.append("log() { echo \"[setup] $*\"; }\n");
+        script.append("copy_tree() {\n");
+        script.append("  local src=\"$1\"\n");
+        script.append("  local dest=\"$2\"\n");
+        script.append("  if [[ ! -d \"$src\" ]]; then\n");
+        script.append("    return\n");
+        script.append("  fi\n");
+        script.append("  mkdir -p \"$dest\"\n");
+        script.append("  if command -v rsync >/dev/null 2>&1; then\n");
+        script.append("    rsync -a \"$src\"/ \"$dest\"/\n");
+        script.append("  else\n");
+        script.append("    cp -a \"$src\"/. \"$dest\"/\n");
+        script.append("  fi\n");
+        script.append("}\n");
+        script.append("snapshot_tree() {\n");
+        script.append("  local src=\"$1\"\n");
+        script.append("  if [[ ! -d \"$src\" ]]; then\n");
+        script.append("    echo \"\"\n");
+        script.append("    return\n");
+        script.append("  fi\n");
+        script.append("  local snap\n");
+        script.append("  snap=$(mktemp -d /tmp/cubrid_snapshot.XXXX)\n");
+        script.append("  copy_tree \"$src\" \"$snap\"\n");
+        script.append("  echo \"$snap\"\n");
+        script.append("}\n");
+        script.append("restore_tree() {\n");
+        script.append("  local snap=\"$1\"\n");
+        script.append("  local dest=\"$2\"\n");
+        script.append("  local label=\"$3\"\n");
+        script.append("  if [[ -z \"$snap\" || ! -d \"$snap\" ]]; then\n");
+        script.append("    return\n");
+        script.append("  fi\n");
+        script.append("  log \"Restoring pristine $label files\"\n");
+        script.append("  mkdir -p \"$dest\"\n");
+        script.append("  if command -v rsync >/dev/null 2>&1; then\n");
+        script.append("    rsync -a --delete \"$snap\"/ \"$dest\"/\n");
+        script.append("  else\n");
+        script.append("    rm -rf \"$dest\"\n");
+        script.append("    mkdir -p \"$dest\"\n");
+        script.append("    cp -a \"$snap\"/. \"$dest\"/\n");
+        script.append("  fi\n");
+        script.append("}\n");
+        script.append("cleanup_snapshots() {\n");
+        script.append("  [[ -n \"${CONF_SNAPSHOT:-}\" && -d \"$CONF_SNAPSHOT\" ]] && rm -rf \"$CONF_SNAPSHOT\"\n");
+        script.append("  [[ -n \"${DB_SNAPSHOT:-}\" && -d \"$DB_SNAPSHOT\" ]] && rm -rf \"$DB_SNAPSHOT\"\n");
+        script.append("}\n");
+        script.append("ensure_sample_databases() {\n");
+        script.append("  mkdir -p /opt/cubrid/databases\n");
+        script.append("  touch /opt/cubrid/databases/databases.txt\n");
+        script.append("  if [[ ! -f /opt/cubrid/databases/databases.txt.sample ]]; then\n");
+        script.append("    cat <<'SAMPLE' > /opt/cubrid/databases/databases.txt.sample\n");
+        script.append("# sample databases.txt for demodb\n");
+        script.append("#\n");
+        script.append("# db-name vol-path db-host log-path lob-base-path\n");
+        script.append("demodb ${CUBRID}/demo localhost ${CUBRID}/demo file:${CUBRID}/demo/lob\n");
+        script.append("SAMPLE\n");
+        script.append("  fi\n");
+        script.append("}\n");
+        script.append("trap cleanup_snapshots EXIT\n");
+        script.append("log \"Preparing CUBRID installation inside container\"\n");
+        script.append("rm -rf /opt/cubrid\n");
+        script.append("mkdir -p /opt/cubrid\n");
+        script.append("if tar -tf /mnt/build.tar.gz 2>/dev/null | grep -m1 -q '^_install/CUBRID/'; then\n");
+        script.append("  log \"Detected packaged _install/CUBRID layout\"\n");
+        script.append("  tar -xzf /mnt/build.tar.gz -C /opt/cubrid --strip-components=2\n");
+        script.append("  CUBRID_DIR=/opt/cubrid\n");
+        script.append("else\n");
+        script.append("  log \"Extracting full archive\"\n");
+        script.append("  tar -xzf /mnt/build.tar.gz -C /opt/cubrid\n");
+        script.append("  CUBRID_DIR=$(find /opt/cubrid -path '*/_install/CUBRID' -type d | head -1)\n");
+        script.append("  if [[ -z \"$CUBRID_DIR\" ]]; then\n");
+        script.append("    CUBRID_DIR=$(find /opt/cubrid -name 'cubrid_rel' -type f | head -1 | xargs dirname | xargs dirname)\n");
+        script.append("  fi\n");
+        script.append("  log \"Found CUBRID directory: $CUBRID_DIR\"\n");
+        script.append("  if [[ -n \"$CUBRID_DIR\" && \"$CUBRID_DIR\" != \"/opt/cubrid\" && -d \"$CUBRID_DIR\" ]]; then\n");
+        script.append("    log \"Syncing CUBRID contents into /opt/cubrid\"\n");
+        script.append("    cp -rf \"$CUBRID_DIR\"/* /opt/cubrid/\n");
+        script.append("    rm -rf /opt/cubrid/_install\n");
+        script.append("    CUBRID_DIR=/opt/cubrid\n");
+        script.append("  fi\n");
+        script.append("fi\n");
+        script.append("CONF_SNAPSHOT=$(snapshot_tree /opt/cubrid/conf)\n");
+        script.append("DB_SNAPSHOT=$(snapshot_tree /opt/cubrid/databases)\n");
+        script.append("log \"Final CUBRID_DIR=$CUBRID_DIR\"\n");
+        script.append("if [[ -f /opt/cubrid/share/scripts/setup.sh ]]; then\n");
+        script.append("  log \"Running share/scripts/setup.sh\"\n");
+        script.append("  (cd /opt/cubrid && printf 'y\\n' | sh share/scripts/setup.sh /opt/cubrid) || true\n");
+        script.append("elif [[ -f /opt/cubrid/setup.sh ]]; then\n");
+        script.append("  log \"Running top-level setup.sh\"\n");
+        script.append("  (cd /opt/cubrid && printf 'y\\n' | sh setup.sh /opt/cubrid) || true\n");
+        script.append("fi\n");
+        script.append("restore_tree \"$CONF_SNAPSHOT\" /opt/cubrid/conf conf\n");
+        script.append("restore_tree \"$DB_SNAPSHOT\" /opt/cubrid/databases databases\n");
+        script.append("ensure_sample_databases\n");
+        script.append("HOSTS_CONF=/opt/cubrid/conf/cubrid_hosts.conf\n");
+        script.append("if [[ -f \"$HOSTS_CONF\" ]] && ! grep -q \"0.0.0.0\\s\\+your-hostname\" \"$HOSTS_CONF\"; then\n");
+        script.append("  printf '0.0.0.0\\t\\tyour-hostname\\n' >> \"$HOSTS_CONF\"\n");
+        script.append("fi\n");
+        script.append("ls -la /opt/cubrid/bin/ || true\n");
+        script.append("/opt/cubrid/bin/cubrid_rel || log \"WARNING: cubrid_rel check failed\"\n");
+        return script.toString();
     }
     
     private String sanitizeName(String value) {
