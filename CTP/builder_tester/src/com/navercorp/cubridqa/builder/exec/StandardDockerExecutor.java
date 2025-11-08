@@ -174,6 +174,10 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         // Always name the container so we can manage it on timeout/failure
         dockerCommand.add("--name");
         dockerCommand.add(containerName);
+        dockerCommand.add("--cap-add");
+        dockerCommand.add("SYS_ADMIN");
+        dockerCommand.add("--security-opt");
+        dockerCommand.add("apparmor=unconfined");
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
@@ -352,6 +356,8 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 List<String> keepCmd = new ArrayList<>();
                 keepCmd.add("docker"); keepCmd.add("run"); keepCmd.add("-d");
                 keepCmd.add("--name"); keepCmd.add(containerName);
+                keepCmd.add("--cap-add"); keepCmd.add("SYS_ADMIN");
+                keepCmd.add("--security-opt"); keepCmd.add("apparmor=unconfined");
                 keepCmd.add("-v"); keepCmd.add(dockerWorkDir.toString() + ":/workspace");
                 keepCmd.add("-v"); keepCmd.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
                 keepCmd.add("-e"); keepCmd.add("GITHUB_TOKEN=" + githubToken);

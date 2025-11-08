@@ -188,6 +188,10 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         // Always name the container so we can manage it on timeout/failure
         dockerCommand.add("--name");
         dockerCommand.add(containerName);
+        dockerCommand.add("--cap-add");
+        dockerCommand.add("SYS_ADMIN");
+        dockerCommand.add("--security-opt");
+        dockerCommand.add("apparmor=unconfined");
         
         // Performance optimizations
         dockerCommand.add("--init");
