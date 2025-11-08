@@ -134,9 +134,13 @@ public class EnvScriptFactory {
         script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
         script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
         script.append("ORIGINAL_TESTCASE_DIR=\"$TESTCASE_DIR\"\n");
+        script.append("ORIGINAL_DB_DIR=\"/opt/cubrid/databases\"\n");
         script.append("MOUNT_MODE=\"\"\n");
+        script.append("DB_BIND_ACTIVE=0\n");
         script.append("OVERLAY_ERROR_LOG=/tmp/overlay_setup.err\n");
+        script.append("DB_BIND_ERROR_LOG=/tmp/db_bind.err\n");
         script.append(": > \"$OVERLAY_ERROR_LOG\"\n");
+        script.append(": > \"$DB_BIND_ERROR_LOG\"\n");
         script.append("cleanup_runtime() {\n");
         script.append("  set +e\n");
         script.append("  if [ \"$MOUNT_MODE\" = \"overlay\" ]; then\n");
@@ -146,6 +150,10 @@ public class EnvScriptFactory {
         script.append("  elif [ \"$MOUNT_MODE\" = \"bind\" ]; then\n");
         script.append("    cd / >/dev/null 2>&1 || true\n");
         script.append("    umount \"$ORIGINAL_TESTCASE_DIR\" >/dev/null 2>&1 || true\n");
+        script.append("  fi\n");
+        script.append("  if [ \"$DB_BIND_ACTIVE\" = \"1\" ]; then\n");
+        script.append("    cd / >/dev/null 2>&1 || true\n");
+        script.append("    umount \"$ORIGINAL_DB_DIR\" >/dev/null 2>&1 || true\n");
         script.append("  fi\n");
         script.append("  if [ \"$KEEP_RUNTIME_DIR\" != \"1\" ] && [ -n \"$TEST_RUNTIME_DIR\" ] && [ -d \"$TEST_RUNTIME_DIR\" ]; then\n");
         script.append("    rm -rf \"$TEST_RUNTIME_DIR\"\n");
@@ -191,6 +199,21 @@ public class EnvScriptFactory {
         script.append("  export TESTCASE_DIR=\"$FALLBACK_DIR\"\n");
         script.append("}\n");
         script.append("make_writable_testcase_dir\n\n");
+
+        script.append("bind_runtime_databases() {\n");
+        script.append("  mkdir -p \"$ORIGINAL_DB_DIR\"\n");
+        script.append("  if mount --bind \"$CUBRID_DATABASES\" \"$ORIGINAL_DB_DIR\" 2>>\"$DB_BIND_ERROR_LOG\"; then\n");
+        script.append("    DB_BIND_ACTIVE=1\n");
+        script.append("    return 0\n");
+        script.append("  fi\n");
+        script.append("  if [ -s \"$DB_BIND_ERROR_LOG\" ]; then\n");
+        script.append("    echo \"WARNING: failed to bind runtime databases onto $ORIGINAL_DB_DIR\" >&2\n");
+        script.append("    cat \"$DB_BIND_ERROR_LOG\" >&2 || true\n");
+        script.append("  else\n");
+        script.append("    echo \"WARNING: could not bind runtime databases; continuing with CUBRID_DATABASES only\" >&2\n");
+        script.append("  fi\n");
+        script.append("}\n");
+        script.append("bind_runtime_databases\n\n");
 
         script.append("# Emit debug env snapshot for docker exec sessions\n");
         script.append("cat > /workspace/debug_env.sh <<'EOS'\n");
@@ -306,9 +329,13 @@ public class EnvScriptFactory {
         script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
         script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
         script.append("ORIGINAL_TESTCASE_DIR=\"$TESTCASE_DIR\"\n");
+        script.append("ORIGINAL_DB_DIR=\"/opt/cubrid/databases\"\n");
         script.append("MOUNT_MODE=\"\"\n");
+        script.append("DB_BIND_ACTIVE=0\n");
         script.append("OVERLAY_ERROR_LOG=/tmp/overlay_setup.err\n");
+        script.append("DB_BIND_ERROR_LOG=/tmp/db_bind.err\n");
         script.append(": > \"$OVERLAY_ERROR_LOG\"\n");
+        script.append(": > \"$DB_BIND_ERROR_LOG\"\n");
         script.append("cleanup_runtime() {\n");
         script.append("  set +e\n");
         script.append("  if [ \"$MOUNT_MODE\" = \"overlay\" ]; then\n");
@@ -318,6 +345,10 @@ public class EnvScriptFactory {
         script.append("  elif [ \"$MOUNT_MODE\" = \"bind\" ]; then\n");
         script.append("    cd / >/dev/null 2>&1 || true\n");
         script.append("    umount \"$ORIGINAL_TESTCASE_DIR\" >/dev/null 2>&1 || true\n");
+        script.append("  fi\n");
+        script.append("  if [ \"$DB_BIND_ACTIVE\" = \"1\" ]; then\n");
+        script.append("    cd / >/dev/null 2>&1 || true\n");
+        script.append("    umount \"$ORIGINAL_DB_DIR\" >/dev/null 2>&1 || true\n");
         script.append("  fi\n");
         script.append("  if [ \"$KEEP_RUNTIME_DIR\" != \"1\" ] && [ -n \"$TEST_RUNTIME_DIR\" ] && [ -d \"$TEST_RUNTIME_DIR\" ]; then\n");
         script.append("    rm -rf \"$TEST_RUNTIME_DIR\"\n");
@@ -363,6 +394,21 @@ public class EnvScriptFactory {
         script.append("  export TESTCASE_DIR=\"$FALLBACK_DIR\"\n");
         script.append("}\n");
         script.append("make_writable_testcase_dir\n\n");
+
+        script.append("bind_runtime_databases() {\n");
+        script.append("  mkdir -p \"$ORIGINAL_DB_DIR\"\n");
+        script.append("  if mount --bind \"$CUBRID_DATABASES\" \"$ORIGINAL_DB_DIR\" 2>>\"$DB_BIND_ERROR_LOG\"; then\n");
+        script.append("    DB_BIND_ACTIVE=1\n");
+        script.append("    return 0\n");
+        script.append("  fi\n");
+        script.append("  if [ -s \"$DB_BIND_ERROR_LOG\" ]; then\n");
+        script.append("    echo \"WARNING: failed to bind runtime databases onto $ORIGINAL_DB_DIR\" >&2\n");
+        script.append("    cat \"$DB_BIND_ERROR_LOG\" >&2 || true\n");
+        script.append("  else\n");
+        script.append("    echo \"WARNING: could not bind runtime databases; continuing with CUBRID_DATABASES only\" >&2\n");
+        script.append("  fi\n");
+        script.append("}\n");
+        script.append("bind_runtime_databases\n\n");
 
         script.append("# Ensure configuration backups exist for restoration\n");
         script.append("for conf_file in /opt/cubrid/conf/cubrid.conf \\\n");
