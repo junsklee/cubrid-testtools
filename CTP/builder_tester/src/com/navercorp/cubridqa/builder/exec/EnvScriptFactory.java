@@ -131,6 +131,13 @@ public class EnvScriptFactory {
         script.append("mkdir -p \"$RUNTIME_ROOT\"\n");
         script.append("TEST_RUNTIME_DIR=\"$RUNTIME_ROOT/${SAFE_TEST_NAME}_$(date +%s%N)\"\n");
         script.append("mkdir -p \"$TEST_RUNTIME_DIR/databases\"\n");
+        script.append("if [ -d \"/opt/cubrid/databases\" ]; then\n");
+        script.append("  if command -v rsync >/dev/null 2>&1; then\n");
+        script.append("    rsync -a --exclude 'databases.txt' /opt/cubrid/databases/ \"$TEST_RUNTIME_DIR/databases\"/\n");
+        script.append("  else\n");
+        script.append("    (cd /opt/cubrid/databases && tar cpf - --exclude=databases.txt .) | (cd \"$TEST_RUNTIME_DIR/databases\" && tar xpf -)\n");
+        script.append("  fi\n");
+        script.append("fi\n");
         script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
         script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
         script.append("ORIGINAL_TESTCASE_DIR=\"$TESTCASE_DIR\"\n");
@@ -326,6 +333,13 @@ public class EnvScriptFactory {
         script.append("mkdir -p \"$RUNTIME_ROOT\"\n");
         script.append("TEST_RUNTIME_DIR=\"$RUNTIME_ROOT/${SAFE_TEST_NAME}_$(date +%s%N)\"\n");
         script.append("mkdir -p \"$TEST_RUNTIME_DIR/databases\"\n");
+        script.append("if [ -d \"/opt/cubrid/databases\" ]; then\n");
+        script.append("  if command -v rsync >/dev/null 2>&1; then\n");
+        script.append("    rsync -a --exclude 'databases.txt' /opt/cubrid/databases/ \"$TEST_RUNTIME_DIR/databases\"/\n");
+        script.append("  else\n");
+        script.append("    (cd /opt/cubrid/databases && tar cpf - --exclude=databases.txt .) | (cd \"$TEST_RUNTIME_DIR/databases\" && tar xpf -)\n");
+        script.append("  fi\n");
+        script.append("fi\n");
         script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
         script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
         script.append("ORIGINAL_TESTCASE_DIR=\"$TESTCASE_DIR\"\n");
