@@ -156,7 +156,7 @@ public class EnvScriptFactory {
         script.append("    umount \"$ORIGINAL_DB_DIR\" >/dev/null 2>&1 || true\n");
         script.append("  fi\n");
         script.append("  if [ \"$KEEP_RUNTIME_DIR\" != \"1\" ] && [ -n \"$TEST_RUNTIME_DIR\" ] && [ -d \"$TEST_RUNTIME_DIR\" ]; then\n");
-        script.append("    rm -rf \"$TEST_RUNTIME_DIR\"\n");
+            script.append("    rm -rf \"$TEST_RUNTIME_DIR\"\n");
         script.append("  fi\n");
         script.append("}\n");
         script.append("trap cleanup_runtime EXIT\n\n");

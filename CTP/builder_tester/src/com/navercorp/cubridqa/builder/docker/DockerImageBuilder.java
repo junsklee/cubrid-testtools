@@ -192,6 +192,10 @@ public class DockerImageBuilder {
                "fi\n" +
                "mkdir -p /opt/cubrid/databases\n" +
                "touch /opt/cubrid/databases/databases.txt\n" +
+               "HOSTS_CONF=/opt/cubrid/conf/cubrid_hosts.conf\n" +
+               "if [[ -f \"$HOSTS_CONF\" ]] && ! grep -q \"0.0.0.0\\s\\+your-hostname\" \"$HOSTS_CONF\"; then\n" +
+               "  printf '0.0.0.0\\t\\tyour-hostname\\n' >> \"$HOSTS_CONF\"\n" +
+               "fi\n" +
                "ls -la /opt/cubrid/bin/ || true\n" +
                "/opt/cubrid/bin/cubrid_rel || echo \"[setup] WARNING: cubrid_rel check failed\"\n";
     }
