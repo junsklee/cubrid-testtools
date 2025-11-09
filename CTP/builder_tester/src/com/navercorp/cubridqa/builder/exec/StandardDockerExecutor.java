@@ -331,14 +331,24 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                  resultBuilder.executionTime(executionTime);
              }
              
-             if (resultContent.contains("NOK") || resultContent.contains("FAIL")) {
-                 resultBuilder.status(TestStatus.FAIL);
-             } else if (resultContent.contains("OK") || resultContent.contains("PASS")) {
-                 resultBuilder.status(TestStatus.PASS);
-             } else {
-                 resultBuilder.status(TestStatus.EXECUTION_ERROR)
-                        .message("Could not determine test result");
-             }
+            // Robust status parsing: only treat tokens after ':' as verdicts, ignore words like 'broker_start_fail'
+            boolean isFailed = java.util.regex.Pattern
+                .compile("(?mi)^.*:\\s*(NOK|FAIL)\\b|Internal\\s+Error")
+                .matcher(resultContent)
+                .find();
+            boolean isPassed = java.util.regex.Pattern
+                .compile("(?mi)^.*:\\s*(OK|PASS)\\b")
+                .matcher(resultContent)
+                .find();
+
+            if (isPassed && !isFailed) {
+                resultBuilder.status(TestStatus.PASS);
+            } else if (isFailed) {
+                resultBuilder.status(TestStatus.FAIL);
+            } else {
+                resultBuilder.status(TestStatus.EXECUTION_ERROR)
+                       .message("Could not determine test result");
+            }
              
              return resultBuilder.build();
         }

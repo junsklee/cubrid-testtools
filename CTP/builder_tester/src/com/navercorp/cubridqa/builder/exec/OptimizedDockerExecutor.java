@@ -333,10 +333,15 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 }
             }
             
-            boolean isPassed = resultContent.contains("OK") || 
-                              resultContent.toUpperCase().contains("PASS");
-            boolean isFailed = resultContent.contains("NOK") || 
-                              resultContent.toUpperCase().contains("FAIL");
+            // Robust status parsing: only treat tokens after ':' as verdicts, ignore words like 'broker_start_fail'
+            boolean isFailed = java.util.regex.Pattern
+                .compile("(?mi)^.*:\\s*(NOK|FAIL)\\b|Internal\\s+Error")
+                .matcher(resultContent)
+                .find();
+            boolean isPassed = java.util.regex.Pattern
+                .compile("(?mi)^.*:\\s*(OK|PASS)\\b")
+                .matcher(resultContent)
+                .find();
             
             TestResult.Builder resultBuilder = TestResult.builder()
                 .testName(request.getTestName())
