@@ -120,13 +120,13 @@ public class DockerImageBuilder {
         commitCommand.add("docker");
         commitCommand.add("commit");
         commitCommand.add("--change");
-        commitCommand.add("ENV CUBRID=/root/CUBRID");
+        commitCommand.add("ENV CUBRID=/opt/cubrid");
         commitCommand.add("--change");
-        commitCommand.add("ENV CUBRID_DATABASES=/root/CUBRID/databases");
+        commitCommand.add("ENV CUBRID_DATABASES=/opt/cubrid/databases");
         commitCommand.add("--change");
-        commitCommand.add("ENV PATH=/root/CUBRID/bin:/home/cubrid-testtools/CTP/shell/init_path:$PATH");
+        commitCommand.add("ENV PATH=/opt/cubrid/bin:/home/cubrid-testtools/CTP/shell/init_path:$PATH");
         commitCommand.add("--change");
-        commitCommand.add("ENV LD_LIBRARY_PATH=/root/CUBRID/lib:/root/CUBRID/cci/lib:$LD_LIBRARY_PATH");
+        commitCommand.add("ENV LD_LIBRARY_PATH=/opt/cubrid/lib:/opt/cubrid/cci/lib:$LD_LIBRARY_PATH");
         commitCommand.add("--change");
         commitCommand.add("ENV CUBRID_LANG=en_US");
         commitCommand.add("--change");
