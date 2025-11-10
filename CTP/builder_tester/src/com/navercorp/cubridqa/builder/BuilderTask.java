@@ -731,6 +731,13 @@ public class BuilderTask {
                 if (json.has("maxConcurrentTests")) {
                     return json.getInt("maxConcurrentTests");
                 }
+
+                if (json.has("concurrency")) {
+                    JSONObject concurrency = json.getJSONObject("concurrency");
+                    if (concurrency.has("max")) {
+                        return concurrency.getInt("max");
+                    }
+                }
             } else {
                 taskLogger.warning("Health check responded with status: " + status + " from " + host + ":" + port);
             }
