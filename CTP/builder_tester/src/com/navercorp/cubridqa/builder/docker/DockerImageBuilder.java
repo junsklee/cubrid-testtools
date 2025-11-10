@@ -489,6 +489,20 @@ public class DockerImageBuilder {
         return stats;
     }
 
+    /**
+     * Check if a Docker image exists for the given commit and baseline.
+     * This allows callers to avoid downloading build packages when the image is already cached.
+     *
+     * @param commitHash The commit hash
+     * @param baselineHash The baseline hash
+     * @return true if the image exists in Docker, false otherwise
+     */
+    public boolean hasImage(String commitHash, String baselineHash) {
+        String imageKey = commitHash + "_" + baselineHash;
+        String imageName = "cubrid-test:" + imageKey;
+        return imageExists(imageName);
+    }
+
     public boolean wasLastOperationCacheHit() {
         return Boolean.TRUE.equals(lastOperationCacheHit.get());
     }

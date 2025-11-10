@@ -68,31 +68,63 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         Path ctpWorkRoot = dockerWorkDir.resolve("CTP");
         stageCtpResources(ctpSourceRoot, ctpWorkRoot, testLogger);
         String ctpHomeInContainer = "/workspace/CTP";
-        
-        // Download build package if it's a URL
-        Path localBuildPackage;
-        try {
-            Path sharedCacheDir = Paths.get(config.getWorkDir(), "cache");
-            Files.createDirectories(sharedCacheDir);
-            localBuildPackage = buildCache.downloadIfNeeded(
-                request.getBuildPackage(), 
-                request.getCommitShort() != null ? request.getCommitShort() : "unknown", 
-                request.getBaselineShort() != null ? request.getBaselineShort() : "unknown", 
-                testLogger
-            );
-            metricsBuilder.packageCached(buildCache.wasLastFetchFromCache());
-            if (localBuildPackage != null) {
-                metricsBuilder.buildPackageName(localBuildPackage.getFileName().toString());
+
+        // Check if Docker image already exists BEFORE downloading package
+        // This optimization avoids unnecessary package downloads when image is cached
+        String commitShort = request.getCommitShort() != null ? request.getCommitShort() : "unknown";
+        String baselineShort = request.getBaselineShort() != null ? request.getBaselineShort() : "unknown";
+        boolean imageExistsAlready = false;
+
+        if (imageBuilder != null) {
+            try {
+                Object hasImageResult = imageBuilder.getClass()
+                    .getMethod("hasImage", String.class, String.class)
+                    .invoke(imageBuilder, commitShort, baselineShort);
+                if (hasImageResult instanceof Boolean) {
+                    imageExistsAlready = (Boolean) hasImageResult;
+                    if (imageExistsAlready) {
+                        testLogger.info("Docker image already exists for " + commitShort + "_" + baselineShort +
+                                      " - skipping package download");
+                    }
+                }
+            } catch (NoSuchMethodException e) {
+                // hasImage method not available, fall through to always download
+                testLogger.fine("DockerImageBuilder.hasImage not available, downloading package");
+            } catch (Exception e) {
+                testLogger.fine("Failed to check image existence: " + e.getMessage());
             }
-        } catch (Exception e) {
-            return finalizeResult(
-                TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Failed to download build package: " + e.getMessage()),
-                metricsBuilder, startNs, null, false, null);
         }
-        
+
+        // Download build package only if needed (image doesn't exist or check failed)
+        Path localBuildPackage = null;
+        if (!imageExistsAlready) {
+            try {
+                Path sharedCacheDir = Paths.get(config.getWorkDir(), "cache");
+                Files.createDirectories(sharedCacheDir);
+                localBuildPackage = buildCache.downloadIfNeeded(
+                    request.getBuildPackage(),
+                    commitShort,
+                    baselineShort,
+                    testLogger
+                );
+                metricsBuilder.packageCached(buildCache.wasLastFetchFromCache());
+                if (localBuildPackage != null) {
+                    metricsBuilder.buildPackageName(localBuildPackage.getFileName().toString());
+                }
+            } catch (Exception e) {
+                return finalizeResult(
+                    TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message("Failed to download build package: " + e.getMessage()),
+                    metricsBuilder, startNs, null, false, null);
+            }
+        } else {
+            // Image exists, no package needed - mark as effectively cached
+            metricsBuilder.packageCached(true);
+            testLogger.info("Package download skipped - Docker image is cached");
+        }
+
         // Build or get Docker image with CUBRID pre-installed
         String dockerImage = null;
         boolean dockerImageCached = false;
@@ -101,10 +133,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 // Use reflection to call getOrBuildImage method
                 dockerImage = (String) imageBuilder.getClass()
                     .getMethod("getOrBuildImage", String.class, String.class, Path.class)
-                    .invoke(imageBuilder, 
-                           request.getCommitShort() != null ? request.getCommitShort() : "unknown", 
-                           request.getBaselineShort() != null ? request.getBaselineShort() : "unknown", 
-                           localBuildPackage);
+                    .invoke(imageBuilder, commitShort, baselineShort, localBuildPackage);
                 testLogger.info("Using Docker image: " + dockerImage);
                 try {
                     Object cacheResult = imageBuilder.getClass()

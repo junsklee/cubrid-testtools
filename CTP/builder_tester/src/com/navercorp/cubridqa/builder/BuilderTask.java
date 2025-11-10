@@ -1239,16 +1239,16 @@ public class BuilderTask {
             // Determine if this is a local or remote tester
             String buildPackageRef;
             if (isLocalTester(host)) {
-                // Local tester - use direct file path
+                // Local tester - use direct file path (tester will skip if Docker image is cached)
                 buildPackageRef = buildPackage;
-                taskLogger.info("Using local file path for tester " + workerIp + ": " + buildPackage);
+                taskLogger.info("Sending package reference to local tester " + workerIp + ": " + buildPackage);
             } else {
-                // Remote tester - provide HTTP URL for download
+                // Remote tester - provide HTTP URL for download (tester will skip if Docker image is cached)
                 File packageFile = new File(buildPackage);
                 String builderHost = InetAddress.getLocalHost().getHostAddress();
-                buildPackageRef = String.format("http://%s:%d/download/build/%s", 
+                buildPackageRef = String.format("http://%s:%d/download/build/%s",
                     builderHost, config.getListenPort(), packageFile.getName());
-                taskLogger.info("Using HTTP URL for remote tester " + workerIp + ": " + buildPackageRef);
+                taskLogger.info("Sending package URL to remote tester " + workerIp + ": " + buildPackageRef);
             }
             
             // Resolve run parameters with request-level overrides (camelCase or snake_case)
