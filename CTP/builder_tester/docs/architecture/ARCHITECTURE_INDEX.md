@@ -2,6 +2,13 @@
 
 This directory contains comprehensive documentation of the CUBRID test tools Docker build system architecture. Start with one of these guides based on your needs:
 
+## Latest Feature: Smart Scheduling System (November 2024)
+
+**NEW**: The system now includes intelligent multi-resource-aware test scheduling! See:
+- **[../SMART_SCHEDULING_ARCHITECTURE.md](../SMART_SCHEDULING_ARCHITECTURE.md)** - Complete architecture
+- **[../SMART_SCHEDULING_CONFIG.md](../SMART_SCHEDULING_CONFIG.md)** - Configuration reference
+- **[../SMART_SCHEDULING_TESTING_GUIDE.md](../SMART_SCHEDULING_TESTING_GUIDE.md)** - Testing guide
+
 ## Documentation Files
 
 ### 1. DOCKER_BUILD_ARCHITECTURE.md (24KB) - START HERE FOR COMPREHENSIVE OVERVIEW
@@ -86,9 +93,10 @@ Contents:
 3. Code: Find files in FILE_STRUCTURE.md "For Understanding Test Distribution"
 
 ### Understanding test distribution
-1. Read: DOCKER_BUILD_ARCHITECTURE.md section 3
-2. Reference: QUICK_REFERENCE.md "Test Distribution Algorithm"
-3. Code: BuilderTask.java lines 124-187 (listed in QUICK_REFERENCE)
+1. **NEW Smart Scheduling**: Read [../SMART_SCHEDULING_ARCHITECTURE.md](../SMART_SCHEDULING_ARCHITECTURE.md)
+2. Legacy round-robin: DOCKER_BUILD_ARCHITECTURE.md section 3
+3. Reference: QUICK_REFERENCE.md "Test Distribution Algorithm"
+4. Code: BuilderTask.java (distributeTestsWithSmartScheduling or distributeTestsLegacy)
 
 ### Understanding concurrent execution
 1. Read: DOCKER_BUILD_ARCHITECTURE.md section 9
@@ -122,10 +130,12 @@ Contents:
 - **Optimization**: Package only _install/CUBRID, use git references
 
 ### Test Distribution
-- **Algorithm**: Round-robin using global test index
-- **Fairness**: Guaranteed even distribution across workers
-- **Priority**: Local testers executed before remote
+- **Smart Scheduling (NEW)**: Multi-resource-aware scoring with cache locality
+- **Legacy Algorithm**: Round-robin using global test index (still available)
+- **Strategy**: Mice/elephants separation (SJF + bin-packing)
+- **Fairness**: Aging mechanism prevents starvation
 - **Pools**: Per-worker thread pools for concurrent test execution
+- **Toggle**: Configurable via `smart_scheduling_enabled` in builder.conf
 
 ### Caching Strategy
 - **Build Cache**: In-memory ConcurrentHashMap with disk backup
@@ -229,7 +239,7 @@ Q: How are Docker builds triggered?
 A: See DOCKER_BUILD_ARCHITECTURE.md section 1.1, or QUICK_REFERENCE.md "Build Execution Flow"
 
 Q: How are tests distributed to worker nodes?
-A: See DOCKER_BUILD_ARCHITECTURE.md section 3, or QUICK_REFERENCE.md "Test Distribution Algorithm"
+A: **NEW**: See [../SMART_SCHEDULING_ARCHITECTURE.md](../SMART_SCHEDULING_ARCHITECTURE.md) for smart scheduling, or DOCKER_BUILD_ARCHITECTURE.md section 3 for legacy round-robin
 
 Q: What are the concurrent execution models?
 A: See DOCKER_BUILD_ARCHITECTURE.md section 9, or QUICK_REFERENCE.md "Concurrent Execution"
@@ -241,7 +251,10 @@ Q: Where is a specific Java class?
 A: See FILE_STRUCTURE.md "Core Java Source Files" section
 
 Q: What configuration parameters are available?
-A: See QUICK_REFERENCE.md "Configuration Keys" section
+A: See QUICK_REFERENCE.md "Configuration Keys" section, or [../SMART_SCHEDULING_CONFIG.md](../SMART_SCHEDULING_CONFIG.md) for smart scheduling options
+
+Q: How do I enable smart scheduling?
+A: Set `smart_scheduling_enabled=true` in builder.conf. See [../SMART_SCHEDULING_CONFIG.md](../SMART_SCHEDULING_CONFIG.md) for details
 
 Q: How do builds fallback if Docker is unavailable?
 A: See QUICK_REFERENCE.md "Error Handling & Fallback" section
@@ -257,8 +270,8 @@ A: See DOCKER_BUILD_ARCHITECTURE.md section 2.1 or QUICK_REFERENCE.md "Worker No
 
 ---
 
-Generated on: November 5, 2025
-Documentation version: 1.0
+Generated on: November 10, 2025
+Documentation version: 2.0 (includes Smart Scheduling System)
 System analyzed: CUBRID Test Tools builder_tester component
 Branch: builder_tester_refactor_tester
 
