@@ -16,6 +16,8 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
 import com.navercorp.cubridqa.builder.workload.*;
+import com.navercorp.cubridqa.builder.scheduler.*;
+import com.navercorp.cubridqa.builder.tester.stats.*;
 
 /**
  * BuilderTask - Builds CUBRID at multiple commits and runs tests
@@ -167,95 +169,14 @@ public class BuilderTask {
 
             final String finalBuildType = buildType;
             final String testRequestId = RequestContext.getRequestId();
-            ConcurrentLinkedQueue<TestJob> pendingJobs = new ConcurrentLinkedQueue<>();
-            AtomicInteger globalTestIndex = new AtomicInteger(0);
-            
-            for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
-                final String commit = entry.getKey();
-                final String buildPackage = entry.getValue();
-                if (buildPackage == null || buildPackage.isEmpty()) {
-                    for (int i = 0; i < tests.length(); i++) {
-                        results.add(new JSONObject()
-                            .put("commit", commit)
-                            .put("test", tests.getString(i))
-                            .put("status", "build_failed")
-                            .put("message", "Build failed for commit " + commit));
-                    }
-                    continue;
-                }
 
-                for (int i = 0; i < tests.length(); i++) {
-                    final String raw = tests.getString(i);
-                    final String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
-                    pendingJobs.offer(new TestJob(commit, buildPackage, testPath));
-                }
-            }
-
-            int totalSlots = Math.max(1, workerCapacities.values().stream().mapToInt(Integer::intValue).sum());
-            ExecutorService testPool = Executors.newFixedThreadPool(totalSlots);
-            List<Future<Void>> slotFutures = new ArrayList<>();
-
-            for (String worker : workerIps) {
-                int capacity = workerCapacities.getOrDefault(worker, 1);
-                for (int slot = 0; slot < capacity; slot++) {
-                    final int slotIndex = slot;
-                    slotFutures.add(testPool.submit(() -> {
-                        while (true) {
-                            TestJob job = pendingJobs.poll();
-                            if (job == null) {
-                                break;
-                            }
-                            int testNumber = globalTestIndex.incrementAndGet();
-                            dispatchCounts.get(worker).incrementAndGet();
-                            taskLogger.info(String.format(
-                                "Dispatching test %d/%d: %s (commit %s) → worker %s (slot %d)",
-                                testNumber,
-                                totalTestExecutions,
-                                job.testPath,
-                                job.commit.substring(0, Math.min(7, job.commit.length())),
-                                worker,
-                                slotIndex));
-
-                            try {
-                                if (testRequestId != null) {
-                                    RequestContext.setRequestId(testRequestId);
-                                }
-                                JSONObject testResult = runTest(job.commit, job.buildPackage, job.testPath,
-                                    worker, this.baselineCommit, finalBuildType);
-                                results.add(testResult);
-                            } catch (Exception e) {
-                                taskLogger.log(Level.WARNING, "Test execution threw", e);
-                                results.add(new JSONObject()
-                                    .put("commit", job.commit)
-                                    .put("test", job.testPath)
-                                    .put("status", "error")
-                                    .put("message", e.getMessage()));
-                            } finally {
-                                RequestContext.clear();
-                            }
-                        }
-                        return null;
-                    }));
-                }
-            }
-
-            for (Future<Void> f : slotFutures) {
-                try {
-                    f.get();
-                } catch (Exception e) {
-                    taskLogger.log(Level.WARNING, "Test dispatcher error", e);
-                }
-            }
-            testPool.shutdown();
-
-            taskLogger.info("Dynamic tester utilization summary:");
-            for (Map.Entry<String, AtomicInteger> entry : dispatchCounts.entrySet()) {
-                String worker = entry.getKey();
-                taskLogger.info(String.format("  Worker %s (%s) handled %d tests (capacity=%d)",
-                    worker,
-                    isLocalTester(worker) ? "local" : "remote",
-                    entry.getValue().get(),
-                    workerCapacities.get(worker)));
+            // Choose distribution strategy
+            if (config.isSmartSchedulingEnabled()) {
+                taskLogger.info("Using SMART SCHEDULING for test distribution");
+                distributeTestsWithSmartScheduling(builtPackages, tests, workerIps, finalBuildType, testRequestId);
+            } else {
+                taskLogger.info("Using LEGACY work-queue distribution");
+                distributeTestsLegacy(builtPackages, tests, workerCapacities, dispatchCounts, finalBuildType, testRequestId, totalTestExecutions);
             }
             
             // Calculate execution time and send callback with results
@@ -2105,6 +2026,220 @@ public class BuilderTask {
             return value.substring(1, value.length() - 1);
         }
         return value;
+    }
+
+    /**
+     * Legacy distribution: shared work queue pulled by all tester threads.
+     */
+    private void distributeTestsLegacy(Map<String, String> builtPackages, JSONArray tests,
+                                       Map<String, Integer> workerCapacities, Map<String, AtomicInteger> dispatchCounts,
+                                       String buildType, String testRequestId, int totalTestExecutions) {
+        ConcurrentLinkedQueue<TestJob> pendingJobs = new ConcurrentLinkedQueue<>();
+        AtomicInteger globalTestIndex = new AtomicInteger(0);
+
+        // Build job queue
+        for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
+            String commit = entry.getKey();
+            String buildPackage = entry.getValue();
+            if (buildPackage == null || buildPackage.isEmpty()) {
+                for (int i = 0; i < tests.length(); i++) {
+                    results.add(new JSONObject()
+                        .put("commit", commit)
+                        .put("test", tests.getString(i))
+                        .put("status", "build_failed")
+                        .put("message", "Build failed for commit " + commit));
+                }
+                continue;
+            }
+
+            for (int i = 0; i < tests.length(); i++) {
+                String raw = tests.getString(i);
+                String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+                pendingJobs.offer(new TestJob(commit, buildPackage, testPath));
+            }
+        }
+
+        // Create thread pool with total capacity
+        int totalSlots = Math.max(1, workerCapacities.values().stream().mapToInt(Integer::intValue).sum());
+        ExecutorService testPool = Executors.newFixedThreadPool(totalSlots);
+        List<Future<Void>> slotFutures = new ArrayList<>();
+
+        // Create worker threads
+        for (String worker : workerCapacities.keySet()) {
+            int capacity = workerCapacities.get(worker);
+            for (int slot = 0; slot < capacity; slot++) {
+                final String finalWorker = worker;
+                final int slotIndex = slot;
+                slotFutures.add(testPool.submit(() -> {
+                    while (true) {
+                        TestJob job = pendingJobs.poll();
+                        if (job == null) break;
+
+                        int testNumber = globalTestIndex.incrementAndGet();
+                        dispatchCounts.get(finalWorker).incrementAndGet();
+                        taskLogger.info(String.format(
+                            "Dispatching test %d/%d: %s (commit %s) → worker %s (slot %d)",
+                            testNumber, totalTestExecutions, job.testPath,
+                            job.commit.substring(0, Math.min(7, job.commit.length())),
+                            finalWorker, slotIndex));
+
+                        try {
+                            if (testRequestId != null) {
+                                RequestContext.setRequestId(testRequestId);
+                            }
+                            JSONObject testResult = runTest(job.commit, job.buildPackage, job.testPath,
+                                finalWorker, this.baselineCommit, buildType);
+                            results.add(testResult);
+                        } catch (Exception e) {
+                            taskLogger.log(Level.WARNING, "Test execution threw", e);
+                            results.add(new JSONObject()
+                                .put("commit", job.commit)
+                                .put("test", job.testPath)
+                                .put("status", "error")
+                                .put("message", e.getMessage()));
+                        } finally {
+                            RequestContext.clear();
+                        }
+                    }
+                    return null;
+                }));
+            }
+        }
+
+        // Wait for completion
+        for (Future<Void> f : slotFutures) {
+            try {
+                f.get();
+            } catch (Exception e) {
+                taskLogger.log(Level.WARNING, "Test dispatcher error", e);
+            }
+        }
+        testPool.shutdown();
+
+        // Log utilization summary
+        taskLogger.info("Dynamic tester utilization summary:");
+        for (Map.Entry<String, AtomicInteger> entry : dispatchCounts.entrySet()) {
+            String worker = entry.getKey();
+            taskLogger.info(String.format("  Worker %s (%s) handled %d tests (capacity=%d)",
+                worker,
+                isLocalTester(worker) ? "local" : "remote",
+                entry.getValue().get(),
+                workerCapacities.get(worker)));
+        }
+    }
+
+    /**
+     * Smart scheduling distribution: uses scheduler for intelligent test placement.
+     */
+    private void distributeTestsWithSmartScheduling(Map<String, String> builtPackages, JSONArray tests,
+                                                     List<String> workerIps, String buildType, String testRequestId) {
+        taskLogger.info("[Smart Scheduling] Initializing scheduler...");
+
+        // Initialize scheduler components
+        NodeDirectory nodeDirectory = new NodeDirectory(
+            workerIps,
+            config.getSchedulingNodePollIntervalSeconds(),
+            config.getSchedulingNodeStaleThresholdSeconds()
+        );
+        nodeDirectory.start();
+
+        ScoreFunction scoreFunction = new ScoreFunction(
+            config.getSchedulingWeightPressure(),
+            config.getSchedulingWeightDuration(),
+            config.getSchedulingWeightImageCache(),
+            config.getSchedulingWeightPackageCache(),
+            config.getSchedulingWeightAgeBoost()
+        );
+
+        ReadyQueue readyQueue = new ReadyQueue(config.getSchedulingMiceThresholdMs());
+        SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue);
+
+        // Build test instances
+        List<TestInstance> testInstances = new ArrayList<>();
+        for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
+            String commit = entry.getKey();
+            String buildPackage = entry.getValue();
+
+            if (buildPackage == null || buildPackage.isEmpty()) {
+                for (int i = 0; i < tests.length(); i++) {
+                    results.add(new JSONObject()
+                        .put("commit", commit)
+                        .put("test", tests.getString(i))
+                        .put("status", "build_failed")
+                        .put("message", "Build failed for commit " + commit));
+                }
+                continue;
+            }
+
+            for (int i = 0; i < tests.length(); i++) {
+                String raw = tests.getString(i);
+                String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+
+                // Create test instance with default predictions (actual prediction would query /score endpoint)
+                TestInstance instance = TestInstance.builder()
+                    .testKey(testPath)
+                    .commit(commit)
+                    .baseline(this.baselineCommit != null ? this.baselineCommit : "unknown")
+                    .buildPackage(buildPackage)
+                    .build();
+                testInstances.add(instance);
+            }
+        }
+
+        taskLogger.info("[Smart Scheduling] Offering " + testInstances.size() + " tests to scheduler");
+        scheduler.offer(testInstances);
+
+        // Poll scheduler and submit tests
+        int assignedCount = 0;
+        int noEligibleCount = 0;
+        while (scheduler.hasPending()) {
+            Optional<Assignment> assignment = scheduler.assignNext();
+            if (!assignment.isPresent()) {
+                noEligibleCount++;
+                if (noEligibleCount > 10) {
+                    taskLogger.warning("[Smart Scheduling] No eligible nodes after 10 attempts, waiting...");
+                    try {
+                        Thread.sleep(5000);  // Wait 5s for nodes to become available
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    noEligibleCount = 0;
+                }
+                continue;
+            }
+
+            Assignment a = assignment.get();
+            assignedCount++;
+            taskLogger.info(String.format("[Smart Scheduling] Assignment %d/%d: %s",
+                assignedCount, testInstances.size(), a));
+
+            // Extract node IP from nodeId (format: "ip:port")
+            String nodeId = a.getTargetNodeId();
+            String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
+
+            // Submit test
+            try {
+                if (testRequestId != null) {
+                    RequestContext.setRequestId(testRequestId);
+                }
+                JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
+                    a.getTestKey(), workerIp, this.baselineCommit, buildType);
+                results.add(testResult);
+            } catch (Exception e) {
+                taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);
+                results.add(new JSONObject()
+                    .put("commit", a.getCommit())
+                    .put("test", a.getTestKey())
+                    .put("status", "error")
+                    .put("message", e.getMessage()));
+            } finally {
+                RequestContext.clear();
+            }
+        }
+
+        nodeDirectory.stop();
+        taskLogger.info("[Smart Scheduling] Completed: assigned " + assignedCount + " tests");
     }
 
     private static final class TestJob {

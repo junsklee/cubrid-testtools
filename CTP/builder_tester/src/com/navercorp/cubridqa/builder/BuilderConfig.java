@@ -59,7 +59,18 @@ public class BuilderConfig {
     private static final String CCACHE_SLOPPINESS = "ccache_sloppiness";
     private static final String PARALLEL_JOBS = "parallel_jobs";
     private static final String SHELL_TC_SYNC_INTERVAL_SECONDS = "shell_tc_sync_interval_seconds";
-    
+
+    // Smart scheduling configuration
+    private static final String SMART_SCHEDULING_ENABLED = "smart_scheduling_enabled";
+    private static final String SCHEDULING_MICE_THRESHOLD_MS = "scheduling_mice_threshold_ms";
+    private static final String SCHEDULING_WEIGHT_PRESSURE = "scheduling_weight_pressure";
+    private static final String SCHEDULING_WEIGHT_DURATION = "scheduling_weight_duration";
+    private static final String SCHEDULING_WEIGHT_IMAGE_CACHE = "scheduling_weight_image_cache";
+    private static final String SCHEDULING_WEIGHT_PACKAGE_CACHE = "scheduling_weight_package_cache";
+    private static final String SCHEDULING_WEIGHT_AGE_BOOST = "scheduling_weight_age_boost";
+    private static final String SCHEDULING_NODE_POLL_INTERVAL_SECONDS = "scheduling_node_poll_interval_seconds";
+    private static final String SCHEDULING_NODE_STALE_THRESHOLD_SECONDS = "scheduling_node_stale_threshold_seconds";
+
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
     private static final Object SHELL_TC_OVERLAY_LOCK = new Object();
@@ -729,6 +740,44 @@ public class BuilderConfig {
             System.err.println("Invalid long value for key '" + key + "': " + value + ". Using default: " + defaultValue);
             return defaultValue;
         }
+    }
+
+    // Smart scheduling configuration getters
+
+    public boolean isSmartSchedulingEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(SMART_SCHEDULING_ENABLED, "false"));
+    }
+
+    public long getSchedulingMiceThresholdMs() {
+        return Long.parseLong(properties.getProperty(SCHEDULING_MICE_THRESHOLD_MS, "20000"));
+    }
+
+    public double getSchedulingWeightPressure() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_WEIGHT_PRESSURE, "0.45"));
+    }
+
+    public double getSchedulingWeightDuration() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_WEIGHT_DURATION, "0.25"));
+    }
+
+    public double getSchedulingWeightImageCache() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_WEIGHT_IMAGE_CACHE, "0.15"));
+    }
+
+    public double getSchedulingWeightPackageCache() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_WEIGHT_PACKAGE_CACHE, "0.05"));
+    }
+
+    public double getSchedulingWeightAgeBoost() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_WEIGHT_AGE_BOOST, "0.10"));
+    }
+
+    public long getSchedulingNodePollIntervalSeconds() {
+        return Long.parseLong(properties.getProperty(SCHEDULING_NODE_POLL_INTERVAL_SECONDS, "5"));
+    }
+
+    public long getSchedulingNodeStaleThresholdSeconds() {
+        return Long.parseLong(properties.getProperty(SCHEDULING_NODE_STALE_THRESHOLD_SECONDS, "30"));
     }
 
     @Override
