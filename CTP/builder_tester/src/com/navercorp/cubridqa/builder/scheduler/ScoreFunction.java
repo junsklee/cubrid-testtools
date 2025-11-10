@@ -26,12 +26,13 @@ public class ScoreFunction {
     // Reference values for normalization
     private static final long T_REF_MS = 30_000L;  // 30 seconds reference duration
     private static final double EPSILON = 1.0;      // Small epsilon to avoid division by zero
+    private final NodeLoadProvider nodeLoadProvider;
 
     /**
      * Creates a ScoreFunction with default weights.
      */
     public ScoreFunction() {
-        this(0.45, 0.25, 0.15, 0.05, 0.10);
+        this(0.45, 0.25, 0.15, 0.05, 0.10, NodeLoadProvider.NOOP);
     }
 
     /**
@@ -44,11 +45,20 @@ public class ScoreFunction {
      * @param w5 Age boost weight (applied as negative)
      */
     public ScoreFunction(double w1, double w2, double w3, double w4, double w5) {
+        this(w1, w2, w3, w4, w5, NodeLoadProvider.NOOP);
+    }
+
+    /**
+     * Creates a ScoreFunction with custom weights and a load provider to account for builder-side
+     * in-flight assignments.
+     */
+    public ScoreFunction(double w1, double w2, double w3, double w4, double w5, NodeLoadProvider loadProvider) {
         this.w1 = w1;
         this.w2 = w2;
         this.w3 = w3;
         this.w4 = w4;
         this.w5 = w5;
+        this.nodeLoadProvider = loadProvider != null ? loadProvider : NodeLoadProvider.NOOP;
     }
 
     /**
@@ -72,8 +82,10 @@ public class ScoreFunction {
         // 4. Age boost (fairness for long-waiting tests)
         double ageBoost = computeAgeBoost(test);
 
-        // Combined score
-        return w1 * pressure + w2 * durScore + w3 * imagePenalty + w4 * pkgPenalty - w5 * ageBoost;
+        double baseScore = w1 * pressure + w2 * durScore + w3 * imagePenalty + w4 * pkgPenalty - w5 * ageBoost;
+        double loadPenalty = nodeLoadProvider.getLoadPenalty(node.getNodeId());
+
+        return baseScore + loadPenalty;
     }
 
     /**
@@ -139,5 +151,11 @@ public class ScoreFunction {
             pkgPenalty, w4 * pkgPenalty,
             ageBoost, w5 * ageBoost
         );
+    }
+
+    @FunctionalInterface
+    public interface NodeLoadProvider {
+        NodeLoadProvider NOOP = nodeId -> 0.0;
+        double getLoadPenalty(String nodeId);
     }
 }

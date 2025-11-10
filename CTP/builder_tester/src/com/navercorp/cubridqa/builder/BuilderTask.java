@@ -2145,6 +2145,23 @@ public class BuilderTask {
 
         // Initialize scheduler components
         List<String> schedulerNodes = normalizeTesterNodes(workerIps);
+        Map<String, AtomicInteger> nodeInflight = new ConcurrentHashMap<>();
+
+        ScoreFunction.NodeLoadProvider loadProvider = nodeId -> {
+            String workerKey = extractWorkerKey(nodeId);
+            AtomicInteger current = nodeInflight.get(workerKey);
+            if (current == null) {
+                return 0.0;
+            }
+            int capacity = workerCapacities.getOrDefault(workerKey, config.getMaxConcurrentTests());
+            if (capacity <= 0) {
+                capacity = 1;
+            }
+            double ratio = current.get() / (double) capacity;
+            double loadWeight = 0.2; // favor spreading assignments when nodes are busy
+            return loadWeight * ratio;
+        };
+
         NodeDirectory nodeDirectory = new NodeDirectory(
             schedulerNodes,
             config.getSchedulingNodePollIntervalSeconds(),
@@ -2157,7 +2174,8 @@ public class BuilderTask {
             config.getSchedulingWeightDuration(),
             config.getSchedulingWeightImageCache(),
             config.getSchedulingWeightPackageCache(),
-            config.getSchedulingWeightAgeBoost()
+            config.getSchedulingWeightAgeBoost(),
+            loadProvider
         );
 
         ReadyQueue readyQueue = new ReadyQueue(config.getSchedulingMiceThresholdMs());
@@ -2244,6 +2262,8 @@ public class BuilderTask {
 
                 String nodeId = a.getTargetNodeId();
                 String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
+                AtomicInteger inflightCounter = nodeInflight.computeIfAbsent(workerIp, k -> new AtomicInteger());
+                inflightCounter.incrementAndGet();
 
                 Future<?> future = testExecutor.submit(() -> {
                     try {
@@ -2262,6 +2282,7 @@ public class BuilderTask {
                             .put("message", e.getMessage()));
                     } finally {
                         RequestContext.clear();
+                        inflightCounter.decrementAndGet();
                         capacitySemaphore.release();
                     }
                 });
@@ -2303,5 +2324,13 @@ public class BuilderTask {
             .map(ip -> ip.contains(":") ? ip : ip + ":" + config.getTesterPort())
             .distinct()
             .collect(Collectors.toList());
+    }
+
+    private String extractWorkerKey(String nodeId) {
+        if (nodeId == null) {
+            return "";
+        }
+        int idx = nodeId.indexOf(':');
+        return idx >= 0 ? nodeId.substring(0, idx) : nodeId;
     }
 }
