@@ -2136,8 +2136,9 @@ public class BuilderTask {
         taskLogger.info("[Smart Scheduling] Initializing scheduler...");
 
         // Initialize scheduler components
+        List<String> schedulerNodes = normalizeTesterNodes(workerIps);
         NodeDirectory nodeDirectory = new NodeDirectory(
-            workerIps,
+            schedulerNodes,
             config.getSchedulingNodePollIntervalSeconds(),
             config.getSchedulingNodeStaleThresholdSeconds()
         );
@@ -2252,5 +2253,16 @@ public class BuilderTask {
             this.buildPackage = buildPackage;
             this.testPath = testPath;
         }
+    }
+
+    /**
+     * Ensures smart scheduling polls the actual tester port even if the request
+     * only supplied bare IPs (legacy behavior).
+     */
+    private List<String> normalizeTesterNodes(List<String> workerIps) {
+        return workerIps.stream()
+            .map(ip -> ip.contains(":") ? ip : ip + ":" + config.getTesterPort())
+            .distinct()
+            .collect(Collectors.toList());
     }
 }
