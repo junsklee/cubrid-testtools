@@ -116,13 +116,9 @@ public class EnvScriptFactory {
         script.append("if [ -f /root/.cubrid.sh ]; then\n");
         script.append("  . /root/.cubrid.sh\n");
         script.append("fi\n");
-        script.append("CUBRID_HOME=\"$HOME/CUBRID\"\n");
-        script.append("if [ ! -e \"$CUBRID_HOME\" ]; then\n");
-        script.append("  ln -s \"$CUBRID_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || true\n");
-        script.append("fi\n");
-        script.append("export CUBRID=\"$CUBRID_HOME\"\n");
-        script.append("export PATH=\"$CUBRID/bin:" + initPath + ":" + ctpHome + "/bin:" + ctpHome + "/common/script:$PATH\"\n");
-        script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:$CUBRID/lib64:" + ctpHome + "/common/lib:$LD_LIBRARY_PATH\"\n");
+        script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
+        script.append("export PATH=\"$CUBRID/bin:").append(initPath).append(":").append(ctpHome).append("/bin:").append(ctpHome).append("/common/script:$PATH\"\n");
+        script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:$CUBRID/lib64:").append(ctpHome).append("/common/lib:$LD_LIBRARY_PATH\"\n");
         script.append("export CUBRID_LANG=\"en_US\"\n");
         script.append("export CUBRID_CHARSET=\"en_US\"\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
@@ -257,7 +253,7 @@ public class EnvScriptFactory {
 
         script.append("mkdir -p \"$CUBRID_DATABASES\"\n");
         script.append("mkdir -p \"$CUBRID/log/server\"\n");
-        script.append("rm -f \"$CUBRID/log/server/*\" || true\n");
+        script.append("rm -f \"$CUBRID/log/server/\"* || true\n");
         script.append(": > \"$CUBRID_DATABASES/databases.txt\"\n\n");
 
         if (expectedBuildVersion != null && !expectedBuildVersion.isEmpty()) {
@@ -315,17 +311,17 @@ public class EnvScriptFactory {
         script.append("mkdir -p \"$RUNTIME_ROOT\"\n");
         script.append("TEST_RUNTIME_DIR=\"$RUNTIME_ROOT/${SAFE_TEST_NAME}_$(date +%s%N)\"\n");
         script.append("mkdir -p \"$TEST_RUNTIME_DIR/databases\"\n");
-        script.append("if [ -d \"$CUBRID_INSTALL_ROOT/databases\" ]; then\n");
+        script.append("if [ -d \"$CUBRID/databases\" ]; then\n");
         script.append("  if command -v rsync >/dev/null 2>&1; then\n");
-        script.append("    rsync -a --exclude 'databases.txt' \"$CUBRID_INSTALL_ROOT/databases\"/ \"$TEST_RUNTIME_DIR/databases\"/\n");
+        script.append("    rsync -a --exclude 'databases.txt' \"$CUBRID/databases\"/ \"$TEST_RUNTIME_DIR/databases\"/\n");
         script.append("  else\n");
-        script.append("    (cd \"$CUBRID_INSTALL_ROOT/databases\" && tar cpf - --exclude=databases.txt .) | (cd \"$TEST_RUNTIME_DIR/databases\" && tar xpf -)\n");
+        script.append("    (cd \"$CUBRID/databases\" && tar cpf - --exclude=databases.txt .) | (cd \"$TEST_RUNTIME_DIR/databases\" && tar xpf -)\n");
         script.append("  fi\n");
         script.append("fi\n");
         script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
         script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
         script.append("ORIGINAL_TESTCASE_DIR=\"$TESTCASE_DIR\"\n");
-        script.append("ORIGINAL_DB_DIR=\"$CUBRID_INSTALL_ROOT/databases\"\n");
+        script.append("ORIGINAL_DB_DIR=\"$CUBRID/databases\"\n");
         script.append("MOUNT_MODE=\"\"\n");
         script.append("DB_BIND_ACTIVE=0\n");
         script.append("OVERLAY_ERROR_LOG=/tmp/overlay_setup.err\n");
@@ -407,10 +403,10 @@ public class EnvScriptFactory {
         script.append("bind_runtime_databases\n\n");
 
         script.append("# Ensure configuration backups exist for restoration\n");
-        script.append("for conf_file in $CUBRID_INSTALL_ROOT/conf/cubrid.conf \\\n");
-        script.append("  $CUBRID_INSTALL_ROOT/conf/cubrid_broker.conf \\\n");
-        script.append("  $CUBRID_INSTALL_ROOT/conf/cubrid_gateway.conf \\\n");
-        script.append("  $CUBRID_INSTALL_ROOT/conf/cubrid_ha.conf; do\n");
+        script.append("for conf_file in $CUBRID/conf/cubrid.conf \\\n");
+        script.append("  $CUBRID/conf/cubrid_broker.conf \\\n");
+        script.append("  $CUBRID/conf/cubrid_gateway.conf \\\n");
+        script.append("  $CUBRID/conf/cubrid_ha.conf; do\n");
         script.append("  if [ -f \"$conf_file\" ] && [ ! -f \"$conf_file.org\" ]; then\n");
         script.append("    cp \"$conf_file\" \"$conf_file.org\"\n");
         script.append("  fi\n");
@@ -418,7 +414,10 @@ public class EnvScriptFactory {
 
         script.append("# Verify CUBRID installation\n");
         script.append("echo \"Verifying CUBRID installation...\"\n");
-        script.append("cubrid_rel\n\n");
+        script.append("if ! cubrid_rel; then\n");
+        script.append("    echo \"ERROR: CUBRID verification failed\"\n");
+        script.append("    exit 1\n");
+        script.append("fi\n\n");
 
         if (expectedBuildVersion != null && !expectedBuildVersion.isEmpty()) {
             script.append("# Verify expected build version\n");
@@ -436,8 +435,8 @@ public class EnvScriptFactory {
         script.append("fi\n");
         script.append("mkdir -p \"$CUBRID_DATABASES\"\n");
         script.append(": > \"$CUBRID_DATABASES/databases.txt\"\n");
-        script.append("if [ ! -f \"$CUBRID_DATABASES/databases.txt.sample\" ] && [ -f \"$CUBRID_INSTALL_ROOT/databases/databases.txt.sample\" ]; then\n");
-        script.append("  cp \"$CUBRID_INSTALL_ROOT/databases/databases.txt.sample\" \"$CUBRID_DATABASES/databases.txt.sample\"\n");
+        script.append("if [ ! -f \"$CUBRID_DATABASES/databases.txt.sample\" ] && [ -f \"$CUBRID/databases/databases.txt.sample\" ]; then\n");
+        script.append("  cp \"$CUBRID/databases/databases.txt.sample\" \"$CUBRID_DATABASES/databases.txt.sample\"\n");
         script.append("fi\n\n");
 
         appendRunAndCopyResult(script, testScript);
@@ -468,18 +467,15 @@ public class EnvScriptFactory {
 
     private static void appendPreinstalledCubridEnv(StringBuilder script, String initPath, String ctpHome) {
         script.append("CUBRID_INSTALL_ROOT=\"/opt/cubrid\"\n");
-        script.append("CUBRID_HOME=\"$HOME/CUBRID\"\n");
-        script.append("if [ ! -e \"$CUBRID_HOME\" ] && [ -d \"$CUBRID_INSTALL_ROOT\" ]; then\n");
-        script.append("  ln -s \"$CUBRID_INSTALL_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || true\n");
-        script.append("fi\n");
-        script.append("export CUBRID=\"$CUBRID_HOME\"\n");
+        script.append("export CUBRID=\"$CUBRID_INSTALL_ROOT\"\n");
         script.append("export SHELL=/bin/bash\n");
         script.append("export PATH=\"$CUBRID/bin:").append(initPath).append(":").append(ctpHome).append("/bin:").append(ctpHome).append("/common/script:$PATH\"\n");
-        script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:").append(ctpHome).append("/common/lib:$LD_LIBRARY_PATH\"\n");
+        script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:$CUBRID/lib64:").append(ctpHome).append("/common/lib:$LD_LIBRARY_PATH\"\n");
         script.append("export CUBRID_LANG=en_US\n");
         script.append("export CUBRID_CHARSET=en_US\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
         script.append("export init_path=\"").append(initPath).append("\"\n");
         script.append("export WORKSPACE=\"/workspace\"\n\n");
+
     }
 }
