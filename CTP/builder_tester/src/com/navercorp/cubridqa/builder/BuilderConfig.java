@@ -711,6 +711,26 @@ public class BuilderConfig {
         return Math.max(1, value);
     }
     
+    /**
+     * Gets a long value from configuration with a default fallback.
+     *
+     * @param key The configuration key
+     * @param defaultValue The default value if key is not found or invalid
+     * @return The configured long value or default
+     */
+    public long getLongOrDefault(String key, long defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid long value for key '" + key + "': " + value + ". Using default: " + defaultValue);
+            return defaultValue;
+        }
+    }
+
     @Override
     public String toString() {
         return "BuilderConfig{" +

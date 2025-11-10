@@ -19,6 +19,7 @@ import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
 import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
+import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.File;
@@ -72,6 +73,9 @@ public class Tester {
     private final Object dockerManager; // DockerTesterManager
     private final Object imageBuilder; // DockerImageBuilder
 
+    // Statistics store
+    private final TestStatsStore testStatsStore;
+
     public Tester(Config config) throws IOException {
         this.config = config;
         this.logger = Logger.getLogger(Tester.class.getName());
@@ -124,9 +128,14 @@ public class Tester {
         this.standardDockerExecutor = new StandardDockerExecutor(config, buildCache, shellTcSync);
         this.optimizedDockerExecutor = new OptimizedDockerExecutor(config, buildCache, shellTcSync, imageBuilder);
         
-        Path observationWalPath = Paths.get(config.getWorkDir()).resolve("profiles").resolve("test_stats.jl.gz");
+        Path profilesDir = Paths.get(config.getWorkDir()).resolve("profiles");
+        Path observationWalPath = profilesDir.resolve("test_stats.jl.gz");
         TestObservationWriter observationWriter = new TestObservationWriter(observationWalPath, logger);
-        
+
+        // Initialize TestStatsStore for prediction and scheduling
+        long snapshotIntervalSeconds = config.getLongOrDefault("stats.snapshot_interval_seconds", 300L);
+        this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds);
+
         // Create orchestrator
         this.testOrchestrator = new TestOrchestrator(
             config, 
@@ -177,6 +186,10 @@ public class Tester {
     }
     
     public void start() {
+        // Start TestStatsStore (loads snapshot and starts periodic snapshot writer)
+        testStatsStore.start();
+        logger.info("TestStatsStore started");
+
         server.start();
         logger.info("Tester started on port " + config.getTesterPort());
         logger.info("Work directory: " + config.getWorkDir());
@@ -187,8 +200,17 @@ public class Tester {
     }
     
     public void stop() {
+        // Stop TestStatsStore (writes final snapshot)
+        testStatsStore.stop();
+        logger.info("TestStatsStore stopped");
+
         server.stop(0);
         logger.info("Tester stopped");
+    }
+
+    // Expose TestStatsStore for handlers (e.g., ScoreHandler)
+    public TestStatsStore getTestStatsStore() {
+        return testStatsStore;
     }
     
     // Main method for standalone execution (maintains original behavior)

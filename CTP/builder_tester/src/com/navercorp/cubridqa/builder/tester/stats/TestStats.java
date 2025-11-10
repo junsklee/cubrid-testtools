@@ -1,0 +1,290 @@
+package com.navercorp.cubridqa.builder.tester.stats;
+
+import org.json.JSONObject;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * Aggregated statistics for a single test key, maintained in-memory and
+ * periodically snapshotted to disk.
+ *
+ * <p>This class accumulates observations from the WAL and computes summary
+ * statistics (EWMA, percentiles, averages) used by the predictor.</p>
+ *
+ * <p>Mutable for incremental updates but thread-safety must be ensured by
+ * the caller (typically TestStatsStore).</p>
+ */
+public class TestStats {
+
+    private static final double EWMA_ALPHA = 0.3; // weight for new observations
+    private static final int MAX_WINDOW_SIZE = 100; // for percentile computation
+
+    private final String testKey;
+    private int observationCount;
+    private Instant lastUpdated;
+
+    // Duration stats
+    private double durationEwmaMs;
+    private final List<Long> durationWindow; // for P50, P95
+
+    // Resource stats (averages)
+    private double avgCpuPctMean;
+    private double avgCpuPctPeak;
+    private double avgMemMbMean;
+    private double avgMemMbPeak;
+    private double avgIoMbPerSecMean;
+    private double avgIopsMean;
+    private double avgNetMbPerSecMean;
+
+    // Resource percentiles (P95)
+    private final List<Double> cpuPeakWindow;
+    private final List<Double> memPeakWindow;
+
+    // Flakiness metrics
+    private int failCount;
+    private int passCount;
+    private int totalAttempts;
+
+    // Cache hit ratios
+    private int dockerImageCachedCount;
+    private int packageCachedCount;
+
+    public TestStats(String testKey) {
+        this.testKey = Objects.requireNonNull(testKey, "testKey");
+        this.observationCount = 0;
+        this.lastUpdated = Instant.EPOCH;
+        this.durationEwmaMs = 0.0;
+        this.durationWindow = new ArrayList<>();
+        this.avgCpuPctMean = 0.0;
+        this.avgCpuPctPeak = 0.0;
+        this.avgMemMbMean = 0.0;
+        this.avgMemMbPeak = 0.0;
+        this.avgIoMbPerSecMean = 0.0;
+        this.avgIopsMean = 0.0;
+        this.avgNetMbPerSecMean = 0.0;
+        this.cpuPeakWindow = new ArrayList<>();
+        this.memPeakWindow = new ArrayList<>();
+        this.failCount = 0;
+        this.passCount = 0;
+        this.totalAttempts = 0;
+        this.dockerImageCachedCount = 0;
+        this.packageCachedCount = 0;
+    }
+
+    /**
+     * Updates statistics with a new observation.
+     */
+    public void addObservation(TestObservation obs) {
+        observationCount++;
+        lastUpdated = obs.getTimestamp();
+
+        // Update duration EWMA and window
+        long durMs = obs.getDurationMs();
+        if (durationEwmaMs == 0.0) {
+            durationEwmaMs = durMs;
+        } else {
+            durationEwmaMs = EWMA_ALPHA * durMs + (1.0 - EWMA_ALPHA) * durationEwmaMs;
+        }
+        addToWindow(durationWindow, durMs);
+
+        // Update resource averages (incremental mean)
+        avgCpuPctMean = updateAverage(avgCpuPctMean, obs.getCpuPctMean());
+        avgCpuPctPeak = updateAverage(avgCpuPctPeak, obs.getCpuPctPeak());
+        avgMemMbMean = updateAverage(avgMemMbMean, obs.getMemMbMean());
+        avgMemMbPeak = updateAverage(avgMemMbPeak, obs.getMemMbPeak());
+        avgIoMbPerSecMean = updateAverage(avgIoMbPerSecMean, obs.getIoMbPerSecMean());
+        avgIopsMean = updateAverage(avgIopsMean, obs.getIopsMean());
+        avgNetMbPerSecMean = updateAverage(avgNetMbPerSecMean, obs.getNetMbPerSecMean());
+
+        // Update resource windows for percentiles
+        addToWindow(cpuPeakWindow, obs.getCpuPctPeak());
+        addToWindow(memPeakWindow, obs.getMemMbPeak());
+
+        // Update flakiness metrics
+        totalAttempts += obs.getAttempts();
+        if ("pass".equalsIgnoreCase(obs.getStatus())) {
+            passCount++;
+        } else if ("fail".equalsIgnoreCase(obs.getStatus())) {
+            failCount++;
+        }
+
+        // Update cache hit counts
+        if (obs.isDockerImageCached()) {
+            dockerImageCachedCount++;
+        }
+        if (obs.isPackageCached()) {
+            packageCachedCount++;
+        }
+    }
+
+    private double updateAverage(double currentAvg, double newValue) {
+        if (newValue < 0.0) {
+            return currentAvg; // ignore unknown/sentinel values
+        }
+        if (observationCount == 1) {
+            return newValue;
+        }
+        return ((observationCount - 1) * currentAvg + newValue) / observationCount;
+    }
+
+    private <T extends Number> void addToWindow(List<T> window, T value) {
+        window.add(value);
+        if (window.size() > MAX_WINDOW_SIZE) {
+            window.remove(0); // FIFO eviction
+        }
+    }
+
+    // Getters
+
+    public String getTestKey() {
+        return testKey;
+    }
+
+    public int getObservationCount() {
+        return observationCount;
+    }
+
+    public Instant getLastUpdated() {
+        return lastUpdated;
+    }
+
+    public double getDurationEwmaMs() {
+        return durationEwmaMs;
+    }
+
+    public double getDurationP50Ms() {
+        return percentile(durationWindow, 50);
+    }
+
+    public double getDurationP95Ms() {
+        return percentile(durationWindow, 95);
+    }
+
+    public double getAvgCpuPctMean() {
+        return avgCpuPctMean;
+    }
+
+    public double getAvgCpuPctPeak() {
+        return avgCpuPctPeak;
+    }
+
+    public double getCpuPctP95() {
+        return percentile(cpuPeakWindow, 95);
+    }
+
+    public double getAvgMemMbMean() {
+        return avgMemMbMean;
+    }
+
+    public double getAvgMemMbPeak() {
+        return avgMemMbPeak;
+    }
+
+    public double getMemMbP95() {
+        return percentile(memPeakWindow, 95);
+    }
+
+    public double getAvgIoMbPerSecMean() {
+        return avgIoMbPerSecMean;
+    }
+
+    public double getAvgIopsMean() {
+        return avgIopsMean;
+    }
+
+    public double getAvgNetMbPerSecMean() {
+        return avgNetMbPerSecMean;
+    }
+
+    public double getFailRate() {
+        int total = passCount + failCount;
+        return total == 0 ? 0.0 : (double) failCount / total;
+    }
+
+    public double getRetryMean() {
+        return observationCount == 0 ? 0.0 : (double) totalAttempts / observationCount;
+    }
+
+    public double getDockerImageCacheHitRatio() {
+        return observationCount == 0 ? 0.0 : (double) dockerImageCachedCount / observationCount;
+    }
+
+    public double getPackageCacheHitRatio() {
+        return observationCount == 0 ? 0.0 : (double) packageCachedCount / observationCount;
+    }
+
+    /**
+     * Computes the given percentile from a window of values.
+     * Returns 0.0 if window is empty.
+     */
+    private <T extends Number> double percentile(List<T> window, int p) {
+        if (window.isEmpty()) {
+            return 0.0;
+        }
+        List<Double> sorted = new ArrayList<>();
+        for (T val : window) {
+            if (val.doubleValue() >= 0.0) {
+                sorted.add(val.doubleValue());
+            }
+        }
+        if (sorted.isEmpty()) {
+            return 0.0;
+        }
+        Collections.sort(sorted);
+        int index = (int) Math.ceil(p / 100.0 * sorted.size()) - 1;
+        index = Math.max(0, Math.min(index, sorted.size() - 1));
+        return sorted.get(index);
+    }
+
+    /**
+     * Serializes to JSON for snapshot persistence.
+     */
+    public JSONObject toJSON() {
+        JSONObject obj = new JSONObject();
+        obj.put("testKey", testKey);
+        obj.put("observationCount", observationCount);
+        obj.put("lastUpdated", lastUpdated.toString());
+        obj.put("durationEwmaMs", durationEwmaMs);
+        obj.put("avgCpuPctMean", avgCpuPctMean);
+        obj.put("avgCpuPctPeak", avgCpuPctPeak);
+        obj.put("avgMemMbMean", avgMemMbMean);
+        obj.put("avgMemMbPeak", avgMemMbPeak);
+        obj.put("avgIoMbPerSecMean", avgIoMbPerSecMean);
+        obj.put("avgIopsMean", avgIopsMean);
+        obj.put("avgNetMbPerSecMean", avgNetMbPerSecMean);
+        obj.put("failCount", failCount);
+        obj.put("passCount", passCount);
+        obj.put("totalAttempts", totalAttempts);
+        obj.put("dockerImageCachedCount", dockerImageCachedCount);
+        obj.put("packageCachedCount", packageCachedCount);
+        return obj;
+    }
+
+    /**
+     * Reconstructs from JSON snapshot.
+     */
+    public static TestStats fromJSON(JSONObject obj) {
+        String testKey = obj.getString("testKey");
+        TestStats stats = new TestStats(testKey);
+        stats.observationCount = obj.getInt("observationCount");
+        stats.lastUpdated = Instant.parse(obj.getString("lastUpdated"));
+        stats.durationEwmaMs = obj.getDouble("durationEwmaMs");
+        stats.avgCpuPctMean = obj.getDouble("avgCpuPctMean");
+        stats.avgCpuPctPeak = obj.getDouble("avgCpuPctPeak");
+        stats.avgMemMbMean = obj.getDouble("avgMemMbMean");
+        stats.avgMemMbPeak = obj.getDouble("avgMemMbPeak");
+        stats.avgIoMbPerSecMean = obj.getDouble("avgIoMbPerSecMean");
+        stats.avgIopsMean = obj.getDouble("avgIopsMean");
+        stats.avgNetMbPerSecMean = obj.getDouble("avgNetMbPerSecMean");
+        stats.failCount = obj.getInt("failCount");
+        stats.passCount = obj.getInt("passCount");
+        stats.totalAttempts = obj.getInt("totalAttempts");
+        stats.dockerImageCachedCount = obj.getInt("dockerImageCachedCount");
+        stats.packageCachedCount = obj.getInt("packageCachedCount");
+        return stats;
+    }
+}

@@ -225,6 +225,87 @@ public final class TestObservation {
         return json.toString();
     }
 
+    /**
+     * Deserializes a TestObservation from a JSON object (for WAL replay).
+     */
+    public static TestObservation fromJSON(JSONObject json) {
+        Builder builder = builder();
+
+        if (json.has("v")) {
+            // Version field exists but we don't use it for now
+        }
+        if (json.has("ts")) {
+            builder.timestamp(Instant.parse(json.getString("ts")));
+        }
+        builder.testKey(json.getString("testKey"));
+
+        if (json.has("commit")) {
+            builder.commit(json.getString("commit"));
+        }
+        if (json.has("baseline")) {
+            builder.baseline(json.getString("baseline"));
+        }
+        if (json.has("executor")) {
+            builder.executor(json.getString("executor"));
+        }
+        if (json.has("imageTag")) {
+            builder.imageTag(json.getString("imageTag"));
+        }
+        if (json.has("buildPackage")) {
+            builder.buildPackage(json.getString("buildPackage"));
+        }
+        if (json.has("status")) {
+            builder.status(json.getString("status"));
+        }
+        if (json.has("attempts")) {
+            builder.attempts(json.getInt("attempts"));
+        }
+        if (json.has("duration_ms")) {
+            builder.durationMs(json.getLong("duration_ms"));
+        }
+        if (json.has("cpu_pct_mean")) {
+            builder.cpuPctMean(json.getDouble("cpu_pct_mean"));
+        }
+        if (json.has("cpu_pct_peak")) {
+            builder.cpuPctPeak(json.getDouble("cpu_pct_peak"));
+        }
+        if (json.has("mem_mb_mean")) {
+            builder.memMbMean(json.getDouble("mem_mb_mean"));
+        }
+        if (json.has("mem_mb_peak")) {
+            builder.memMbPeak(json.getDouble("mem_mb_peak"));
+        }
+        if (json.has("io_mb_s_mean")) {
+            builder.ioMbPerSecMean(json.getDouble("io_mb_s_mean"));
+        }
+        if (json.has("iops_mean")) {
+            builder.iopsMean(json.getDouble("iops_mean"));
+        }
+        if (json.has("net_mb_s_mean")) {
+            builder.netMbPerSecMean(json.getDouble("net_mb_s_mean"));
+        }
+        if (json.has("bytes_read_mb")) {
+            builder.bytesReadMb(json.getLong("bytes_read_mb"));
+        }
+        if (json.has("bytes_write_mb")) {
+            builder.bytesWriteMb(json.getLong("bytes_write_mb"));
+        }
+        if (json.has("docker_image_cached")) {
+            builder.dockerImageCached(json.getBoolean("docker_image_cached"));
+        }
+        if (json.has("package_cached")) {
+            builder.packageCached(json.getBoolean("package_cached"));
+        }
+        if (json.has("log_size_kb")) {
+            builder.logSizeKb(json.getLong("log_size_kb"));
+        }
+        if (json.has("metrics_complete")) {
+            builder.metricsComplete(json.getBoolean("metrics_complete"));
+        }
+
+        return builder.build();
+    }
+
     public static Builder builder() {
         return new Builder();
     }
