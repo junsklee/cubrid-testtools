@@ -1,0 +1,399 @@
+package com.navercorp.cubridqa.builder.scheduler;
+
+import org.json.JSONObject;
+import org.json.JSONArray;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
+
+/**
+ * Immutable snapshot of a tester node's state from /health endpoint.
+ *
+ * <p>Used by NodeDirectory to track cluster state. Includes capacity,
+ * utilization, cached artifacts, and health flags.</p>
+ */
+public class NodeSnapshot {
+
+    private final String nodeId;
+    private final Instant timestamp;
+    private final String status;
+
+    // Concurrency
+    private final int maxConcurrentTests;
+    private final int runningTests;
+    private final int queuedTests;
+
+    // Capacity
+    private final double cpuPct;
+    private final double memMb;
+    private final double ioMbPerSec;
+    private final double iops;
+    private final double netMbPerSec;
+
+    // Utilization (current usage)
+    private final double usedCpuPct;
+    private final double usedMemMb;
+    private final double usedIoMbPerSec;
+    private final double usedIops;
+    private final double usedNetMbPerSec;
+
+    // Cached artifacts
+    private final Set<String> cachedImages;
+    private final Set<String> cachedPackages;
+
+    // Health flags
+    private final boolean degraded;
+    private final boolean diskPressure;
+
+    private NodeSnapshot(Builder builder) {
+        this.nodeId = builder.nodeId;
+        this.timestamp = builder.timestamp;
+        this.status = builder.status;
+        this.maxConcurrentTests = builder.maxConcurrentTests;
+        this.runningTests = builder.runningTests;
+        this.queuedTests = builder.queuedTests;
+        this.cpuPct = builder.cpuPct;
+        this.memMb = builder.memMb;
+        this.ioMbPerSec = builder.ioMbPerSec;
+        this.iops = builder.iops;
+        this.netMbPerSec = builder.netMbPerSec;
+        this.usedCpuPct = builder.usedCpuPct;
+        this.usedMemMb = builder.usedMemMb;
+        this.usedIoMbPerSec = builder.usedIoMbPerSec;
+        this.usedIops = builder.usedIops;
+        this.usedNetMbPerSec = builder.usedNetMbPerSec;
+        this.cachedImages = Collections.unmodifiableSet(new HashSet<>(builder.cachedImages));
+        this.cachedPackages = Collections.unmodifiableSet(new HashSet<>(builder.cachedPackages));
+        this.degraded = builder.degraded;
+        this.diskPressure = builder.diskPressure;
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Parses NodeSnapshot from /health JSON response.
+     */
+    public static NodeSnapshot fromJSON(JSONObject json) {
+        Builder builder = builder();
+
+        if (json.has("nodeId")) {
+            builder.nodeId(json.getString("nodeId"));
+        }
+        if (json.has("ts")) {
+            builder.timestamp(Instant.parse(json.getString("ts")));
+        }
+        if (json.has("status")) {
+            builder.status(json.getString("status"));
+        }
+
+        // Concurrency
+        if (json.has("concurrency")) {
+            JSONObject concurrency = json.getJSONObject("concurrency");
+            builder.maxConcurrentTests(concurrency.optInt("max", 1));
+            builder.runningTests(concurrency.optInt("running", 0));
+            builder.queuedTests(concurrency.optInt("queued", 0));
+        }
+
+        // Capacity
+        if (json.has("capacity")) {
+            JSONObject capacity = json.getJSONObject("capacity");
+            builder.cpuPct(capacity.optDouble("cpu_pct", 0.0));
+            builder.memMb(capacity.optDouble("mem_mb", 0.0));
+            builder.ioMbPerSec(capacity.optDouble("io_mb_s", 0.0));
+            builder.iops(capacity.optDouble("iops", 0.0));
+            builder.netMbPerSec(capacity.optDouble("net_mb_s", 0.0));
+        }
+
+        // Utilization
+        if (json.has("utilization")) {
+            JSONObject utilization = json.getJSONObject("utilization");
+            builder.usedCpuPct(utilization.optDouble("cpu_pct", 0.0));
+            builder.usedMemMb(utilization.optDouble("mem_mb", 0.0));
+            builder.usedIoMbPerSec(utilization.optDouble("io_mb_s", 0.0));
+            builder.usedIops(utilization.optDouble("iops", 0.0));
+            builder.usedNetMbPerSec(utilization.optDouble("net_mb_s", 0.0));
+        }
+
+        // Images
+        if (json.has("images")) {
+            JSONObject images = json.getJSONObject("images");
+            if (images.has("present")) {
+                JSONArray present = images.getJSONArray("present");
+                for (int i = 0; i < present.length(); i++) {
+                    builder.addCachedImage(present.getString(i));
+                }
+            }
+        }
+
+        // Packages
+        if (json.has("packages")) {
+            JSONObject packages = json.getJSONObject("packages");
+            if (packages.has("present")) {
+                JSONArray present = packages.getJSONArray("present");
+                for (int i = 0; i < present.length(); i++) {
+                    builder.addCachedPackage(present.getString(i));
+                }
+            }
+        }
+
+        // Flags
+        if (json.has("flags")) {
+            JSONObject flags = json.getJSONObject("flags");
+            builder.degraded(flags.optBoolean("degraded", false));
+            builder.diskPressure(flags.optBoolean("disk_pressure", false));
+        }
+
+        return builder.build();
+    }
+
+    // Getters
+
+    public String getNodeId() {
+        return nodeId;
+    }
+
+    public Instant getTimestamp() {
+        return timestamp;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public int getMaxConcurrentTests() {
+        return maxConcurrentTests;
+    }
+
+    public int getRunningTests() {
+        return runningTests;
+    }
+
+    public int getQueuedTests() {
+        return queuedTests;
+    }
+
+    public double getCpuPct() {
+        return cpuPct;
+    }
+
+    public double getMemMb() {
+        return memMb;
+    }
+
+    public double getIoMbPerSec() {
+        return ioMbPerSec;
+    }
+
+    public double getIops() {
+        return iops;
+    }
+
+    public double getNetMbPerSec() {
+        return netMbPerSec;
+    }
+
+    public double getUsedCpuPct() {
+        return usedCpuPct;
+    }
+
+    public double getUsedMemMb() {
+        return usedMemMb;
+    }
+
+    public double getUsedIoMbPerSec() {
+        return usedIoMbPerSec;
+    }
+
+    public double getUsedIops() {
+        return usedIops;
+    }
+
+    public double getUsedNetMbPerSec() {
+        return usedNetMbPerSec;
+    }
+
+    public Set<String> getCachedImages() {
+        return cachedImages;
+    }
+
+    public Set<String> getCachedPackages() {
+        return cachedPackages;
+    }
+
+    public boolean isDegraded() {
+        return degraded;
+    }
+
+    public boolean isDiskPressure() {
+        return diskPressure;
+    }
+
+    /**
+     * Returns available concurrency headroom.
+     */
+    public int getAvailableConcurrency() {
+        return Math.max(0, maxConcurrentTests - runningTests);
+    }
+
+    /**
+     * Returns free capacity for a resource dimension.
+     */
+    public double getFreeCpuPct() {
+        return Math.max(0.0, cpuPct - usedCpuPct);
+    }
+
+    public double getFreeMemMb() {
+        return Math.max(0.0, memMb - usedMemMb);
+    }
+
+    public double getFreeIoMbPerSec() {
+        return Math.max(0.0, ioMbPerSec - usedIoMbPerSec);
+    }
+
+    public double getFreeIops() {
+        return Math.max(0.0, iops - usedIops);
+    }
+
+    public double getFreeNetMbPerSec() {
+        return Math.max(0.0, netMbPerSec - usedNetMbPerSec);
+    }
+
+    @Override
+    public String toString() {
+        return "NodeSnapshot{nodeId=" + nodeId + ", running=" + runningTests + "/" + maxConcurrentTests + ", status=" + status + "}";
+    }
+
+    public static final class Builder {
+        private String nodeId = "unknown";
+        private Instant timestamp = Instant.now();
+        private String status = "unknown";
+        private int maxConcurrentTests = 1;
+        private int runningTests = 0;
+        private int queuedTests = 0;
+        private double cpuPct = 0.0;
+        private double memMb = 0.0;
+        private double ioMbPerSec = 0.0;
+        private double iops = 0.0;
+        private double netMbPerSec = 0.0;
+        private double usedCpuPct = 0.0;
+        private double usedMemMb = 0.0;
+        private double usedIoMbPerSec = 0.0;
+        private double usedIops = 0.0;
+        private double usedNetMbPerSec = 0.0;
+        private Set<String> cachedImages = new HashSet<>();
+        private Set<String> cachedPackages = new HashSet<>();
+        private boolean degraded = false;
+        private boolean diskPressure = false;
+
+        private Builder() {
+        }
+
+        public Builder nodeId(String val) {
+            this.nodeId = val;
+            return this;
+        }
+
+        public Builder timestamp(Instant val) {
+            this.timestamp = val;
+            return this;
+        }
+
+        public Builder status(String val) {
+            this.status = val;
+            return this;
+        }
+
+        public Builder maxConcurrentTests(int val) {
+            this.maxConcurrentTests = val;
+            return this;
+        }
+
+        public Builder runningTests(int val) {
+            this.runningTests = val;
+            return this;
+        }
+
+        public Builder queuedTests(int val) {
+            this.queuedTests = val;
+            return this;
+        }
+
+        public Builder cpuPct(double val) {
+            this.cpuPct = val;
+            return this;
+        }
+
+        public Builder memMb(double val) {
+            this.memMb = val;
+            return this;
+        }
+
+        public Builder ioMbPerSec(double val) {
+            this.ioMbPerSec = val;
+            return this;
+        }
+
+        public Builder iops(double val) {
+            this.iops = val;
+            return this;
+        }
+
+        public Builder netMbPerSec(double val) {
+            this.netMbPerSec = val;
+            return this;
+        }
+
+        public Builder usedCpuPct(double val) {
+            this.usedCpuPct = val;
+            return this;
+        }
+
+        public Builder usedMemMb(double val) {
+            this.usedMemMb = val;
+            return this;
+        }
+
+        public Builder usedIoMbPerSec(double val) {
+            this.usedIoMbPerSec = val;
+            return this;
+        }
+
+        public Builder usedIops(double val) {
+            this.usedIops = val;
+            return this;
+        }
+
+        public Builder usedNetMbPerSec(double val) {
+            this.usedNetMbPerSec = val;
+            return this;
+        }
+
+        public Builder addCachedImage(String image) {
+            this.cachedImages.add(image);
+            return this;
+        }
+
+        public Builder addCachedPackage(String pkg) {
+            this.cachedPackages.add(pkg);
+            return this;
+        }
+
+        public Builder degraded(boolean val) {
+            this.degraded = val;
+            return this;
+        }
+
+        public Builder diskPressure(boolean val) {
+            this.diskPressure = val;
+            return this;
+        }
+
+        public NodeSnapshot build() {
+            return new NodeSnapshot(this);
+        }
+    }
+}
