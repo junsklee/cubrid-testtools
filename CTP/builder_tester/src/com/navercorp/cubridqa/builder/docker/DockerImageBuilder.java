@@ -29,6 +29,7 @@ public class DockerImageBuilder {
     private final Map<String, Long> imageBuildTime = new ConcurrentHashMap<>();
     private final int maxCachedImages;
     private final Object buildLock = new Object();
+    private final ThreadLocal<Boolean> lastOperationCacheHit = ThreadLocal.withInitial(() -> Boolean.FALSE);
     
     public DockerImageBuilder(BuilderConfig config) {
         this.config = config;
@@ -51,11 +52,13 @@ public class DockerImageBuilder {
     public String getOrBuildImage(String commitHash, String baselineHash, Path buildPackage) throws IOException {
         String imageKey = commitHash + "_" + baselineHash;
         String imageName = "cubrid-test:" + imageKey;
+        lastOperationCacheHit.set(Boolean.FALSE);
         
         // Check if image already exists
         if (imageExists(imageName)) {
             logger.info("Using existing Docker image: " + imageName);
             updateCacheEntry(imageKey, imageName);
+            lastOperationCacheHit.set(Boolean.TRUE);
             return imageName;
         }
         
@@ -64,11 +67,13 @@ public class DockerImageBuilder {
             // Double-check after acquiring lock
             if (imageExists(imageName)) {
                 updateCacheEntry(imageKey, imageName);
+                lastOperationCacheHit.set(Boolean.TRUE);
                 return imageName;
             }
             
             logger.info("Building Docker image for commit " + commitHash + " on baseline " + baselineHash);
             buildImageFromPackage(imageKey, buildPackage);
+            lastOperationCacheHit.set(Boolean.FALSE);
             
             // Clean old images if needed
             if (imageCache.size() > maxCachedImages) {
@@ -482,5 +487,9 @@ public class DockerImageBuilder {
         stats.put("total_image_size_mb", totalSize / (1024 * 1024));
         
         return stats;
+    }
+
+    public boolean wasLastOperationCacheHit() {
+        return Boolean.TRUE.equals(lastOperationCacheHit.get());
     }
 }

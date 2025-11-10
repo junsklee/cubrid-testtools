@@ -9,6 +9,7 @@ import com.navercorp.cubridqa.builder.tester.SafeIo;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
+import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -34,6 +35,11 @@ public class StandardDockerExecutor implements ExecutorStrategy {
     @Override
     public TestResult execute(TestRequest request, Path workDir, Logger testLogger) throws Exception {
         testLogger.info("Running test in Docker container...");
+        long startNs = System.nanoTime();
+        TestExecutionMetrics.Builder metricsBuilder = TestExecutionMetrics.builder()
+            .buildPackageName(request.getBuildPackage())
+            .dockerImageCached(false)
+            .metricsComplete(false);
         
         boolean keepAlive = request.isKeepAlive();
         String containerName = request.getContainerName();
@@ -62,20 +68,26 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 "unknown", 
                 testLogger
             );
+            metricsBuilder.packageCached(buildCache.wasLastFetchFromCache());
+            if (localBuildPackage != null) {
+                metricsBuilder.buildPackageName(localBuildPackage.getFileName().toString());
+            }
         } catch (Exception e) {
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Failed to download build package: " + e.getMessage())
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message("Failed to download build package: " + e.getMessage()),
+                metricsBuilder, startNs, "docker", null);
         }
         
         if (localBuildPackage == null || !Files.exists(localBuildPackage)) {
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Downloaded build package missing: " + String.valueOf(localBuildPackage))
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message("Downloaded build package missing: " + String.valueOf(localBuildPackage)),
+                metricsBuilder, startNs, "docker", null);
         }
 
         // Ensure shell testcases repository is on the requested branch from preferred remote
@@ -91,11 +103,12 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             try {
                 Files.copy(localBuildPackage, dockerBuildPackage, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
-                return TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message("Failed to stage build package for Docker: " + e.getMessage())
-                    .build();
+                return finalizeResult(
+                    TestResult.builder()
+                        .testName(request.getTestName())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message("Failed to stage build package for Docker: " + e.getMessage()),
+                    metricsBuilder, startNs, "docker", null);
             }
         }
         
@@ -104,18 +117,20 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         try {
             sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
         } catch (IllegalArgumentException e) {
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message(e.getMessage())
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message(e.getMessage()),
+                metricsBuilder, startNs, "docker", null);
         }
         if (!Files.isReadable(sourceTestDir)) {
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Permission denied reading test directory: " + sourceTestDir)
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message("Permission denied reading test directory: " + sourceTestDir),
+                metricsBuilder, startNs, "docker", null);
         }
         String relativeTestDir = computeRelativeTestDir(shellRepoRoot, sourceTestDir, testLogger);
         testLogger.info("Using test directory: " + sourceTestDir + " (relative: " + (relativeTestDir.isEmpty() ? "." : relativeTestDir) + ")");
@@ -148,11 +163,12 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         String githubToken = System.getenv("GITHUB_TOKEN");
         if (githubToken == null || githubToken.trim().isEmpty()) {
             testLogger.severe("GITHUB_TOKEN not set");
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("GITHUB_TOKEN environment variable not configured")
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message("GITHUB_TOKEN environment variable not configured"),
+                metricsBuilder, startNs, "docker", null);
         }
         
         // Run Docker container
@@ -209,6 +225,10 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         ProcessBuilder pb = new ProcessBuilder(dockerCommand);
         pb.redirectErrorStream(true);
         Process process = pb.start();
+        DockerStatsCollector statsCollector = keepAlive ? null : new DockerStatsCollector(containerName, testLogger);
+        if (statsCollector != null) {
+            statsCollector.start();
+        }
         
         if (keepAlive) {
             try { Files.createFile(workDir.resolve("KEEP_WORKSPACE")); } catch (Exception ignore) {}
@@ -224,14 +244,16 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             String execCmd = "docker exec -it " + containerName + " bash";
             
             // Return special "started" status for keep-alive containers
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.PASS) // Special handling needed for keep-alive
-                .message("started")
-                .containerName(containerName)
-                .execCommand(execCmd)
-                .workspace(dockerWorkDir.toString())
-                .build();
+            DockerStatsCollector.StatsSummary summary = stopCollector(statsCollector);
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.PASS) // Special handling needed for keep-alive
+                    .message("started")
+                    .containerName(containerName)
+                    .execCommand(execCmd)
+                    .workspace(dockerWorkDir.toString()),
+                metricsBuilder, startNs, "docker", summary);
         }
         
         ProcessIO.StreamReader outputGobbler = new ProcessIO.StreamReader(process.getInputStream(), "DOCKER");
@@ -243,16 +265,19 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             testLogger.severe("Docker test timeout");
             // Attempt to stop and remove the container if it's still running
             DockerCtl.safeKillAndRemove(containerName, testLogger);
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.EXECUTION_ERROR)
-                .message("Docker test timeout after " + timeoutMinutes + " minutes")
-                .build();
+            DockerStatsCollector.StatsSummary summary = stopCollector(statsCollector);
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.EXECUTION_ERROR)
+                    .message("Docker test timeout after " + timeoutMinutes + " minutes"),
+                metricsBuilder, startNs, "docker", summary);
         }
         int exitCode = process.exitValue();
         outputGobbler.join(2000);
         String dockerOutput = outputGobbler.getOutput();
         testLogger.info("Docker test completed with exit code: " + exitCode);
+        DockerStatsCollector.StatsSummary statsSummary = stopCollector(statsCollector);
 
         // Persist full docker output for diagnostics
         Path logFilePath = null;
@@ -274,6 +299,9 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 logFilePath = requestTestsDir.resolve(logFileName);
                 Files.write(logFilePath, dockerOutput.getBytes("UTF-8"));
                 testLogger.info("Saved full docker test log to: " + logFilePath);
+            try {
+                metricsBuilder.logSizeBytes(Files.size(logFilePath));
+            } catch (Exception ignore) { }
             }
         } catch (Exception ignore) {
             // Swallow logging persistence issues; primary result below still returned
@@ -350,7 +378,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                        .message("Could not determine test result");
             }
              
-             return resultBuilder.build();
+             return finalizeResult(resultBuilder, metricsBuilder, startNs, "docker", statsSummary);
         }
 
         // Check for Docker-specific errors
@@ -381,28 +409,30 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 testLogger.info("Failure container kept for debugging: " + containerName);
                 String execCmd = "docker exec -it " + containerName + " bash";
                 
-                return TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.EXECUTION_ERROR)
-                    .message("Docker test execution failed; container kept for debugging")
-                    .commit(request.getCommit() != null ? request.getCommit() : "unknown")
-                    .commitShort(request.getCommitShort())
-                    .containerName(containerName)
-                    .execCommand(execCmd)
-                    .workspace(dockerWorkDir.toString())
-                    .timestamp(System.currentTimeMillis())
-                    .build();
+                return finalizeResult(
+                    TestResult.builder()
+                        .testName(request.getTestName())
+                        .status(TestStatus.EXECUTION_ERROR)
+                        .message("Docker test execution failed; container kept for debugging")
+                        .commit(request.getCommit() != null ? request.getCommit() : "unknown")
+                        .commitShort(request.getCommitShort())
+                        .containerName(containerName)
+                        .execCommand(execCmd)
+                        .workspace(dockerWorkDir.toString())
+                        .timestamp(System.currentTimeMillis()),
+                    metricsBuilder, startNs, "docker", statsSummary);
             }
             
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.EXECUTION_ERROR)
-                .message("Docker test execution failed")
-                .commit(request.getCommit() != null ? request.getCommit() : "unknown")
-                .commitShort(request.getCommitShort())
-                .exitCode(exitCode)
-                .timestamp(System.currentTimeMillis())
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.EXECUTION_ERROR)
+                    .message("Docker test execution failed")
+                    .commit(request.getCommit() != null ? request.getCommit() : "unknown")
+                    .commitShort(request.getCommitShort())
+                    .exitCode(exitCode)
+                    .timestamp(System.currentTimeMillis()),
+                metricsBuilder, startNs, "docker", statsSummary);
         }
 
         TestResult.Builder missingResultBuilder = TestResult.builder()
@@ -418,7 +448,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             missingResultBuilder.addAttemptLogFile(logFilePath);
         }
 
-        return missingResultBuilder.build();
+        return finalizeResult(missingResultBuilder, metricsBuilder, startNs, "docker", statsSummary);
     }
     
     private String computeRelativeTestDir(Path repoRoot, Path testDir, Logger logger) {
@@ -474,5 +504,28 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             return matcher.group(1) + "s";
         }
         return null;
+    }
+
+    private TestResult finalizeResult(TestResult.Builder builder, TestExecutionMetrics.Builder metricsBuilder,
+                                      long startNs, String executionMode,
+                                      DockerStatsCollector.StatsSummary statsSummary) {
+        long durationMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs));
+        metricsBuilder.durationMs(durationMs);
+        if (statsSummary != null && statsSummary.hasSamples()) {
+            statsSummary.applyTo(metricsBuilder, durationMs);
+        }
+        TestExecutionMetrics metrics = metricsBuilder.build();
+        builder.executionMetrics(metrics);
+        if (executionMode != null) {
+            builder.executionMode(executionMode);
+        }
+        return builder.build();
+    }
+
+    private DockerStatsCollector.StatsSummary stopCollector(DockerStatsCollector collector) {
+        if (collector == null) {
+            return null;
+        }
+        return collector.stopAndSummarize();
     }
 }

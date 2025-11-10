@@ -5,6 +5,9 @@ import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
 import com.navercorp.cubridqa.builder.config.Config;
+import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
+import com.navercorp.cubridqa.builder.tester.stats.TestObservation;
+import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -14,6 +17,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Instant;
 import java.util.logging.Logger;
 
 public class TestOrchestrator {
@@ -24,11 +28,13 @@ public class TestOrchestrator {
     private final boolean useDocker;
     private final Object dockerManager; // DockerManager - using Object to avoid compile dependency
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
+    private final TestObservationWriter observationWriter;
 
     public TestOrchestrator(Config config, DirectExecutor directExecutor, 
                           StandardDockerExecutor standardDockerExecutor, 
                           OptimizedDockerExecutor optimizedDockerExecutor,
-                          boolean useDocker, Object dockerManager, Object dockerUtils) {
+                          boolean useDocker, Object dockerManager, Object dockerUtils,
+                          TestObservationWriter observationWriter) {
         this.config = config;
         this.directExecutor = directExecutor;
         this.standardDockerExecutor = standardDockerExecutor;
@@ -36,6 +42,7 @@ public class TestOrchestrator {
         this.useDocker = useDocker;
         this.dockerManager = dockerManager;
         this.dockerUtils = dockerUtils;
+        this.observationWriter = observationWriter;
     }
 
     /**
@@ -58,7 +65,7 @@ public class TestOrchestrator {
             if (tb >= 1) timeBudgetMs = tb;
         }
 
-        JSONObject lastResult = null;
+        JSONObject lastResponse = null;
         List<Path> attemptLogFiles = new ArrayList<>();
         JSONArray attemptLogMetadata = new JSONArray();
         long startTime = System.currentTimeMillis();
@@ -79,19 +86,21 @@ public class TestOrchestrator {
             JSONObject requestWithAttempt = new JSONObject(request.toString());
             requestWithAttempt.put("attemptNumber", attempt);
 
-            lastResult = runTest(requestWithAttempt, testLogger);
-            String status = lastResult.optString("status", "");
+            RunOutcome outcome = runTest(requestWithAttempt, testLogger);
+            JSONObject attemptResponse = outcome.response;
+            lastResponse = attemptResponse;
+            String status = attemptResponse.optString("status", "");
 
             // Collect log file metadata
-            if (lastResult.has("logFilePath")) {
-                Path logPath = Paths.get(lastResult.getString("logFilePath"));
+            if (attemptResponse.has("logFilePath")) {
+                Path logPath = Paths.get(attemptResponse.getString("logFilePath"));
                 attemptLogFiles.add(logPath);
                 JSONObject attemptMeta = new JSONObject();
                 attemptMeta.put("attempt", attempt);
-                attemptMeta.put("logFileName", lastResult.optString("logFileName", logPath.getFileName().toString()));
+                attemptMeta.put("logFileName", attemptResponse.optString("logFileName", logPath.getFileName().toString()));
                 attemptMeta.put("status", status);
                 attemptLogMetadata.put(attemptMeta);
-                lastResult.remove("logFilePath");
+                attemptResponse.remove("logFilePath");
             }
 
             // Track failures and passes to decide flakiness later
@@ -110,12 +119,14 @@ public class TestOrchestrator {
             }
 
             // For keepAlive runs where tester returns 'started', end immediately
+            recordObservation(outcome.testRequest, outcome.result, testLogger);
+
             if ("started".equalsIgnoreCase(status)) {
-                lastResult.put("attempts", attempt);
-                lastResult.put("attemptLogFiles", attemptLogFiles);
-                lastResult.put("attemptLogMetadata", attemptLogMetadata);
+                attemptResponse.put("attempts", attempt);
+                attemptResponse.put("attemptLogFiles", attemptLogFiles);
+                attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
                 // Note: keepAlive mode doesn't check for flakiness since it's not meant for testing
-                return lastResult;
+                return attemptResponse;
             }
 
             // Stop conditions (first true wins):
@@ -133,21 +144,21 @@ public class TestOrchestrator {
             if (runMode.equals("until-pass") && attempt >= minRuns && isPass) {
                 // If we've seen both pass and failure, mark as flaky and exit
                 if (sawFailure && sawPass) {
-                    lastResult.put("attempts", attempt);
-                    lastResult.put("flaky", true);
-                    lastResult.put("status", "flaky");  // Override status to indicate flakiness
+                    attemptResponse.put("attempts", attempt);
+                    attemptResponse.put("flaky", true);
+                    attemptResponse.put("status", "flaky");  // Override status to indicate flakiness
                     testLogger.info("Test marked as flaky - saw both pass and failure in " + attempt + " attempts");
-                    lastResult.put("attemptLogFiles", attemptLogFiles);
-                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                    return lastResult;
+                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
+                    attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
+                    return attemptResponse;
                 }
                 // If we've only seen passes and we have sufficient data, exit as stable
                 else if (!sawFailure && attempt >= minRuns) {
-                    lastResult.put("attempts", attempt);
+                    attemptResponse.put("attempts", attempt);
                     testLogger.info("Test appears stable - only passes in " + attempt + " attempts");
-                    lastResult.put("attemptLogFiles", attemptLogFiles);
-                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                    return lastResult;
+                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
+                    attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
+                    return attemptResponse;
                 }
                 // If we've only seen failures + this pass, continue running to see if it's consistently passing now
                 // If we've only seen one pass so far, continue to gather more data for confidence
@@ -159,21 +170,21 @@ public class TestOrchestrator {
             if (runMode.equals("until-fail") && attempt >= minRuns && isFailLike) {
                 // If we've seen both pass and failure, mark as flaky and exit
                 if (sawFailure && sawPass) {
-                    lastResult.put("attempts", attempt);
-                    lastResult.put("flaky", true);
-                    lastResult.put("status", "flaky");  // Override status to indicate flakiness
+                    attemptResponse.put("attempts", attempt);
+                    attemptResponse.put("flaky", true);
+                    attemptResponse.put("status", "flaky");  // Override status to indicate flakiness
                     testLogger.info("Test marked as flaky in until-fail mode - saw both pass and failure in " + attempt + " attempts");
-                    lastResult.put("attemptLogFiles", attemptLogFiles);
-                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                    return lastResult;
+                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
+                    attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
+                    return attemptResponse;
                 }
                 // If we've only seen failures and we have sufficient data (at least 2 failures), exit as reproducible
                 else if (!sawPass && attempt >= Math.max(2, minRuns)) {
-                    lastResult.put("attempts", attempt);
+                    attemptResponse.put("attempts", attempt);
                     testLogger.info("Test failure reproduced - only failures in " + attempt + " attempts (reproduce mode)");
-                    lastResult.put("attemptLogFiles", attemptLogFiles);
-                    lastResult.put("attemptLogMetadata", attemptLogMetadata);
-                    return lastResult;
+                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
+                    attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
+                    return attemptResponse;
                 }
                 // If we've only seen passes + this failure, continue running to see if it's consistently failing now
                 // If we've only seen one failure so far, continue to gather more data for confidence
@@ -184,45 +195,46 @@ public class TestOrchestrator {
         }
 
         // Completed due to maxRuns or time budget
-        lastResult.put("attempts", Math.max(1, attempt));
-        lastResult.put("attemptLogFiles", attemptLogFiles);
-        lastResult.put("attemptLogMetadata", attemptLogMetadata);
-        lastResult.put("runMode", runMode);
+        JSONObject finalResponse = lastResponse != null ? new JSONObject(lastResponse.toString()) : new JSONObject();
+        finalResponse.put("attempts", Math.max(1, attempt));
+        finalResponse.put("attemptLogFiles", attemptLogFiles);
+        finalResponse.put("attemptLogMetadata", attemptLogMetadata);
+        finalResponse.put("runMode", runMode);
         
         // Synchronously verify all log files are accessible before sending response
         verifyAllLogFilesAccessible(attemptLogFiles, testLogger);
 
         // Check for flakiness when completing without early exit
         if (runMode.equals("until-pass") && sawFailure && sawPass) {
-            lastResult.put("flaky", true);
-            lastResult.put("status", "flaky");  // Override status to indicate flakiness
+            finalResponse.put("flaky", true);
+            finalResponse.put("status", "flaky");  // Override status to indicate flakiness
             testLogger.info("Test marked as flaky - saw both pass and failure across " + attempt + " attempts");
         }
 
         if (runMode.equals("until-fail")) {
             // Check for flakiness first
             if (sawFailure && sawPass) {
-                lastResult.put("flaky", true);
-                lastResult.put("status", "flaky");  // Override status to indicate flakiness
+                finalResponse.put("flaky", true);
+                finalResponse.put("status", "flaky");  // Override status to indicate flakiness
                 testLogger.info("Test marked as flaky in until-fail mode - saw both pass and failure");
             }
             // Only set "could not reproduce" summary if we didn't see any failures at all
             else if (!sawFailure) {
                 testLogger.info("Test did not fail after " + attempt + " attempts (reproduce mode)");
-                lastResult.put("summary", "Could not reproduce failure after " + attempt + " attempts");
+                finalResponse.put("summary", "Could not reproduce failure after " + attempt + " attempts");
             }
         } else if (runMode.equals("fixed-runs")) {
             testLogger.info("Completed " + attempt + " run(s)");
-            lastResult.put("summary", "Completed " + attempt + " runs");
+            finalResponse.put("summary", "Completed " + attempt + " runs");
             // Check for flakiness in fixed-runs mode too
             if (sawFailure && sawPass) {
-                lastResult.put("flaky", true);
-                lastResult.put("status", "flaky");  // Override status to indicate flakiness
+                finalResponse.put("flaky", true);
+                finalResponse.put("status", "flaky");  // Override status to indicate flakiness
                 testLogger.info("Test marked as flaky in fixed-runs mode - saw both pass and failure");
             }
         }
 
-        return lastResult;
+        return finalResponse;
     }
     
     /**
@@ -289,19 +301,21 @@ public class TestOrchestrator {
         testLogger.info("Log file verification completed");
     }
 
-    private JSONObject runTest(JSONObject requestJson, Logger testLogger) throws Exception {
-        TestRequest request = new TestRequest(requestJson);
+    private RunOutcome runTest(JSONObject requestJson, Logger testLogger) throws Exception {
+        TestRequest testRequest = new TestRequest(requestJson);
         Path workDir = Files.createTempDirectory(Paths.get(config.getWorkDir()), "test_");
         testLogger.info("Working directory: " + workDir);
         
-        boolean keepAliveRequested = request.isKeepAlive();
+        boolean keepAliveRequested = testRequest.isKeepAlive();
         try {
             // Check if we should use Docker for test execution
             if (useDocker && dockerManager != null && isDockerAvailable()) {
-                return executeDockerTest(request, workDir, testLogger);
+                TestResult result = executeDockerTest(testRequest, workDir, testLogger);
+                return new RunOutcome(testRequest, result, convertToJSONObject(result));
             } else {
                 testLogger.info("Using direct test execution");
-                return executeDirectTest(request, workDir, testLogger);
+                TestResult result = executeDirectTest(testRequest, workDir, testLogger);
+                return new RunOutcome(testRequest, result, convertToJSONObject(result));
             }
         } finally {
             // Cleanup unless keep-alive requested or a keep marker is present
@@ -317,13 +331,13 @@ public class TestOrchestrator {
         }
     }
 
-    private JSONObject executeDockerTest(TestRequest request, Path workDir, Logger testLogger) throws Exception {
+    private TestResult executeDockerTest(TestRequest request, Path workDir, Logger testLogger) throws Exception {
         // Try to use optimized Docker execution with pre-built images
         if (optimizedDockerExecutor != null && config.isOptimizedDockerEnabled()) {
             try {
                 testLogger.info("Attempting optimized Docker execution with pre-built image...");
                 TestResult result = optimizedDockerExecutor.execute(request, workDir, testLogger);
-                return convertToJSONObject(result);
+                return result;
             } catch (Exception e) {
                 testLogger.warning("Optimized Docker execution failed, falling back to standard: " + e.getMessage());
                 // Fall through to standard execution
@@ -333,7 +347,7 @@ public class TestOrchestrator {
         // Standard Docker execution
         try {
             TestResult result = standardDockerExecutor.execute(request, workDir, testLogger);
-            return convertToJSONObject(result);
+            return result;
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("Docker not available")) {
                 testLogger.warning("Docker not available, falling back to direct execution");
@@ -343,9 +357,8 @@ public class TestOrchestrator {
         }
     }
 
-    private JSONObject executeDirectTest(TestRequest request, Path workDir, Logger testLogger) throws Exception {
-        TestResult result = directExecutor.execute(request, workDir, testLogger);
-        return convertToJSONObject(result);
+    private TestResult executeDirectTest(TestRequest request, Path workDir, Logger testLogger) throws Exception {
+        return directExecutor.execute(request, workDir, testLogger);
     }
 
     private JSONObject convertToJSONObject(TestResult result) {
@@ -410,6 +423,78 @@ public class TestOrchestrator {
             // Fallback to simple check
         }
         return true; // Assume available if check fails
+    }
+
+    private void recordObservation(TestRequest request, TestResult result, Logger logger) {
+        if (observationWriter == null || request == null || result == null) {
+            return;
+        }
+        try {
+            TestExecutionMetrics metrics = result.getExecutionMetrics();
+            if (metrics == null) {
+                metrics = TestExecutionMetrics.unknown();
+            }
+            String testKey = firstNonEmpty(request.getTestPath(), request.getTestName());
+            TestObservation.Builder builder = TestObservation.builder()
+                .testKey(testKey != null ? testKey : request.getTestName())
+                .commit(firstNonEmpty(result.getCommit(), request.getCommit()))
+                .baseline(firstNonEmpty(request.getBaselineShort(), request.getBaseline()))
+                .executor(firstNonEmpty(result.getExecutionMode(), useDocker ? "docker" : "direct"))
+                .status(result.getStatus())
+                .attempts(Math.max(result.getAttempts(), request.getAttemptNumber()))
+                .imageTag(metrics.getDockerImage())
+                .buildPackage(firstNonEmpty(metrics.getBuildPackageName(), request.getBuildPackage()))
+                .durationMs(metrics.getDurationMs())
+                .cpuPctMean(metrics.getCpuPctMean())
+                .cpuPctPeak(metrics.getCpuPctPeak())
+                .memMbMean(metrics.getMemMbMean())
+                .memMbPeak(metrics.getMemMbPeak())
+                .ioMbPerSecMean(metrics.getIoMbPerSecMean())
+                .iopsMean(metrics.getIopsMean())
+                .netMbPerSecMean(metrics.getNetMbPerSecMean())
+                .bytesReadMb(metrics.getBytesReadMb())
+                .bytesWriteMb(metrics.getBytesWriteMb())
+                .dockerImageCached(metrics.isDockerImageCached())
+                .packageCached(metrics.isPackageCached())
+                .metricsComplete(metrics.isMetricsComplete())
+                .extra("attemptNumber", request.getAttemptNumber());
+
+            long logSizeBytes = metrics.getLogSizeBytes();
+            if (logSizeBytes >= 0) {
+                long kb = Math.max(0L, (logSizeBytes + 1023) / 1024);
+                builder.logSizeKb(kb);
+            }
+            if (result.getTimestamp() != null) {
+                builder.timestamp(Instant.ofEpochMilli(result.getTimestamp()));
+            }
+            observationWriter.recordObservation(builder.build());
+        } catch (Exception e) {
+            logger.fine("Failed to record test observation: " + e.getMessage());
+        }
+    }
+
+    private String firstNonEmpty(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty() && !"unknown".equalsIgnoreCase(value.trim())) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static final class RunOutcome {
+        final TestRequest testRequest;
+        final TestResult result;
+        final JSONObject response;
+
+        RunOutcome(TestRequest testRequest, TestResult result, JSONObject response) {
+            this.testRequest = testRequest;
+            this.result = result;
+            this.response = response;
+        }
     }
 
     /**

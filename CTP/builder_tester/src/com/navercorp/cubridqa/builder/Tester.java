@@ -18,11 +18,13 @@ import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
 import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
+import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
@@ -122,6 +124,9 @@ public class Tester {
         this.standardDockerExecutor = new StandardDockerExecutor(config, buildCache, shellTcSync);
         this.optimizedDockerExecutor = new OptimizedDockerExecutor(config, buildCache, shellTcSync, imageBuilder);
         
+        Path observationWalPath = Paths.get(config.getWorkDir()).resolve("profiles").resolve("test_stats.jl.gz");
+        TestObservationWriter observationWriter = new TestObservationWriter(observationWalPath, logger);
+        
         // Create orchestrator
         this.testOrchestrator = new TestOrchestrator(
             config, 
@@ -130,7 +135,8 @@ public class Tester {
             optimizedDockerExecutor,
             useDocker, 
             dockerManager, 
-            new DockerUtils()
+            new DockerUtils(),
+            observationWriter
         );
         
         // Create HTTP handlers

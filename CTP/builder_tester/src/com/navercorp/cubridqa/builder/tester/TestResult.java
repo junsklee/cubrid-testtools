@@ -1,10 +1,13 @@
 package com.navercorp.cubridqa.builder.tester;
 
-import org.json.JSONObject;
-import org.json.JSONArray;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.ArrayList;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 
 public class TestResult {
     private final String testName;
@@ -24,6 +27,7 @@ public class TestResult {
     private final String containerName;
     private final String execCommand;
     private final String workspace;
+    private final TestExecutionMetrics executionMetrics;
     
     private TestResult(Builder builder) {
         this.testName = builder.testName;
@@ -43,6 +47,7 @@ public class TestResult {
         this.containerName = builder.containerName;
         this.execCommand = builder.execCommand;
         this.workspace = builder.workspace;
+        this.executionMetrics = builder.executionMetrics;
     }
     
     public String getTestName() { return testName; }
@@ -62,6 +67,7 @@ public class TestResult {
     public String getContainerName() { return containerName; }
     public String getExecCommand() { return execCommand; }
     public String getWorkspace() { return workspace; }
+    public TestExecutionMetrics getExecutionMetrics() { return executionMetrics; }
     
     public JSONObject toJson() {
         JSONObject json = new JSONObject()
@@ -82,6 +88,30 @@ public class TestResult {
         }
         if (logPath != null) {
             json.put("logPath", logPath);
+        }
+        if (executionMetrics != null) {
+            JSONObject metricsJson = new JSONObject();
+            metricsJson.put("duration_ms", executionMetrics.getDurationMs());
+            metricsJson.put("cpu_pct_mean", executionMetrics.getCpuPctMean());
+            metricsJson.put("cpu_pct_peak", executionMetrics.getCpuPctPeak());
+            metricsJson.put("mem_mb_mean", executionMetrics.getMemMbMean());
+            metricsJson.put("mem_mb_peak", executionMetrics.getMemMbPeak());
+            metricsJson.put("io_mb_s_mean", executionMetrics.getIoMbPerSecMean());
+            metricsJson.put("iops_mean", executionMetrics.getIopsMean());
+            metricsJson.put("net_mb_s_mean", executionMetrics.getNetMbPerSecMean());
+            metricsJson.put("bytes_read_mb", executionMetrics.getBytesReadMb());
+            metricsJson.put("bytes_write_mb", executionMetrics.getBytesWriteMb());
+            metricsJson.put("docker_image_cached", executionMetrics.isDockerImageCached());
+            metricsJson.put("package_cached", executionMetrics.isPackageCached());
+            metricsJson.put("log_size_bytes", executionMetrics.getLogSizeBytes());
+            metricsJson.put("metrics_complete", executionMetrics.isMetricsComplete());
+            if (executionMetrics.getDockerImage() != null) {
+                metricsJson.put("docker_image", executionMetrics.getDockerImage());
+            }
+            if (executionMetrics.getBuildPackageName() != null) {
+                metricsJson.put("build_package", executionMetrics.getBuildPackageName());
+            }
+            json.put("executionMetrics", metricsJson);
         }
         
         return json;
@@ -109,6 +139,7 @@ public class TestResult {
         private String containerName;
         private String execCommand;
         private String workspace;
+        private TestExecutionMetrics executionMetrics;
         
         public Builder testName(String testName) {
             this.testName = testName;
@@ -197,6 +228,11 @@ public class TestResult {
         
         public Builder workspace(String workspace) {
             this.workspace = workspace;
+            return this;
+        }
+
+        public Builder executionMetrics(TestExecutionMetrics executionMetrics) {
+            this.executionMetrics = executionMetrics;
             return this;
         }
         

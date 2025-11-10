@@ -9,6 +9,7 @@ import com.navercorp.cubridqa.builder.exec.CubridInstaller;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
+import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -39,6 +40,11 @@ public class DirectExecutor implements ExecutorStrategy {
         testLogger.info("  Build package: " + request.getBuildPackage());
         testLogger.info("  Test: " + request.getTestName());
         
+        long startNs = System.nanoTime();
+        TestExecutionMetrics.Builder metricsBuilder = TestExecutionMetrics.builder()
+            .buildPackageName(request.getBuildPackage())
+            .metricsComplete(false);
+        
         // Download build package if it's a URL
         Path localBuildPackage;
         try {
@@ -48,20 +54,24 @@ public class DirectExecutor implements ExecutorStrategy {
                 "unknown",
                 testLogger
             );
+            metricsBuilder.packageCached(buildCache.wasLastFetchFromCache());
+            if (localBuildPackage != null) {
+                metricsBuilder.buildPackageName(localBuildPackage.getFileName().toString());
+            }
         } catch (Exception e) {
-            return TestResult.builder()
+            return finalizeResult(TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
                 .message("Failed to download build package: " + e.getMessage())
-                .build();
+                , metricsBuilder, startNs);
         }
         
         if (localBuildPackage == null || !Files.exists(localBuildPackage)) {
-            return TestResult.builder()
+            return finalizeResult(TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Downloaded build package missing: " + String.valueOf(localBuildPackage))
-                .build();
+                .message("Downloaded build package missing: " + String.valueOf(localBuildPackage)),
+                metricsBuilder, startNs);
         }
 
         // Ensure shell testcases repository is on the requested branch from preferred remote
@@ -77,11 +87,11 @@ public class DirectExecutor implements ExecutorStrategy {
             installDir = cubridInstaller.install(localBuildPackage.toString(), workDir, testLogger);
         } catch (Exception e) {
             testLogger.log(Level.SEVERE, "Failed to install CUBRID", e);
-            return TestResult.builder()
+            return finalizeResult(TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.BUILD_ERROR)
-                .message("Failed to install CUBRID: " + e.getMessage())
-                .build();
+                .message("Failed to install CUBRID: " + e.getMessage()),
+                metricsBuilder, startNs);
         }
 
         // Set environment for CUBRID
@@ -113,11 +123,11 @@ public class DirectExecutor implements ExecutorStrategy {
             Path shellRepoRoot = Paths.get(config.getShellTcDir()).toAbsolutePath().normalize();
             sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
         } catch (IllegalArgumentException e) {
-            return TestResult.builder()
+            return finalizeResult(TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
-                .message(e.getMessage())
-                .build();
+                .message(e.getMessage()),
+                metricsBuilder, startNs);
         }
 
         // Run the test
@@ -154,11 +164,11 @@ public class DirectExecutor implements ExecutorStrategy {
         if (!completed) {
             process.destroyForcibly();
             testLogger.severe("Test timeout");
-            return TestResult.builder()
+            return finalizeResult(TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.EXECUTION_ERROR)
-                .message("Test timeout after " + timeoutMinutes + " minutes")
-                .build();
+                .message("Test timeout after " + timeoutMinutes + " minutes"),
+                metricsBuilder, startNs);
         }
         
         int exitCode = process.exitValue();
@@ -208,7 +218,7 @@ public class DirectExecutor implements ExecutorStrategy {
                 resultBuilder.addAttemptLogFile(directLogFilePath);
             }
             
-            return resultBuilder.build();
+            return finalizeResult(resultBuilder, metricsBuilder, startNs);
         }
         
         // Check named result first then nok.result
@@ -232,7 +242,7 @@ public class DirectExecutor implements ExecutorStrategy {
                 resultBuilder.addAttemptLogFile(directLogFilePath);
             }
             
-            return resultBuilder.build();
+            return finalizeResult(resultBuilder, metricsBuilder, startNs);
         }
         
         TestResult.Builder resultBuilder = TestResult.builder()
@@ -245,6 +255,15 @@ public class DirectExecutor implements ExecutorStrategy {
             resultBuilder.addAttemptLogFile(directLogFilePath);
         }
         
-        return resultBuilder.build();
+        return finalizeResult(resultBuilder, metricsBuilder, startNs);
+    }
+    
+    private TestResult finalizeResult(TestResult.Builder builder, TestExecutionMetrics.Builder metricsBuilder, long startNs) {
+        long durationMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs));
+        metricsBuilder.durationMs(durationMs);
+        TestExecutionMetrics metrics = metricsBuilder.build();
+        builder.executionMetrics(metrics);
+        builder.executionMode("direct");
+        return builder.build();
     }
 }

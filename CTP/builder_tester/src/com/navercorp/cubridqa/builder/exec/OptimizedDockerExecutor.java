@@ -9,6 +9,7 @@ import com.navercorp.cubridqa.builder.tester.SafeIo;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
+import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -36,6 +37,11 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
     @Override
     public TestResult execute(TestRequest request, Path workDir, Logger testLogger) throws Exception {
         testLogger.info("Running test in optimized Docker container with pre-built image...");
+        
+        long startNs = System.nanoTime();
+        TestExecutionMetrics.Builder metricsBuilder = TestExecutionMetrics.builder()
+            .buildPackageName(request.getBuildPackage())
+            .metricsComplete(false);
         
         boolean keepAlive = request.isKeepAlive();
         String containerName = request.getContainerName();
@@ -74,16 +80,22 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 request.getBaselineShort() != null ? request.getBaselineShort() : "unknown", 
                 testLogger
             );
+            metricsBuilder.packageCached(buildCache.wasLastFetchFromCache());
+            if (localBuildPackage != null) {
+                metricsBuilder.buildPackageName(localBuildPackage.getFileName().toString());
+            }
         } catch (Exception e) {
-            return TestResult.builder()
+            return finalizeResult(
+                TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Failed to download build package: " + e.getMessage())
-                .build();
+                .message("Failed to download build package: " + e.getMessage()),
+                metricsBuilder, startNs, null, false, null);
         }
         
         // Build or get Docker image with CUBRID pre-installed
-        String dockerImage;
+        String dockerImage = null;
+        boolean dockerImageCached = false;
         try {
             if (imageBuilder != null) {
                 // Use reflection to call getOrBuildImage method
@@ -94,6 +106,18 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                            request.getBaselineShort() != null ? request.getBaselineShort() : "unknown", 
                            localBuildPackage);
                 testLogger.info("Using Docker image: " + dockerImage);
+                try {
+                    Object cacheResult = imageBuilder.getClass()
+                        .getMethod("wasLastOperationCacheHit")
+                        .invoke(imageBuilder);
+                    if (cacheResult instanceof Boolean) {
+                        dockerImageCached = (Boolean) cacheResult;
+                    }
+                } catch (NoSuchMethodException ignore) {
+                    testLogger.fine("DockerImageBuilder.wasLastOperationCacheHit not available");
+                } catch (Exception cacheEx) {
+                    testLogger.fine("Failed to retrieve Docker image cache hint: " + cacheEx.getMessage());
+                }
             } else {
                 testLogger.info("Image builder not available, falling back to standard execution");
                 throw new Exception("Image builder not available");
@@ -117,18 +141,20 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         try {
             sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
         } catch (IllegalArgumentException e) {
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message(e.getMessage())
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message(e.getMessage()),
+                metricsBuilder, startNs, dockerImage, dockerImageCached, null);
         }
         if (!Files.isReadable(sourceTestDir)) {
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("Permission denied reading test directory: " + sourceTestDir)
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message("Permission denied reading test directory: " + sourceTestDir),
+                metricsBuilder, startNs, dockerImage, dockerImageCached, null);
         }
         String relativeTestDir = computeRelativeTestDir(shellRepoRoot, sourceTestDir, testLogger);
         testLogger.info("Using test directory: " + sourceTestDir + " (relative: " + (relativeTestDir.isEmpty() ? "." : relativeTestDir) + ")");
@@ -162,11 +188,12 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         String githubToken = System.getenv("GITHUB_TOKEN");
         if (githubToken == null || githubToken.trim().isEmpty()) {
             testLogger.severe("GITHUB_TOKEN not set");
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.ENVIRONMENT_ERROR)
-                .message("GITHUB_TOKEN environment variable not configured")
-                .build();
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.ENVIRONMENT_ERROR)
+                    .message("GITHUB_TOKEN environment variable not configured"),
+                metricsBuilder, startNs, dockerImage, dockerImageCached, null);
         }
         
         // Run Docker container with optimized flags
@@ -238,20 +265,26 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         ProcessBuilder pb = new ProcessBuilder(dockerCommand);
         pb.redirectErrorStream(true);
         Process process = pb.start();
+        DockerStatsCollector statsCollector = keepAlive ? null : new DockerStatsCollector(containerName, testLogger);
+        if (statsCollector != null) {
+            statsCollector.start();
+        }
         
         if (keepAlive) {
             try { Files.createFile(workDir.resolve("KEEP_WORKSPACE")); } catch (Exception ignore) {}
             String execCmd = "docker exec -it " + containerName + " bash";
             
             // Return special "started" status for keep-alive containers
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.PASS) // Special handling needed for keep-alive
-                .message("started")
-                .containerName(containerName)
-                .execCommand(execCmd)
-                .workspace(dockerWorkDir.toString())
-                .build();
+            DockerStatsCollector.StatsSummary summary = stopCollector(statsCollector);
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.PASS) // Special handling needed for keep-alive
+                    .message("started")
+                    .containerName(containerName)
+                    .execCommand(execCmd)
+                    .workspace(dockerWorkDir.toString()),
+                metricsBuilder, startNs, dockerImage, dockerImageCached, summary);
         }
         
         // Read output
@@ -264,17 +297,20 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             testLogger.severe("Docker test timeout");
             // Attempt to stop and remove the container if it's still running
             DockerCtl.safeKillAndRemove(containerName, testLogger);
-            return TestResult.builder()
-                .testName(request.getTestName())
-                .status(TestStatus.EXECUTION_ERROR)
-                .message("Docker test timeout after " + timeoutMinutes + " minutes")
-                .build();
+            DockerStatsCollector.StatsSummary summary = stopCollector(statsCollector);
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status(TestStatus.EXECUTION_ERROR)
+                    .message("Docker test timeout after " + timeoutMinutes + " minutes"),
+                metricsBuilder, startNs, dockerImage, dockerImageCached, summary);
         }
         
         int exitCode = process.exitValue();
         outputGobbler.join(2000);
         String dockerOutput = outputGobbler.getOutput();
         testLogger.info("Docker test completed with exit code: " + exitCode);
+        DockerStatsCollector.StatsSummary statsSummary = stopCollector(statsCollector);
         
         // Save output log
         Path dockerOptLogFilePath = null;
@@ -292,6 +328,9 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 dockerOptLogFilePath = requestTestsDir.resolve(dockerOptLogFileName);
                 Files.write(dockerOptLogFilePath, dockerOutput.getBytes("UTF-8"));
                 testLogger.info("Saved optimized Docker test log to: " + dockerOptLogFilePath);
+                try {
+                    metricsBuilder.logSizeBytes(Files.size(dockerOptLogFilePath));
+                } catch (Exception ignore) { }
             } else {
                 testLogger.warning("Log not saved - requestId: " + requestId + ", groupingEnabled: " + config.isRequestGroupingEnabled());
             }
@@ -356,11 +395,13 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             
             if (isPassed && !isFailed) {
                 resultBuilder.status(TestStatus.PASS);
-                return resultBuilder.build();
             } else if (isFailed) {
                 resultBuilder.status(TestStatus.FAIL);
-                return resultBuilder.build();
+            } else {
+                resultBuilder.status(TestStatus.EXECUTION_ERROR)
+                    .message("Could not determine test result");
             }
+            return finalizeResult(resultBuilder, metricsBuilder, startNs, dockerImage, dockerImageCached, statsSummary);
         }
         
         // Check exit code
@@ -381,7 +422,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             resultBuilder.status(TestStatus.FAIL).exitCode(exitCode);
         }
 
-        return resultBuilder.build();
+        return finalizeResult(resultBuilder, metricsBuilder, startNs, dockerImage, dockerImageCached, statsSummary);
     }
     
     private String computeRelativeTestDir(Path repoRoot, Path testDir, Logger logger) {
@@ -435,5 +476,28 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         } else {
             return String.format("docker_opt_%s_%s.%d.log", commitShort, safeTestName, attemptNumber);
         }
+    }
+
+    private TestResult finalizeResult(TestResult.Builder builder, TestExecutionMetrics.Builder metricsBuilder, long startNs,
+                                      String dockerImage, boolean dockerImageCached,
+                                      DockerStatsCollector.StatsSummary statsSummary) {
+        long durationMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs));
+        metricsBuilder.durationMs(durationMs);
+        metricsBuilder.dockerImage(dockerImage);
+        metricsBuilder.dockerImageCached(dockerImageCached);
+        if (statsSummary != null && statsSummary.hasSamples()) {
+            statsSummary.applyTo(metricsBuilder, durationMs);
+        }
+        TestExecutionMetrics metrics = metricsBuilder.build();
+        builder.executionMetrics(metrics);
+        builder.executionMode("docker_optimized");
+        return builder.build();
+    }
+
+    private DockerStatsCollector.StatsSummary stopCollector(DockerStatsCollector collector) {
+        if (collector == null) {
+            return null;
+        }
+        return collector.stopAndSummarize();
     }
 }

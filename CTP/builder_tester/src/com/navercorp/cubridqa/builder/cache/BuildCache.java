@@ -17,9 +17,18 @@ public class BuildCache {
     private static final Object DOWNLOAD_LOCK = new Object();
     
     private final Path workDir;
+    private final ThreadLocal<Boolean> lastFetchCached = ThreadLocal.withInitial(() -> Boolean.FALSE);
     
     public BuildCache(Path workDir) {
         this.workDir = workDir;
+    }
+
+    /**
+     * Indicates whether the most recent {@link #downloadIfNeeded} call in the current thread
+     * reused a cached build package instead of downloading anew.
+     */
+    public boolean wasLastFetchFromCache() {
+        return Boolean.TRUE.equals(lastFetchCached.get());
     }
     
     /**
@@ -29,6 +38,7 @@ public class BuildCache {
      */
     public Path downloadIfNeeded(String buildPackage, String expectedCommit, String expectedBaseline, Logger testLogger) 
             throws IOException {
+        lastFetchCached.set(Boolean.FALSE);
         // Check if it's a URL
         if (buildPackage.startsWith("http://") || buildPackage.startsWith("https://")) {
             testLogger.info("Build package is a URL: " + buildPackage);
@@ -36,6 +46,7 @@ public class BuildCache {
             // Check in-memory cache first
             Path cached = buildPackageCache.get(buildPackage);
             if (cached != null && Files.exists(cached)) {
+                lastFetchCached.set(Boolean.TRUE);
                 testLogger.info("Using cached build package: " + cached);
                 return cached;
             }
@@ -62,6 +73,7 @@ public class BuildCache {
                             testLogger.info("Found valid cached build package on disk: " + potentialExistingFile);
                             // Add to in-memory cache for faster future lookups
                             buildPackageCache.put(buildPackage, potentialExistingFile);
+                            lastFetchCached.set(Boolean.TRUE);
                             return potentialExistingFile;
                         } else {
                             testLogger.warning("Cached build package validation failed, will re-download: " + potentialExistingFile);
@@ -77,6 +89,7 @@ public class BuildCache {
                 // Double-check cache after acquiring lock
                 cached = buildPackageCache.get(buildPackage);
                 if (cached != null && Files.exists(cached)) {
+                    lastFetchCached.set(Boolean.TRUE);
                     return cached;
                 }
                 
@@ -101,6 +114,7 @@ public class BuildCache {
                     if (validateCached(downloadPath, expectedCommit, expectedBaseline, testLogger)) {
                         testLogger.info("Valid build package already exists on disk: " + downloadPath);
                         buildPackageCache.put(buildPackage, downloadPath);
+                        lastFetchCached.set(Boolean.TRUE);
                         return downloadPath;
                     } else {
                         testLogger.warning("Invalid cached package found, removing and re-downloading: " + downloadPath);
@@ -237,6 +251,7 @@ public class BuildCache {
                         cleanOld();
                     }
                     
+                    lastFetchCached.set(Boolean.FALSE);
                     return downloadPath;
                     
                 } catch (Exception e) {
@@ -250,6 +265,7 @@ public class BuildCache {
             }
         } else {
             // It's a local path
+            lastFetchCached.set(Boolean.FALSE);
             return Paths.get(buildPackage);
         }
     }
