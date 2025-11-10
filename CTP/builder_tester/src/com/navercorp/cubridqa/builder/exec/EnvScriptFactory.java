@@ -467,7 +467,13 @@ public class EnvScriptFactory {
 
     private static void appendPreinstalledCubridEnv(StringBuilder script, String initPath, String ctpHome) {
         script.append("CUBRID_INSTALL_ROOT=\"/opt/cubrid\"\n");
-        script.append("export CUBRID=\"$CUBRID_INSTALL_ROOT\"\n");
+        script.append("CUBRID_HOME=\"$HOME/CUBRID\"\n");
+        script.append("mkdir -p \"$CUBRID_HOME\"\n");
+        script.append("# Prefer bind-mount to preserve /root/CUBRID as a real path (not a symlink)\n");
+        script.append("if ! grep -qs \" $CUBRID_HOME \" /proc/mounts; then\n");
+        script.append("  mount --bind \"$CUBRID_INSTALL_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || ln -s \"$CUBRID_INSTALL_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || true\n");
+        script.append("fi\n");
+        script.append("export CUBRID=\"$CUBRID_HOME\"\n");
         script.append("export SHELL=/bin/bash\n");
         script.append("export PATH=\"$CUBRID/bin:").append(initPath).append(":").append(ctpHome).append("/bin:").append(ctpHome).append("/common/script:$PATH\"\n");
         script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:$CUBRID/lib64:").append(ctpHome).append("/common/lib:$LD_LIBRARY_PATH\"\n");

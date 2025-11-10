@@ -36,6 +36,13 @@ Directory: [architecture/](architecture/)
 - **[CCACHE_GUIDE.md](CCACHE_GUIDE.md)** - Compiler cache setup and usage
 - **[REFACTORING_SUMMARY.md](REFACTORING_SUMMARY.md)** - Historical refactoring notes
 
+### CUBRID installation locations in Docker
+- **Optimized images** install CUBRID into `/opt/cubrid` (canonical).
+- **Optimized runtime** presents `CUBRID=/root/CUBRID` by bind-mounting `/opt/cubrid` onto `/root/CUBRID` (with a symlink fallback), so logs/configs consistently use `/root/CUBRID/...` and match test normalization.
+- **Standard (non-optimized) runtime** exports `CUBRID` to the per-test extracted directory (e.g., under `/tmp/cubrid_install`).
+- **Host installs (non-Docker)** via `CubridInstaller` use `$HOME/CUBRID`.
+
+See: [DOCKER_OPTIMIZATION.md](DOCKER_OPTIMIZATION.md#cubrid-installation-paths-optcubrid-vs-rootcubrid).
 ## Features
 
 Directory: [features/](features/)

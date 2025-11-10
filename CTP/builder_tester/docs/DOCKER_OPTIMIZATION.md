@@ -242,6 +242,40 @@ Each image contains:
 - Configured environment variables
 - Clean database directory
 
+### CUBRID installation paths (/opt/cubrid vs /root/CUBRID)
+
+- Rationale
+  - Some shell tests normalize paths by replacing absolute prefixes with `${CUBRID}` (e.g., rewriting `/root/CUBRID/...` to `CUBRID/...` before diffing).
+  - Tools and logs can resolve to a real path, which can differ if symlinks are used (e.g., `/root/CUBRID` → `/opt/cubrid`), causing mismatches.
+
+- What the system does
+  - Image provisioning installs CUBRID to the canonical location: `/opt/cubrid`.
+  - At test runtime in optimized Docker mode, the environment script bind-mounts `/opt/cubrid` onto `/root/CUBRID` and exports:
+    - `CUBRID=/root/CUBRID`
+    - `PATH=$CUBRID/bin:...`
+    - `LD_LIBRARY_PATH=$CUBRID/lib:$CUBRID/cci/lib:$CUBRID/lib64:...`
+  - If bind-mount is unavailable, it falls back to creating a symlink `/root/CUBRID -> /opt/cubrid`.
+
+- Why bind-mount instead of only a symlink?
+  - Bind-mount makes `/root/CUBRID` a “real” path (not just a symlink target) so tools and logs consistently emit `/root/CUBRID/...`, matching test normalization rules.
+  - This avoids diffs where outputs show `/opt/cubrid/...` but answers expect `CUBRID/...`.
+
+- Standard (non-optimized) Docker mode
+  - The build tarball is extracted per test into a temporary directory (e.g., `/tmp/cubrid_install/...`).
+  - The environment exports `CUBRID` to that extracted path and uses it for PATH/LD_LIBRARY_PATH, configs, logs, and databases.
+  - Tests should always rely on `${CUBRID}` rather than hard-coded absolute paths.
+
+- Host installs (CubridInstaller)
+  - `CubridInstaller` installs under `$HOME/CUBRID` by default for local (non-Docker) runs.
+  - Optimized Docker runtime mirrors this by presenting `/root/CUBRID` (root’s home) via bind-mount for consistent behavior across environments.
+
+Quick reference:
+
+- Optimized image install root: `/opt/cubrid` (canonical)
+- Optimized runtime env: `CUBRID=/root/CUBRID` (bind-mounted to `/opt/cubrid`, symlink fallback)
+- Standard runtime env: `CUBRID=<extracted path>` (e.g., `/tmp/cubrid_install/...`)
+- Host install (installer): `CUBRID=$HOME/CUBRID`
+
 ### Build Process
 1. Generates a provisioning script on the host
 2. Launches the base tester image with the build tarball and script mounted (`docker run`)

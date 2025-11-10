@@ -58,6 +58,19 @@ We implemented a two-phase optimization focusing on **Docker Image Caching** (Op
 - `conf/tester.conf` - Added optimization settings
 - `README.md` - Updated with optimization features
 
+### CUBRID installation paths and runtime mapping
+
+- Canonical install location in optimized images: `/opt/cubrid`
+- Runtime presentation for tests in optimized mode:
+  - Bind-mount `/opt/cubrid` → `/root/CUBRID`, export `CUBRID=/root/CUBRID`
+  - Fallback to symlink if bind is unavailable
+  - Ensures logs/configs consistently refer to `/root/CUBRID/...`, matching test normalization rules
+- Standard (non-optimized) mode:
+  - Extracts build per test; exports `CUBRID` to the extracted path (e.g., `/tmp/cubrid_install/...`)
+  - Tests should reference `${CUBRID}` instead of hard-coded absolute paths
+- Host installs (via `CubridInstaller`):
+  - Installs to `$HOME/CUBRID`; optimized runtime mirrors this with `/root/CUBRID`
+
 ### Configuration Options
 
 ```properties
