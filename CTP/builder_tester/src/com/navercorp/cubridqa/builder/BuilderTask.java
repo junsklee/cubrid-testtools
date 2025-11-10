@@ -173,7 +173,14 @@ public class BuilderTask {
             // Choose distribution strategy
             if (config.isSmartSchedulingEnabled()) {
                 taskLogger.info("Using SMART SCHEDULING for test distribution");
-                distributeTestsWithSmartScheduling(builtPackages, tests, workerIps, finalBuildType, testRequestId);
+                distributeTestsWithSmartScheduling(
+                    builtPackages,
+                    tests,
+                    workerIps,
+                    finalBuildType,
+                    testRequestId,
+                    workerCapacities
+                );
             } else {
                 taskLogger.info("Using LEGACY work-queue distribution");
                 distributeTestsLegacy(builtPackages, tests, workerCapacities, dispatchCounts, finalBuildType, testRequestId, totalTestExecutions);
@@ -2132,7 +2139,8 @@ public class BuilderTask {
      * Smart scheduling distribution: uses scheduler for intelligent test placement.
      */
     private void distributeTestsWithSmartScheduling(Map<String, String> builtPackages, JSONArray tests,
-                                                     List<String> workerIps, String buildType, String testRequestId) {
+                                                     List<String> workerIps, String buildType, String testRequestId,
+                                                     Map<String, Integer> workerCapacities) {
         taskLogger.info("[Smart Scheduling] Initializing scheduler...");
 
         // Initialize scheduler components
@@ -2191,55 +2199,86 @@ public class BuilderTask {
         scheduler.offer(testInstances);
 
         // Poll scheduler and submit tests
-        int assignedCount = 0;
-        int noEligibleCount = 0;
-        while (scheduler.hasPending()) {
-            Optional<Assignment> assignment = scheduler.assignNext();
-            if (!assignment.isPresent()) {
-                noEligibleCount++;
-                if (noEligibleCount > 10) {
-                    taskLogger.warning("[Smart Scheduling] No eligible nodes after 10 attempts, waiting...");
-                    try {
-                        Thread.sleep(5000);  // Wait 5s for nodes to become available
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                    noEligibleCount = 0;
-                }
-                continue;
-            }
-
-            Assignment a = assignment.get();
-            assignedCount++;
-            taskLogger.info(String.format("[Smart Scheduling] Assignment %d/%d: %s",
-                assignedCount, testInstances.size(), a));
-
-            // Extract node IP from nodeId (format: "ip:port")
-            String nodeId = a.getTargetNodeId();
-            String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
-
-            // Submit test
-            try {
-                if (testRequestId != null) {
-                    RequestContext.setRequestId(testRequestId);
-                }
-                JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
-                    a.getTestKey(), workerIp, this.baselineCommit, buildType);
-                results.add(testResult);
-            } catch (Exception e) {
-                taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);
-                results.add(new JSONObject()
-                    .put("commit", a.getCommit())
-                    .put("test", a.getTestKey())
-                    .put("status", "error")
-                    .put("message", e.getMessage()));
-            } finally {
-                RequestContext.clear();
-            }
+        int totalConcurrency = workerCapacities.values().stream().mapToInt(Integer::intValue).sum();
+        if (totalConcurrency <= 0) {
+            totalConcurrency = Math.max(1, workerIps.size());
         }
 
-        nodeDirectory.stop();
+        ExecutorService testExecutor = Executors.newFixedThreadPool(totalConcurrency);
+        Semaphore capacitySemaphore = new Semaphore(totalConcurrency);
+        List<Future<?>> inflightTests = Collections.synchronizedList(new ArrayList<>());
+
+        int assignedCount = 0;
+        int noEligibleCount = 0;
+        try {
+            while (scheduler.hasPending()) {
+                try {
+                    capacitySemaphore.acquire();
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+
+                Optional<Assignment> assignment = scheduler.assignNext();
+                if (!assignment.isPresent()) {
+                    capacitySemaphore.release();
+                    noEligibleCount++;
+                    if (noEligibleCount > 10) {
+                        taskLogger.warning("[Smart Scheduling] No eligible nodes after 10 attempts, waiting...");
+                        try {
+                            Thread.sleep(5000);  // Wait 5s for nodes to become available
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        noEligibleCount = 0;
+                    }
+                    continue;
+                }
+
+                noEligibleCount = 0;
+                Assignment a = assignment.get();
+                assignedCount++;
+                taskLogger.info(String.format("[Smart Scheduling] Assignment %d/%d: %s",
+                    assignedCount, testInstances.size(), a));
+
+                String nodeId = a.getTargetNodeId();
+                String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
+
+                Future<?> future = testExecutor.submit(() -> {
+                    try {
+                        if (testRequestId != null) {
+                            RequestContext.setRequestId(testRequestId);
+                        }
+                        JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
+                            a.getTestKey(), workerIp, this.baselineCommit, buildType);
+                        results.add(testResult);
+                    } catch (Exception e) {
+                        taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);
+                        results.add(new JSONObject()
+                            .put("commit", a.getCommit())
+                            .put("test", a.getTestKey())
+                            .put("status", "error")
+                            .put("message", e.getMessage()));
+                    } finally {
+                        RequestContext.clear();
+                        capacitySemaphore.release();
+                    }
+                });
+                inflightTests.add(future);
+            }
+        } finally {
+            testExecutor.shutdown();
+            for (Future<?> future : inflightTests) {
+                try {
+                    future.get();
+                } catch (Exception e) {
+                    taskLogger.log(Level.WARNING, "[Smart Scheduling] Test task interrupted", e);
+                }
+            }
+            nodeDirectory.stop();
+        }
+
         taskLogger.info("[Smart Scheduling] Completed: assigned " + assignedCount + " tests");
     }
 
