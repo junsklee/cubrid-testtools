@@ -116,9 +116,13 @@ public class EnvScriptFactory {
         script.append("if [ -f /root/.cubrid.sh ]; then\n");
         script.append("  . /root/.cubrid.sh\n");
         script.append("fi\n");
-        script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
-        script.append("export PATH=\"$CUBRID_ROOT/bin:" + initPath + ":" + ctpHome + "/bin:" + ctpHome + "/common/script:$PATH\"\n");
-        script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:" + ctpHome + "/common/lib:$LD_LIBRARY_PATH\"\n");
+        script.append("CUBRID_HOME=\"$HOME/CUBRID\"\n");
+        script.append("if [ ! -e \"$CUBRID_HOME\" ]; then\n");
+        script.append("  ln -s \"$CUBRID_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || true\n");
+        script.append("fi\n");
+        script.append("export CUBRID=\"$CUBRID_HOME\"\n");
+        script.append("export PATH=\"$CUBRID/bin:" + initPath + ":" + ctpHome + "/bin:" + ctpHome + "/common/script:$PATH\"\n");
+        script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:$CUBRID/lib64:" + ctpHome + "/common/lib:$LD_LIBRARY_PATH\"\n");
         script.append("export CUBRID_LANG=\"en_US\"\n");
         script.append("export CUBRID_CHARSET=\"en_US\"\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
@@ -131,17 +135,17 @@ public class EnvScriptFactory {
         script.append("mkdir -p \"$RUNTIME_ROOT\"\n");
         script.append("TEST_RUNTIME_DIR=\"$RUNTIME_ROOT/${SAFE_TEST_NAME}_$(date +%s%N)\"\n");
         script.append("mkdir -p \"$TEST_RUNTIME_DIR/databases\"\n");
-        script.append("if [ -d \"$CUBRID_ROOT/databases\" ]; then\n");
+        script.append("if [ -d \"$CUBRID/databases\" ]; then\n");
         script.append("  if command -v rsync >/dev/null 2>&1; then\n");
-        script.append("    rsync -a --exclude 'databases.txt' \"$CUBRID_ROOT/databases\"/ \"$TEST_RUNTIME_DIR/databases\"/\n");
+        script.append("    rsync -a --exclude 'databases.txt' \"$CUBRID/databases\"/ \"$TEST_RUNTIME_DIR/databases\"/\n");
         script.append("  else\n");
-        script.append("    (cd \"$CUBRID_ROOT/databases\" && tar cpf - --exclude=databases.txt .) | (cd \"$TEST_RUNTIME_DIR/databases\" && tar xpf -)\n");
+        script.append("    (cd \"$CUBRID/databases\" && tar cpf - --exclude=databases.txt .) | (cd \"$TEST_RUNTIME_DIR/databases\" && tar xpf -)\n");
         script.append("  fi\n");
         script.append("fi\n");
         script.append(": > \"$TEST_RUNTIME_DIR/databases/databases.txt\"\n");
         script.append("export CUBRID_DATABASES=\"$TEST_RUNTIME_DIR/databases\"\n");
         script.append("ORIGINAL_TESTCASE_DIR=\"$TESTCASE_DIR\"\n");
-        script.append("ORIGINAL_DB_DIR=\"$CUBRID_ROOT/databases\"\n");
+        script.append("ORIGINAL_DB_DIR=\"$CUBRID/databases\"\n");
         script.append("MOUNT_MODE=\"\"\n");
         script.append("DB_BIND_ACTIVE=0\n");
         script.append("OVERLAY_ERROR_LOG=/tmp/overlay_setup.err\n");
@@ -224,10 +228,10 @@ public class EnvScriptFactory {
 
         script.append("# Emit debug env snapshot for docker exec sessions\n");
         script.append("cat > /workspace/debug_env.sh <<'EOS'\n");
-        script.append("export CUBRID=\"$CUBRID_ROOT\"\n");
+        script.append("export CUBRID=\"$CUBRID\"\n");
         script.append("export CUBRID_DATABASES=\"$CUBRID_DATABASES\"\n");
-        script.append("export PATH=\"$CUBRID_ROOT/bin:$PATH\"\n");
-        script.append("export LD_LIBRARY_PATH=\"$CUBRID_ROOT/lib:$CUBRID_ROOT/cci/lib:$CUBRID_ROOT/lib64:$LD_LIBRARY_PATH\"\n");
+        script.append("export PATH=\"$CUBRID/bin:$PATH\"\n");
+        script.append("export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:$CUBRID/lib64:$LD_LIBRARY_PATH\"\n");
         script.append("export CTP_HOME=\"").append(ctpHome).append("\"\n");
         script.append("export init_path=\"").append(initPath).append("\"\n");
         script.append("export WORKSPACE=\"/workspace\"\n");
@@ -235,10 +239,10 @@ public class EnvScriptFactory {
         script.append("chmod +x /workspace/debug_env.sh\n\n");
 
         script.append("# Ensure configuration backups exist for restoration\n");
-        script.append("for conf_file in $CUBRID_ROOT/conf/cubrid.conf \\\n");
-        script.append("  $CUBRID_ROOT/conf/cubrid_broker.conf \\\n");
-        script.append("  $CUBRID_ROOT/conf/cubrid_gateway.conf \\\n");
-        script.append("  $CUBRID_ROOT/conf/cubrid_ha.conf; do\n");
+        script.append("for conf_file in $CUBRID/conf/cubrid.conf \\\n");
+        script.append("  $CUBRID/conf/cubrid_broker.conf \\\n");
+        script.append("  $CUBRID/conf/cubrid_gateway.conf \\\n");
+        script.append("  $CUBRID/conf/cubrid_ha.conf; do\n");
         script.append("  if [ -f \"$conf_file\" ] && [ ! -f \"$conf_file.org\" ]; then\n");
         script.append("    cp \"$conf_file\" \"$conf_file.org\"\n");
         script.append("  fi\n");
@@ -266,22 +270,7 @@ public class EnvScriptFactory {
             script.append("fi\n\n");
         }
 
-        script.append("# Run test\n");
-        script.append("cd \"$TESTCASE_DIR\"\n");
-        script.append("set +e\n");
-        script.append("sh ").append(testScript).append("\n");
-        script.append("TEST_EXIT=$?\n");
-        script.append("set -e\n\n");
-
-        String resultBase = testScript.endsWith(".sh") ?
-            testScript.substring(0, testScript.length() - 3) :
-            (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
-        script.append("# Copy result file if generated by test\n");
-        script.append("if [ -f \"").append(resultBase).append(".result\" ]; then\n");
-        script.append("    cp \"").append(resultBase).append(".result\" /workspace/\n");
-        script.append("fi\n\n");
-
-        script.append("exit $TEST_EXIT\n");
+        appendRunAndCopyResult(script, testScript);
         return script.toString();
     }
 
@@ -451,7 +440,12 @@ public class EnvScriptFactory {
         script.append("  cp \"$CUBRID_INSTALL_ROOT/databases/databases.txt.sample\" \"$CUBRID_DATABASES/databases.txt.sample\"\n");
         script.append("fi\n\n");
 
-        script.append("# Run the test\n");
+        appendRunAndCopyResult(script, testScript);
+        return script.toString();
+    }
+
+    private static void appendRunAndCopyResult(StringBuilder script, String testScript) {
+        script.append("# Run test\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
         script.append("set +e\n");
         script.append("sh ").append(testScript).append("\n");
@@ -461,13 +455,15 @@ public class EnvScriptFactory {
         String resultBase = testScript.endsWith(".sh") ?
             testScript.substring(0, testScript.length() - 3) :
             (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
-        script.append("# Copy result file if generated\n");
-        script.append("if [ -f \"").append(resultBase).append(".result\" ]; then\n");
-        script.append("    cp \"").append(resultBase).append(".result\" /workspace/\n");
+        script.append("# Copy result file if generated (persist across overlay/fallback)\n");
+        script.append("RESULT_SRC=\"").append(resultBase).append(".result\"\n");
+        script.append("if [ -f \"$RESULT_SRC\" ]; then\n");
+        script.append("  if [ -n \"$ORIGINAL_TESTCASE_DIR\" ] && [ -d \"$ORIGINAL_TESTCASE_DIR\" ] && [ \"$TESTCASE_DIR\" != \"$ORIGINAL_TESTCASE_DIR\" ]; then\n");
+        script.append("    cp \"$RESULT_SRC\" \"$ORIGINAL_TESTCASE_DIR/\" 2>/dev/null || true\n");
+        script.append("  fi\n");
+        script.append("  cp \"$RESULT_SRC\" /workspace/ 2>/dev/null || true\n");
         script.append("fi\n\n");
-
         script.append("exit $TEST_EXIT\n");
-        return script.toString();
     }
 
     private static void appendPreinstalledCubridEnv(StringBuilder script, String initPath, String ctpHome) {
