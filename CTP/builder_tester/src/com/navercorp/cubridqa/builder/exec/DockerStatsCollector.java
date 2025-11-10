@@ -49,14 +49,31 @@ final class DockerStatsCollector {
                 Thread.currentThread().interrupt();
             }
         }
-        return accumulator.snapshot();
+        StatsSummary summary = accumulator.snapshot();
+        if (summary.hasSamples()) {
+            logger.log(Level.INFO, "Collected {0} stat samples for container {1}",
+                new Object[]{summary.getSampleCount(), containerName});
+        } else {
+            logger.log(Level.WARNING, "No stat samples collected for container {0}", containerName);
+        }
+        return summary;
     }
 
     private void runLoop() {
+        int consecutiveFailures = 0;
+        int maxConsecutiveFailures = 5;  // Allow 5 failures before giving up (handles startup race)
+
         while (running.get()) {
             boolean collected = collectSample();
             if (!collected) {
-                break;
+                consecutiveFailures++;
+                if (consecutiveFailures >= maxConsecutiveFailures) {
+                    logger.log(Level.FINE, "Stopping stats collection for {0} after {1} consecutive failures",
+                        new Object[]{containerName, consecutiveFailures});
+                    break;
+                }
+            } else {
+                consecutiveFailures = 0;  // Reset on success
             }
             try {
                 Thread.sleep(intervalMs);
@@ -87,6 +104,12 @@ final class DockerStatsCollector {
                 Sample sample = parseSample(line.trim());
                 if (sample != null) {
                     accumulator.add(sample);
+                    // Log first sample to confirm collection is working
+                    if (accumulator.samples == 1) {
+                        logger.log(Level.INFO, "Started collecting stats for container {0} (CPU: {1}%, Mem: {2} MB)",
+                            new Object[]{containerName, String.format("%.1f", sample.cpuPercent),
+                                        String.format("%.1f", sample.memUsageMb)});
+                    }
                 }
                 return exitCode == 0;
             }
@@ -245,6 +268,10 @@ final class DockerStatsCollector {
 
         boolean hasSamples() {
             return samples > 0;
+        }
+
+        int getSampleCount() {
+            return samples;
         }
 
         void applyTo(TestExecutionMetrics.Builder metricsBuilder, long durationMs) {
