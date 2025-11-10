@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.time.Instant;
 import java.util.logging.Logger;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class TestOrchestrator {
     private final Config config;
@@ -29,6 +30,7 @@ public class TestOrchestrator {
     private final Object dockerManager; // DockerManager - using Object to avoid compile dependency
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
     private final TestObservationWriter observationWriter;
+    private final AtomicInteger runningTestCount = new AtomicInteger(0);
 
     public TestOrchestrator(Config config, DirectExecutor directExecutor, 
                           StandardDockerExecutor standardDockerExecutor, 
@@ -50,8 +52,10 @@ public class TestOrchestrator {
      * Now collects log file paths instead of content for multipart sending.
      */
     public JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
-        // Unified execution semantics (v2): minRuns, maxRuns, optional timeBudgetMs
-        String runMode = request.optString("runMode", "until-pass").toLowerCase();
+        runningTestCount.incrementAndGet();
+        try {
+            // Unified execution semantics (v2): minRuns, maxRuns, optional timeBudgetMs
+            String runMode = request.optString("runMode", "until-pass").toLowerCase();
         if (!runMode.equals("until-pass") && !runMode.equals("until-fail") && !runMode.equals("fixed-runs")) {
             testLogger.warning("Invalid run_mode '" + runMode + "' in request. Using default 'until-pass'");
             runMode = "until-pass";
@@ -234,7 +238,10 @@ public class TestOrchestrator {
             }
         }
 
-        return finalResponse;
+            return finalResponse;
+        } finally {
+            runningTestCount.decrementAndGet();
+        }
     }
     
     /**
@@ -516,5 +523,13 @@ public class TestOrchestrator {
             }
         }
         dir.delete();
+    }
+
+    /**
+     * Returns the current number of running tests.
+     * Used by HealthHandler for concurrency reporting.
+     */
+    public int getRunningTestCount() {
+        return runningTestCount.get();
     }
 }

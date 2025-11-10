@@ -50,7 +50,11 @@ public class TesterService {
         
         // Register real handlers
         this.apiServer.registerHandler("/test", new PlaceholderTestHandler());
-        this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter));
+        // NOTE: TesterService is legacy - HealthHandler requires NodeCapacity and TestOrchestrator
+        // For now, provide dummy values. Use Tester.java instead for full functionality.
+        NodeCapacity dummyCapacity = NodeCapacity.measure(config.getWorkDir());
+        TestOrchestrator dummyOrchestrator = null; // TesterService doesn't have orchestrator
+        this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator));
         this.apiServer.registerHandler("/log/", new LogStreamHandler(logLocator, responseWriter));
         
         // Create work directory if it doesn't exist

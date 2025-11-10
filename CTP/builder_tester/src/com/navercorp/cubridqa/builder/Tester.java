@@ -4,8 +4,10 @@ import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.tester.TestHandler;
 import com.navercorp.cubridqa.builder.tester.TestOrchestrator;
 import com.navercorp.cubridqa.builder.tester.HealthHandler;
+import com.navercorp.cubridqa.builder.tester.ScoreHandler;
 import com.navercorp.cubridqa.builder.tester.LogStreamHandler;
 import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
+import com.navercorp.cubridqa.builder.tester.NodeCapacity;
 import com.navercorp.cubridqa.builder.logs.LogLocator;
 import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
@@ -67,6 +69,7 @@ public class Tester {
     // HTTP handlers
     private final TestHandler testHandler;
     private final HealthHandler healthHandler;
+    private final ScoreHandler scoreHandler;
     private final LogStreamHandler logStreamHandler;
     
     // Docker components (may be null if Docker disabled)
@@ -138,19 +141,23 @@ public class Tester {
 
         // Create orchestrator
         this.testOrchestrator = new TestOrchestrator(
-            config, 
-            directExecutor, 
-            standardDockerExecutor, 
+            config,
+            directExecutor,
+            standardDockerExecutor,
             optimizedDockerExecutor,
-            useDocker, 
-            dockerManager, 
+            useDocker,
+            dockerManager,
             new DockerUtils(),
             observationWriter
         );
-        
+
+        // Measure node capacity for health endpoint
+        NodeCapacity nodeCapacity = NodeCapacity.measure(config.getWorkDir());
+
         // Create HTTP handlers
         this.testHandler = new TestHandler(config, testOrchestrator, logger);
-        this.healthHandler = new HealthHandler(config, new HttpResponseWriter());
+        this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator);
+        this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
         
         // Build cache is ready for use
@@ -180,6 +187,7 @@ public class Tester {
         this.server = HttpServer.create(new InetSocketAddress(config.getTesterPort()), 0);
         this.server.createContext("/test", testHandler);
         this.server.createContext("/health", healthHandler);
+        this.server.createContext("/score", scoreHandler);
         this.server.createContext("/log/", logStreamHandler);
         int maxThreads = Math.max(1, config.getMaxConcurrentTests());
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
