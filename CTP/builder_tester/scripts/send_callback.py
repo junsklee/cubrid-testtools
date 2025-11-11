@@ -11,16 +11,39 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 
+def load_test_paths_from_request_json(log_file):
+    """Load test paths from request.json as a fallback"""
+    test_path_map = {}
+    log_dir = os.path.dirname(log_file)
+    request_json_path = os.path.join(log_dir, "request.json")
+    
+    if os.path.exists(request_json_path):
+        try:
+            with open(request_json_path, 'r', encoding='utf-8') as f:
+                request_data = json.load(f)
+                tests = request_data.get("tests", [])
+                for test_path in tests:
+                    # Extract test name from full path
+                    test_name_match = re.search(r'/([^/]+)\.sh$', test_path)
+                    if test_name_match:
+                        test_name = test_name_match.group(1)
+                        test_path_map[test_name] = test_path
+        except Exception as e:
+            print(f"Warning: Could not load test paths from request.json: {e}", file=sys.stderr)
+    
+    return test_path_map
+
 def build_test_path_mapping(log_file):
     """Build a mapping from test name to full test path from the log"""
     test_path_map = {}
     
-    # Pattern to match: "Test X/Y: full/path/to/test.sh (commit ...)"
-    pattern = r"Test \d+/\d+: (.+\.sh) \(commit"
+    # Pattern 1: Match "Assignment{test=full/path/to/test.sh, ...}" from Smart Scheduling
+    assignment_pattern = r"Assignment\{test=([^,]+\.sh)"
     
     with open(log_file, 'r', encoding='utf-8') as f:
         for line in f:
-            match = re.search(pattern, line)
+            # Look for Assignment lines (most reliable source of full paths)
+            match = re.search(assignment_pattern, line)
             if match:
                 full_path = match.group(1)
                 # Extract test name from full path (e.g., "bug_bts_10863" from "shell/_06_issues/_13_1h/bug_bts_10863/cases/bug_bts_10863.sh")
@@ -28,6 +51,13 @@ def build_test_path_mapping(log_file):
                 if test_name_match:
                     test_name = test_name_match.group(1)
                     test_path_map[test_name] = full_path
+    
+    # Fallback: load from request.json if we don't have enough mappings
+    if len(test_path_map) == 0:
+        print("No test paths found in log, trying request.json...")
+        request_map = load_test_paths_from_request_json(log_file)
+        test_path_map.update(request_map)
+        print(f"Loaded {len(request_map)} test paths from request.json")
     
     return test_path_map
 
@@ -38,6 +68,50 @@ def extract_results_from_log(log_file, expected_commit=None):
     # First, build a mapping from test name to full path
     test_path_map = build_test_path_mapping(log_file)
     print(f"Built test path mapping with {len(test_path_map)} entries")
+    
+    # Also build a mapping from "Sending test" lines to find test paths
+    # We'll process the log in two passes: first to build the mapping, then to extract results
+    sending_test_map = {}  # Maps test_name -> full_path from "Sending test" lines
+    
+    # First pass: build mapping from "Sending test" and "Assignment" lines
+    with open(log_file, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            # Look for "Sending test 'testname' (commit ...)" lines
+            sending_match = re.search(r"Sending test '([^']+)' \(commit ([a-f0-9]+)\)", line)
+            if sending_match:
+                test_name = sending_match.group(1)
+                commit_short = sending_match.group(2)
+                
+                # Look backwards for the most recent Assignment line with this test name
+                # The Assignment line should be within a reasonable distance (e.g., 20 lines)
+                for j in range(max(0, i - 20), i):
+                    assignment_match = re.search(r"Assignment\{test=([^,]+\.sh)", lines[j])
+                    if assignment_match:
+                        full_path = assignment_match.group(1)
+                        # Check if this path matches the test name
+                        if test_name in full_path:
+                            sending_test_map[test_name] = full_path
+                            break
+    
+    # Merge the two mappings (Assignment-based takes precedence)
+    for test_name, full_path in sending_test_map.items():
+        if test_name not in test_path_map:
+            test_path_map[test_name] = full_path
+    
+    # Always load request.json to fill in any gaps (Assignment lines are most reliable, but request.json
+    # can help with tests that don't have Assignment lines or for legacy distribution mode)
+    request_map = load_test_paths_from_request_json(log_file)
+    if request_map:
+        added_count = 0
+        for test_name, full_path in request_map.items():
+            if test_name not in test_path_map:
+                test_path_map[test_name] = full_path
+                added_count += 1
+        if added_count > 0:
+            print(f"Added {added_count} additional test paths from request.json")
+    
+    print(f"Final test path mapping has {len(test_path_map)} entries")
     
     with open(log_file, 'r', encoding='utf-8') as f:
         for line in f:
@@ -65,18 +139,30 @@ def extract_results_from_log(log_file, expected_commit=None):
                             # If no expected commit specified, skip empty commits
                             continue
                         
-                        # Get full test path from mapping, fallback to test name if not found
-                        test_path = test_path_map.get(test_name, test_name)
+                        # Get full test path from mapping
+                        test_path = test_path_map.get(test_name)
+                        if not test_path:
+                            # Fallback: try to load from request.json if we haven't already
+                            if len(test_path_map) > 0:  # Only if we have some mappings (to avoid repeated warnings)
+                                request_map = load_test_paths_from_request_json(log_file)
+                                test_path = request_map.get(test_name)
+                                if test_path:
+                                    test_path_map[test_name] = test_path  # Cache it
+                            
+                            if not test_path:
+                                # Last resort: use test name (shouldn't happen, but be safe)
+                                print(f"Warning: No full path found for test '{test_name}', using test name as fallback", file=sys.stderr)
+                                test_path = test_name
                         
-                        # Transform to BuilderTask result format
+                        # Transform to BuilderTask result format (matches Java code structure)
                         result = {
                             "commit": commit,
-                            "test": test_path,  # Use full path instead of just test name
+                            "test": test_path,  # Use full path as in Java code
                             "status": payload.get("status", "unknown"),
                             "message": payload.get("message", "")
                         }
                         
-                        # Add optional fields if present
+                        # Add optional fields if present (matches Java code)
                         if "attempts" in payload:
                             result["attempts"] = payload["attempts"]
                         if "flaky" in payload:
