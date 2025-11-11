@@ -156,7 +156,43 @@ du -sh profiles/wal/
 
 # Check MANIFEST
 cat profiles/MANIFEST.json | jq '.'
+
+# Check request journals
+ls -lh profiles/requests/
+
+# Check latest export
+ls -lh profiles/latest.json.gz
+zcat profiles/latest.json.gz | jq '.version, .generated_at, (.tests | length)'
 ```
+
+## Request Journal & Statistics Export
+
+### Request Journal
+
+**Purpose:** Human-readable per-request test execution logs
+
+**Location:** `profiles/requests/req_YYYYMMDD_HHMMSS_xxxx.json`
+
+**Contents:** All test observations from a single tester run (test results, durations, resource usage)
+
+**No configuration required** - files are automatically created and written on tester shutdown.
+
+### Cross-Node Statistics Import
+
+**Purpose:** Bootstrap test statistics on a new node without replaying full WAL history
+
+**Export (automatic):**
+- File: `profiles/latest.json.gz`
+- Generated after each snapshot cycle
+- Contains latest statistics for all tests
+
+**Import (copy file to new node):**
+1. Copy `latest.json.gz` from existing node to new node's `profiles/` directory
+2. Start tester on new node
+3. Automatic detection and import if statsMap is empty
+4. WAL replay boundary aligned to avoid reprocessing
+
+**No configuration flags needed** - works by file presence convention.
 
 ## Configuration
 

@@ -35,6 +35,29 @@ Production-grade WAL (Write-Ahead Log) architecture with crash-safety guarantees
 
 ## Architecture Components
 
+### 0. Request Journal & Latest Export (Human-Readable Exports)
+
+**Files:** `RequestJournal.java` (125 lines), integrated into `TestStatsStore.java` and `Tester.java`
+
+**Purpose:** Human-readable per-request tracking and cross-node statistics import
+
+**Request Journal:**
+- Format: `profiles/requests/req_YYYYMMDD_HHMMSS_xxxx.json`
+- Records all test observations for a single tester run
+- Thread-safe buffered writes, atomic flush on shutdown
+- No config required (works by convention)
+
+**Latest Export:**
+- Format: `profiles/latest.json.gz`
+- Written after each snapshot cycle (alongside MANIFEST update)
+- Contains latest statistics for all tests (importable format)
+- Enables fresh node bootstrap without full WAL replay
+
+**Import Flow:**
+- Copy `latest.json.gz` to new node's profiles directory
+- On startup, if statsMap is empty, automatically imports
+- No config flags needed (presence-based detection)
+
 ### 1. MANIFEST File (Single Source of Truth)
 
 **File:** `WALManifest.java` (341 lines)
@@ -287,7 +310,8 @@ private void coordinatedSnapshot() {
 1. Write snapshot (fsync file → rename → fsync dir)
 2. Rotate WAL (get closed segment name - guaranteed durable)
 3. Update MANIFEST (fsync file → rename → fsync dir)
-4. Cleanup old segments (only after MANIFEST update succeeds)
+4. Write latest.json.gz (importable statistics export)
+5. Cleanup old segments (only after all above succeed)
 
 **Replay via MANIFEST:**
 ```java
@@ -520,8 +544,10 @@ public void stop() {
 
 ### Files Updated
 
-1. **TestStatsStore.java** (504 lines) - Coordinator and replay logic
-2. **Tester.java** - Component creation and lifecycle
+1. **TestStatsStore.java** (580+ lines) - Coordinator, replay logic, latest export/import
+2. **Tester.java** - Component creation, lifecycle, request journal integration
+3. **TestStats.java** - Added toLatestJSON() and fromLatestJSON() for import/export
+4. **TestObservation.java** - Added getTsIso() helper method
 
 ## Integration
 

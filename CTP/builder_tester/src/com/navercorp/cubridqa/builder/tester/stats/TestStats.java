@@ -287,4 +287,118 @@ public class TestStats {
         stats.packageCachedCount = obj.getInt("packageCachedCount");
         return stats;
     }
+
+    /**
+     * Serializes to JSON for latest.json.gz export.
+     *
+     * <p>This format is designed for importing test statistics from another node,
+     * providing a human-readable and importable snapshot of test performance data.
+     */
+    public JSONObject toLatestJSON() {
+        JSONObject obj = new JSONObject();
+        obj.put("last_obs_ts", lastUpdated.toString());
+        obj.put("runs", observationCount);
+
+        // Duration stats
+        JSONObject duration = new JSONObject();
+        duration.put("p50", getDurationP50Ms());
+        duration.put("p95", getDurationP95Ms());
+        duration.put("ewma", durationEwmaMs);
+        obj.put("duration_ms", duration);
+
+        // CPU stats
+        JSONObject cpu = new JSONObject();
+        cpu.put("avg", avgCpuPctMean);
+        cpu.put("p95", getCpuPctP95());
+        obj.put("cpu_pct", cpu);
+
+        // Memory stats
+        JSONObject mem = new JSONObject();
+        mem.put("avg", avgMemMbMean);
+        mem.put("p95", getMemMbP95());
+        obj.put("mem_mb", mem);
+
+        // I/O stats
+        JSONObject io = new JSONObject();
+        io.put("avg", avgIoMbPerSecMean);
+        obj.put("io_mb_s", io);
+
+        // IOPS stats
+        JSONObject iops = new JSONObject();
+        iops.put("avg", avgIopsMean);
+        obj.put("iops", iops);
+
+        // Network stats
+        JSONObject net = new JSONObject();
+        net.put("avg", avgNetMbPerSecMean);
+        obj.put("net_mb_s", net);
+
+        // Flakiness stats
+        JSONObject flaky = new JSONObject();
+        flaky.put("fail_rate", getFailRate());
+        flaky.put("retry_mean", getRetryMean());
+        obj.put("flakiness", flaky);
+
+        return obj;
+    }
+
+    /**
+     * Reconstructs from latest.json.gz format for importing test statistics.
+     */
+    public static TestStats fromLatestJSON(String testKey, JSONObject obj) {
+        TestStats stats = new TestStats(testKey);
+
+        stats.lastUpdated = Instant.parse(obj.getString("last_obs_ts"));
+        stats.observationCount = obj.getInt("runs");
+
+        // Duration stats
+        if (obj.has("duration_ms")) {
+            JSONObject duration = obj.getJSONObject("duration_ms");
+            stats.durationEwmaMs = duration.optDouble("ewma", 0.0);
+        }
+
+        // CPU stats
+        if (obj.has("cpu_pct")) {
+            JSONObject cpu = obj.getJSONObject("cpu_pct");
+            stats.avgCpuPctMean = cpu.optDouble("avg", 0.0);
+        }
+
+        // Memory stats
+        if (obj.has("mem_mb")) {
+            JSONObject mem = obj.getJSONObject("mem_mb");
+            stats.avgMemMbMean = mem.optDouble("avg", 0.0);
+        }
+
+        // I/O stats
+        if (obj.has("io_mb_s")) {
+            JSONObject io = obj.getJSONObject("io_mb_s");
+            stats.avgIoMbPerSecMean = io.optDouble("avg", 0.0);
+        }
+
+        // IOPS stats
+        if (obj.has("iops")) {
+            JSONObject iops = obj.getJSONObject("iops");
+            stats.avgIopsMean = iops.optDouble("avg", 0.0);
+        }
+
+        // Network stats
+        if (obj.has("net_mb_s")) {
+            JSONObject net = obj.getJSONObject("net_mb_s");
+            stats.avgNetMbPerSecMean = net.optDouble("avg", 0.0);
+        }
+
+        // Flakiness stats - reconstruct from ratios
+        if (obj.has("flakiness")) {
+            JSONObject flaky = obj.getJSONObject("flakiness");
+            double failRate = Math.max(0.0, Math.min(1.0, flaky.optDouble("fail_rate", 0.0)));
+            double retryMean = Math.max(0.0, flaky.optDouble("retry_mean", 0.0));
+
+            // Estimate counts based on fail rate and observation count
+            stats.failCount = (int) Math.round(stats.observationCount * failRate);
+            stats.passCount = stats.observationCount - stats.failCount;
+            stats.totalAttempts = Math.max(0, (int) Math.round(stats.observationCount * retryMean));
+        }
+
+        return stats;
+    }
 }

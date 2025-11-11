@@ -52,6 +52,12 @@ public class TestStatsStore {
     private final WALManifest manifest;
     private final Path walDir;
 
+    // Request journal (optional, may be null)
+    private volatile RequestJournal requestJournal;
+
+    // Node hardware for latest.json.gz export (optional, may be null)
+    private volatile JSONObject nodeHardwareJson;
+
     private final ConcurrentHashMap<String, TestStats> statsMap;
     private final ScheduledExecutorService snapshotCoordinator;
 
@@ -105,13 +111,18 @@ public class TestStatsStore {
     public void start() {
         // Load MANIFEST first
         manifest.load();
-        
+
         // Load snapshot
         loadSnapshot();
-        
+
+        // Import from latest.json.gz if statsMap is empty (new node bootstrap)
+        if (statsMap.isEmpty()) {
+            importFromLatest();
+        }
+
         // Replay WAL segments from MANIFEST
         replayWAL();
-        
+
         // Start coordinator (single-threaded, enforces order)
         snapshotCoordinator.scheduleAtFixedRate(
                 this::coordinatedSnapshot,
@@ -154,15 +165,49 @@ public class TestStatsStore {
     }
 
     /**
-     * Records a new observation, updating the in-memory statistics and writing to WAL.
+     * Sets the request journal for per-request observation tracking.
+     *
+     * @param requestJournal The request journal to use
+     */
+    public void setRequestJournal(RequestJournal requestJournal) {
+        this.requestJournal = requestJournal;
+    }
+
+    /**
+     * Sets the node hardware information for latest.json.gz export.
+     *
+     * @param nodeHardwareJson JSON representation of node hardware
+     */
+    public void setNodeHardwareJson(JSONObject nodeHardwareJson) {
+        this.nodeHardwareJson = nodeHardwareJson;
+    }
+
+    /**
+     * Records a new observation from live test execution.
+     * Writes to WAL, request journal, and updates in-memory statistics.
      *
      * @param obs The observation to record
      */
     public void recordObservation(TestObservation obs) {
         // Write to WAL first (async, non-blocking)
         walWriter.append(obs);
-        
+
+        // Append to request journal if available
+        if (requestJournal != null) {
+            requestJournal.append(obs);
+        }
+
         // Update in-memory statistics
+        applyInMemory(obs);
+    }
+
+    /**
+     * Applies an observation to in-memory statistics only.
+     * Used by replay and import paths (does NOT write to WAL or request journal).
+     *
+     * @param obs The observation to apply
+     */
+    private void applyInMemory(TestObservation obs) {
         String testKey = obs.getTestKey();
         TestStats stats = statsMap.computeIfAbsent(testKey, TestStats::new);
         synchronized (stats) {
@@ -204,6 +249,54 @@ public class TestStatsStore {
         return statsMap.values().stream()
                 .mapToLong(TestStats::getObservationCount)
                 .sum();
+    }
+
+    /**
+     * Imports test statistics from latest.json.gz if present.
+     *
+     * <p>This allows a new node to bootstrap test statistics without replaying
+     * the entire WAL history. The import only happens if statsMap is empty.
+     */
+    private void importFromLatest() {
+        Path latest = profilesDir.resolve("latest.json.gz");
+        if (!Files.exists(latest)) {
+            logger.info("[Import] No latest.json.gz found, skipping import");
+            return;
+        }
+
+        try (InputStream in = new GZIPInputStream(Files.newInputStream(latest));
+             BufferedReader reader = new BufferedReader(new InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
+
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
+            String json = sb.toString();
+            JSONObject root = new JSONObject(json);
+            JSONObject tests = root.getJSONObject("tests");
+
+            int imported = 0;
+            for (String key : tests.keySet()) {
+                JSONObject tj = tests.getJSONObject(key);
+                TestStats s = TestStats.fromLatestJSON(key, tj);
+                statsMap.put(key, s);
+                imported++;
+            }
+
+            // Align replay boundary to latest.json "generated_at" to avoid reprocessing
+            String genAt = root.optString("generated_at", null);
+            if (genAt != null) {
+                lastSnapshotTime = Instant.parse(genAt);
+            }
+
+            logger.info("[Import] Bootstrapped from latest.json.gz (" + imported + " tests, generated_at=" +
+                    root.optString("generated_at", "unknown") + ")");
+
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "[Import] latest.json.gz import failed", e);
+            // Non-fatal: continue with empty statsMap or try snapshot
+        }
     }
 
     /**
@@ -347,7 +440,7 @@ public class TestStatsStore {
                         continue;
                     }
 
-                    recordObservation(obs); // No WAL write here - only in-memory update
+                    applyInMemory(obs); // Replay: in-memory only, no WAL/journal write
                     replayed++;
 
                 } catch (Exception e) {
@@ -434,6 +527,10 @@ public class TestStatsStore {
                 }
             }
 
+            // 5) Write latest.json.gz (after MANIFEST update, before cleanup)
+            writeLatestFromStatsMap(nodeHardwareJson);
+
+            // 6) Cleanup old segments (after latest.json.gz written)
             if (!toCleanup.isEmpty()) {
                 manifest.removeSegments(toCleanup);
                 logger.info(String.format("[Coordinator] Cleanup: %d deleted, %d failed", deletedCount, failedCount));
@@ -445,6 +542,68 @@ public class TestStatsStore {
         } catch (Throwable t) {
             logger.log(Level.SEVERE, "[Coordinator] Snapshot coordination failed", t);
             // Keep going; we'll try again next tick
+        }
+    }
+
+    /**
+     * Writes latest.json.gz file from current in-memory statistics.
+     *
+     * <p>This file provides a human-readable and importable snapshot that
+     * can be copied to a new node to bootstrap test statistics without
+     * replaying the entire WAL history.
+     *
+     * @param nodeHardwareJson JSON representation of node hardware (optional)
+     */
+    private void writeLatestFromStatsMap(JSONObject nodeHardwareJson) {
+        Path latestPath = profilesDir.resolve("latest.json.gz");
+
+        try {
+            JSONObject root = new JSONObject();
+            root.put("version", 1);
+            root.put("generated_at", Instant.now().toString());
+
+            if (nodeHardwareJson != null) {
+                root.put("node_hardware", nodeHardwareJson);
+            }
+
+            JSONObject tests = new JSONObject();
+            for (Map.Entry<String, TestStats> entry : statsMap.entrySet()) {
+                String key = entry.getKey();
+                TestStats s = entry.getValue();
+                JSONObject tj;
+                synchronized (s) {
+                    tj = s.toLatestJSON();
+                }
+                tests.put(key, tj);
+            }
+            root.put("tests", tests);
+
+            byte[] jsonBytes = root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            try (GZIPOutputStream gos = new GZIPOutputStream(baos)) {
+                gos.write(jsonBytes);
+            }
+            byte[] gzBytes = baos.toByteArray();
+
+            Path tmp = latestPath.resolveSibling("latest.json.gz.tmp");
+            try (FileChannel ch = FileChannel.open(tmp,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                    java.nio.file.StandardOpenOption.WRITE)) {
+                ch.write(java.nio.ByteBuffer.wrap(gzBytes));
+                ch.force(true);
+            }
+
+            Files.move(tmp, latestPath,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+            WALUtils.fsyncDirectory(latestPath.getParent());
+
+            logger.info("[Latest] Written: " + statsMap.size() + " tests to latest.json.gz");
+
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "[Latest] Failed to write latest.json.gz", e);
+            // Non-fatal: WAL still preserves data
         }
     }
 

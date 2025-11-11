@@ -179,6 +179,13 @@ public final class TestObservation {
     }
 
     /**
+     * Returns timestamp in ISO-8601 format.
+     */
+    public String getTsIso() {
+        return timestamp.toString();
+    }
+
+    /**
         * Serialize as a single JSON object suitable for JSONL streams.
         */
     public String toJsonLine() {
