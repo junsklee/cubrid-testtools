@@ -22,6 +22,8 @@ import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
 import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
+import com.navercorp.cubridqa.builder.tester.stats.WALManifest;
+import com.navercorp.cubridqa.builder.tester.stats.WALSegmentWriter;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.File;
@@ -78,6 +80,7 @@ public class Tester {
 
     // Statistics store
     private final TestStatsStore testStatsStore;
+    private final WALSegmentWriter walWriter;
 
     public Tester(Config config) throws IOException {
         this.config = config;
@@ -135,9 +138,14 @@ public class Tester {
         Path observationWalPath = profilesDir.resolve("test_stats.jl.gz");
         TestObservationWriter observationWriter = new TestObservationWriter(observationWalPath, logger);
 
+        // Initialize WAL components for robust crash-safe persistence
+        Path walDir = profilesDir.resolve("wal");
+        WALManifest manifest = new WALManifest(profilesDir);
+        this.walWriter = new WALSegmentWriter(profilesDir, manifest);
+        
         // Initialize TestStatsStore for prediction and scheduling
         long snapshotIntervalSeconds = config.getLongOrDefault("stats.snapshot_interval_seconds", 300L);
-        this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds);
+        this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds, walWriter, manifest, walDir);
 
         // Create orchestrator
         this.testOrchestrator = new TestOrchestrator(
@@ -194,7 +202,16 @@ public class Tester {
     }
     
     public void start() {
-        // Start TestStatsStore (loads snapshot and starts periodic snapshot writer)
+        // Start WAL writer first (acquires lock, opens segment)
+        try {
+            walWriter.start();
+            logger.info("WALSegmentWriter started");
+        } catch (IOException e) {
+            logger.severe("Failed to start WALSegmentWriter: " + e.getMessage());
+            throw new RuntimeException("WAL initialization failed", e);
+        }
+        
+        // Start TestStatsStore (loads snapshot, replays WAL, starts coordinator)
         testStatsStore.start();
         logger.info("TestStatsStore started");
 
@@ -211,6 +228,10 @@ public class Tester {
         // Stop TestStatsStore (writes final snapshot)
         testStatsStore.stop();
         logger.info("TestStatsStore stopped");
+        
+        // Stop WAL writer (releases lock, closes segment)
+        walWriter.stop();
+        logger.info("WALSegmentWriter stopped");
 
         server.stop(0);
         logger.info("Tester stopped");
