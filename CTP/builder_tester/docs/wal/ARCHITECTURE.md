@@ -95,6 +95,22 @@ Production-grade WAL (Write-Ahead Log) architecture with crash-safety guarantees
 - **Fsync Before Close:** Ensures durability
 - **Metrics:** Tracks written/dropped/rotated counts
 
+**Snapshot Coordinator:**
+- Single-threaded executor enforces atomic execution order
+- Execution sequence (all in one thread):
+  1. Write snapshot (fsync file → rename → fsync dir)
+  2. Rotate WAL (get closed segment name - guaranteed durable)
+  3. Update MANIFEST (fsync file → rename → fsync dir)
+  4. Cleanup old segments (only after MANIFEST update succeeds)
+- Error handling: If any step fails, cleanup is skipped (retry next cycle)
+- Shutdown: Coordinator finishes before writer stops, preventing races
+
+**Replay Logic:**
+- Iterates segments from `manifest.getSegmentsToReplay()` (newer than `includes_up_to_wal`)
+- Partial-line-safe: ignores parse failures only on final line (tolerates truncated writes)
+- No re-persist: `recordObservation()` only updates in-memory stats during replay
+- Legacy compatibility: Detects and replays old gzipped WAL files, renames to `.legacy` after replay
+
 **Lifecycle:**
 ```java
 // Start
