@@ -1213,8 +1213,13 @@ public class BuilderTask {
         return parts.length > 2;
     }
     
-    private JSONObject runTest(String commit, String buildPackage, String testPath, 
+    private JSONObject runTest(String commit, String buildPackage, String testPath,
                                String workerIp, String baselineCommit, String buildType) {
+        return runTest(commit, buildPackage, testPath, workerIp, baselineCommit, buildType, null);
+    }
+
+    private JSONObject runTest(String commit, String buildPackage, String testPath,
+                               String workerIp, String baselineCommit, String buildType, TestInstance testInstance) {
         try {
             // Parse host and port from workerIp (supports "host:port" format)
             String host = workerIp;
@@ -1274,6 +1279,7 @@ public class BuilderTask {
                 .put("testDir", testDir)
                 .put("testScript", testScript)
                 .put("testName", testName)
+                .put("testKey", testPath)  // Add testKey for test tracking
                 .put("commit", commit)  // Add full commit hash
                 .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))  // Add short commit
                 .put("baseline", baselineCommit)  // Add baseline commit for Docker image differentiation
@@ -1289,7 +1295,22 @@ public class BuilderTask {
             if (timeBudgetOverride != null) {
                 testRequest.put("timeBudgetMs", timeBudgetOverride);
             }
-            
+
+            // Add predicted demands if available (smart scheduling)
+            if (testInstance != null && testInstance.getConfidence() > 0.0) {
+                JSONObject predicted = new JSONObject()
+                    .put("durationMs", testInstance.getPredictedDurationMs())
+                    .put("cpuPct", testInstance.getPredictedCpuPct())
+                    .put("memMb", testInstance.getPredictedMemMb())
+                    .put("ioMbPerSec", testInstance.getPredictedIoMbPerSec())
+                    .put("iops", testInstance.getPredictedIops())
+                    .put("netMbPerSec", testInstance.getPredictedNetMbPerSec())
+                    .put("confidence", testInstance.getConfidence());
+                testRequest.put("predicted", predicted);
+                taskLogger.fine(String.format("Sending test with predictions: CPU=%.1f%%, mem=%.0fMB, conf=%.2f",
+                    testInstance.getPredictedCpuPct(), testInstance.getPredictedMemMb(), testInstance.getConfidence()));
+            }
+
             // Add request ID if available
             String requestId = RequestContext.getRequestId();
             if (requestId != null) {
@@ -2278,7 +2299,7 @@ public class BuilderTask {
                             RequestContext.setRequestId(testRequestId);
                         }
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
-                            a.getTestKey(), workerIp, this.baselineCommit, buildType);
+                            a.getTestKey(), workerIp, this.baselineCommit, buildType, a.getTest());
                         results.add(testResult);
                     } catch (Exception e) {
                         taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);

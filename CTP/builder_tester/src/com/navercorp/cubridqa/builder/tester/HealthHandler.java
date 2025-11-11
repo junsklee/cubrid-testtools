@@ -3,6 +3,7 @@ package com.navercorp.cubridqa.builder.tester;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import com.navercorp.cubridqa.builder.BuilderConfig;
+import com.navercorp.cubridqa.builder.tester.demand.UtilizationSnapshot;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import java.io.BufferedReader;
@@ -72,13 +73,30 @@ public class HealthHandler implements HttpHandler {
         // Capacity
         response.put("capacity", nodeCapacity.toJSON());
 
-        // Utilization (simplified - actual would sum predicted demands of running tests)
+        // Utilization (actual predicted demands from running tests)
+        // Sums the predicted resource demands of all currently executing tests
         JSONObject utilization = new JSONObject();
-        utilization.put("cpu_pct", 0.0); // TODO: Sum from running tests
-        utilization.put("mem_mb", 0.0);
-        utilization.put("io_mb_s", 0.0);
-        utilization.put("iops", 0.0);
-        utilization.put("net_mb_s", 0.0);
+        if (testOrchestrator != null) {
+            UtilizationSnapshot util = testOrchestrator.getCurrentUtilization();
+            utilization.put("cpu_pct", util.getTotalCpuPct());
+            utilization.put("mem_mb", util.getTotalMemMb());
+            utilization.put("io_mb_s", util.getTotalIoMbPerSec());
+            utilization.put("iops", util.getTotalIops());
+            utilization.put("net_mb_s", util.getTotalNetMbPerSec());
+
+            // Log if tests are using conservative defaults (no predictions)
+            if (util.hasDefaults()) {
+                logger.log(Level.FINE, "{0}/{1} running tests using default predictions",
+                        new Object[]{util.getDefaultCount(), util.getTestCount()});
+            }
+        } else {
+            // Fallback if orchestrator not available
+            utilization.put("cpu_pct", 0.0);
+            utilization.put("mem_mb", 0.0);
+            utilization.put("io_mb_s", 0.0);
+            utilization.put("iops", 0.0);
+            utilization.put("net_mb_s", 0.0);
+        }
         response.put("utilization", utilization);
 
         // Docker images

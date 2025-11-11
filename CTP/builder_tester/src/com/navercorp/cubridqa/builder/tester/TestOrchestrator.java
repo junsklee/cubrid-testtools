@@ -8,6 +8,9 @@ import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservation;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
+import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
+import com.navercorp.cubridqa.builder.tester.demand.RunningTestTracker;
+import com.navercorp.cubridqa.builder.tester.demand.UtilizationSnapshot;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -31,9 +34,10 @@ public class TestOrchestrator {
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
     private final TestObservationWriter observationWriter;
     private final AtomicInteger runningTestCount = new AtomicInteger(0);
+    private final RunningTestTracker runningTestTracker = new RunningTestTracker();
 
-    public TestOrchestrator(Config config, DirectExecutor directExecutor, 
-                          StandardDockerExecutor standardDockerExecutor, 
+    public TestOrchestrator(Config config, DirectExecutor directExecutor,
+                          StandardDockerExecutor standardDockerExecutor,
                           OptimizedDockerExecutor optimizedDockerExecutor,
                           boolean useDocker, Object dockerManager, Object dockerUtils,
                           TestObservationWriter observationWriter) {
@@ -52,6 +56,15 @@ public class TestOrchestrator {
      * Now collects log file paths instead of content for multipart sending.
      */
     public JSONObject runTestWithRetry(JSONObject request, Logger testLogger) throws Exception {
+        // Generate unique test ID for tracking
+        String testId = generateTestId(request);
+        String testKey = request.optString("testKey", "unknown");
+
+        // Extract predicted demand from request
+        PredictedDemand demand = PredictedDemand.fromRequest(request);
+
+        // Register test start with tracker
+        runningTestTracker.registerTestStart(testId, testKey, demand);
         runningTestCount.incrementAndGet();
         try {
             // Unified execution semantics (v2): minRuns, maxRuns, optional timeBudgetMs
@@ -240,6 +253,8 @@ public class TestOrchestrator {
 
             return finalResponse;
         } finally {
+            // Unregister test from tracker
+            runningTestTracker.unregisterTestEnd(testId);
             runningTestCount.decrementAndGet();
         }
     }
@@ -531,5 +546,36 @@ public class TestOrchestrator {
      */
     public int getRunningTestCount() {
         return runningTestCount.get();
+    }
+
+    /**
+     * Returns current utilization snapshot based on running test predictions.
+     * Used by HealthHandler to report accurate resource utilization.
+     *
+     * @return utilization snapshot (never null)
+     */
+    public UtilizationSnapshot getCurrentUtilization() {
+        return runningTestTracker.getCurrentUtilization();
+    }
+
+    /**
+     * Generates a unique test ID for tracking.
+     *
+     * Format: {testKey}@{commit_short}@{timestamp}@{random}
+     *
+     * @param request the test request JSON
+     * @return unique test ID
+     */
+    private String generateTestId(JSONObject request) {
+        String testKey = request.optString("testKey", "unknown");
+        String commit = request.optString("commit", "unknown");
+        String commitShort = commit.length() > 7 ? commit.substring(0, 7) : commit;
+        long timestamp = System.currentTimeMillis();
+        String random = Integer.toHexString((int)(Math.random() * 65536));
+
+        // Replace slashes in testKey to make it file-system friendly
+        String sanitizedTestKey = testKey.replace("/", "_").replace("\\", "_");
+
+        return String.format("%s@%s@%d@%s", sanitizedTestKey, commitShort, timestamp, random);
     }
 }

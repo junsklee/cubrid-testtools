@@ -115,12 +115,59 @@ public class NodeDirectory {
     }
 
     /**
-     * Returns nodes eligible to run a test (has concurrency headroom).
+     * Returns nodes eligible to run a test (has concurrency AND resource headroom).
      */
     public List<NodeSnapshot> getEligibleNodes(TestInstance test) {
         return getHealthyNodes().stream()
                 .filter(s -> s.getAvailableConcurrency() > 0)
+                .filter(s -> hasResourceHeadroom(s, test))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Checks if a node has sufficient resource headroom for a test.
+     * Uses a safety margin (default 10%) to prevent oversubscription.
+     *
+     * @param node the node to check
+     * @param test the test instance with predicted resource demands
+     * @return true if node has enough free resources
+     */
+    private boolean hasResourceHeadroom(NodeSnapshot node, TestInstance test) {
+        // If no historical data (confidence = 0), use defaults and allow scheduling
+        if (test.getConfidence() == 0.0) {
+            logger.fine(String.format("Test %s has no historical data - allowing scheduling based on concurrency only",
+                    test.getTestKey()));
+            return true;
+        }
+
+        // Apply safety margin (10% extra headroom required)
+        double safetyMargin = 1.10;
+
+        // Check each resource dimension
+        double requiredCpu = test.getPredictedCpuPct() * safetyMargin;
+        double requiredMem = test.getPredictedMemMb() * safetyMargin;
+        double requiredIo = test.getPredictedIoMbPerSec() * safetyMargin;
+        double requiredIops = test.getPredictedIops() * safetyMargin;
+        double requiredNet = test.getPredictedNetMbPerSec() * safetyMargin;
+
+        boolean hasHeadroom = node.getFreeCpuPct() >= requiredCpu
+                && node.getFreeMemMb() >= requiredMem
+                && node.getFreeIoMbPerSec() >= requiredIo
+                && node.getFreeIops() >= requiredIops
+                && node.getFreeNetMbPerSec() >= requiredNet;
+
+        if (!hasHeadroom) {
+            logger.fine(String.format("Node %s lacks resource headroom for test %s: " +
+                    "CPU %.1f < %.1f, Mem %.0f < %.0f, IO %.1f < %.1f, IOPS %.0f < %.0f, Net %.1f < %.1f",
+                    node.getNodeId(), test.getTestKey(),
+                    node.getFreeCpuPct(), requiredCpu,
+                    node.getFreeMemMb(), requiredMem,
+                    node.getFreeIoMbPerSec(), requiredIo,
+                    node.getFreeIops(), requiredIops,
+                    node.getFreeNetMbPerSec(), requiredNet));
+        }
+
+        return hasHeadroom;
     }
 
     /**
