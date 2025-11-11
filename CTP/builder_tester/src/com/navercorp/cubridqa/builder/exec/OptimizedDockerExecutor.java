@@ -229,6 +229,29 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         List<String> dockerCommand = new ArrayList<>();
         dockerCommand.add("docker");
         dockerCommand.add("run");
+
+        // Runtime limits from predicted demand (enforce admission control)
+        com.navercorp.cubridqa.builder.tester.demand.PredictedDemand pd = request.getPredictedDemand();
+        if (pd != null) {
+            // CPU: millicores → --cpus (minimum 0.1 for bootstrapping)
+            double cpus = Math.max(0.1, pd.getCpuMillicores() / 1000.0);
+            dockerCommand.add("--cpus=" + String.format(java.util.Locale.ROOT, "%.3f", cpus));
+
+            // Memory limits: only apply if explicitly enabled via config (default disabled to prioritize test success)
+            if (config.isDockerEnforceMemoryLimits()) {
+                // Memory: bytes → --memory/--memory-swap (minimum 256MB, no swap bursting)
+                long memBytes = Math.max(256L * 1024 * 1024, pd.getMemBytes());
+                dockerCommand.add("--memory=" + memBytes);
+                dockerCommand.add("--memory-swap=" + memBytes); // Disable swap to prevent thrashing
+
+                testLogger.info(String.format("Docker limits: cpus=%.3f, memory=%dMB",
+                        cpus, memBytes / (1024 * 1024)));
+            } else {
+                testLogger.info(String.format("Docker limits: cpus=%.3f, memory=unlimited (docker_enforce_memory_limits=false)",
+                        cpus));
+            }
+        }
+
         // Limit container log growth to prevent host disk exhaustion
         dockerCommand.add("--log-driver");
         dockerCommand.add("json-file");

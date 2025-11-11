@@ -70,34 +70,64 @@ public class HealthHandler implements HttpHandler {
         concurrency.put("queued", 0); // Not implemented yet
         response.put("concurrency", concurrency);
 
-        // Capacity
-        response.put("capacity", nodeCapacity.toJSON());
+        // Capacity (canonical units)
+        JSONObject capacity = new JSONObject();
+        // NodeCapacity.getCpuPct() is cores×100, so divide by 100 to get cores, then multiply by 1000 for millicores
+        capacity.put("cpu_millicores", (int) (nodeCapacity.getCpuPct() / 100.0 * 1000.0));
+        capacity.put("mem_bytes", (long) (nodeCapacity.getMemMb() * 1024 * 1024)); // Convert MB to bytes
+        capacity.put("io_bytes_per_sec", (long) (nodeCapacity.getIoMbPerSec() * 1024 * 1024));
+        capacity.put("iops", (long) nodeCapacity.getIops());
+        capacity.put("net_bytes_per_sec", (long) (nodeCapacity.getNetMbPerSec() * 1024 * 1024));
+        response.put("capacity", capacity);
 
-        // Utilization (actual predicted demands from running tests)
-        // Sums the predicted resource demands of all currently executing tests
-        JSONObject utilization = new JSONObject();
+        // Utilization Reserved (sum of predicted demands from running tests)
+        JSONObject utilizationReserved = new JSONObject();
         if (testOrchestrator != null) {
-            UtilizationSnapshot util = testOrchestrator.getCurrentUtilization();
-            utilization.put("cpu_pct", util.getTotalCpuPct());
-            utilization.put("mem_mb", util.getTotalMemMb());
-            utilization.put("io_mb_s", util.getTotalIoMbPerSec());
-            utilization.put("iops", util.getTotalIops());
-            utilization.put("net_mb_s", util.getTotalNetMbPerSec());
+            UtilizationSnapshot reserved = testOrchestrator.getCurrentUtilization();
+            utilizationReserved.put("cpu_millicores", (long) reserved.getTotalCpuMillicores());
+            utilizationReserved.put("mem_bytes", reserved.getTotalMemBytes());
+            utilizationReserved.put("io_bytes_per_sec", reserved.getTotalIoBytesPerSec());
+            utilizationReserved.put("iops", reserved.getTotalIops());
+            utilizationReserved.put("net_bytes_per_sec", reserved.getTotalNetBytesPerSec());
+            utilizationReserved.put("tests", reserved.getTestCount());
+            utilizationReserved.put("defaults", reserved.getDefaultCount());
 
             // Log if tests are using conservative defaults (no predictions)
-            if (util.hasDefaults()) {
+            if (reserved.hasDefaults()) {
                 logger.log(Level.FINE, "{0}/{1} running tests using default predictions",
-                        new Object[]{util.getDefaultCount(), util.getTestCount()});
+                        new Object[]{reserved.getDefaultCount(), reserved.getTestCount()});
             }
         } else {
             // Fallback if orchestrator not available
-            utilization.put("cpu_pct", 0.0);
-            utilization.put("mem_mb", 0.0);
-            utilization.put("io_mb_s", 0.0);
-            utilization.put("iops", 0.0);
-            utilization.put("net_mb_s", 0.0);
+            utilizationReserved.put("cpu_millicores", 0);
+            utilizationReserved.put("mem_bytes", 0L);
+            utilizationReserved.put("io_bytes_per_sec", 0L);
+            utilizationReserved.put("iops", 0L);
+            utilizationReserved.put("net_bytes_per_sec", 0L);
+            utilizationReserved.put("tests", 0);
+            utilizationReserved.put("defaults", 0);
         }
-        response.put("utilization", utilization);
+        response.put("utilization_reserved", utilizationReserved);
+
+        // Utilization Actual (sampled from cgroups/Docker stats - stub for now)
+        // TODO: Implement actual sampling via ActualSampler
+        JSONObject utilizationActual = new JSONObject();
+        utilizationActual.put("cpu_millicores", 0);  // Placeholder
+        utilizationActual.put("mem_bytes", 0L);      // Placeholder
+        utilizationActual.put("io_bytes_per_sec", 0L);  // Placeholder
+        utilizationActual.put("iops", 0L);           // Placeholder
+        utilizationActual.put("net_bytes_per_sec", 0L); // Placeholder
+        response.put("utilization_actual", utilizationActual);
+
+        // Error ratios (actual - reserved) / reserved
+        // Placeholder for now since actual sampling not yet implemented
+        JSONObject errorRatio = new JSONObject();
+        errorRatio.put("cpu", 0.0);
+        errorRatio.put("mem", 0.0);
+        errorRatio.put("io", 0.0);
+        errorRatio.put("iops", 0.0);
+        errorRatio.put("net", 0.0);
+        response.put("error_ratio", errorRatio);
 
         // Docker images
         JSONObject images = new JSONObject();

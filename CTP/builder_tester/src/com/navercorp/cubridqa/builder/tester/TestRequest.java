@@ -1,5 +1,6 @@
 package com.navercorp.cubridqa.builder.tester;
 
+import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
 import org.json.JSONObject;
 
 public class TestRequest {
@@ -22,6 +23,7 @@ public class TestRequest {
     private final String containerName;
     private final int attemptNumber;
     private final String buildType;
+    private final PredictedDemand predictedDemand;  // Resource predictions for enforcement
     
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
@@ -42,13 +44,16 @@ public class TestRequest {
         this.containerName = json.optString("containerName", null);
         this.attemptNumber = json.optInt("attemptNumber", 1);
         this.buildType = json.optString("buildType", "debug");
-        
+
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
             this.timeBudgetMs = tb >= 1 ? tb : null;
         } else {
             this.timeBudgetMs = null;
         }
+
+        // Parse predicted demand for resource enforcement
+        this.predictedDemand = PredictedDemand.fromRequest(json, null);
     }
     
     public String getTestPath() { return testPath; }
@@ -70,4 +75,5 @@ public class TestRequest {
     public String getContainerName() { return containerName; }
     public int getAttemptNumber() { return attemptNumber; }
     public String getBuildType() { return buildType; }
+    public PredictedDemand getPredictedDemand() { return predictedDemand; }
 }

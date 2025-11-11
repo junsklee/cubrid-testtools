@@ -98,19 +98,38 @@ public class NodeSnapshot {
             builder.queuedTests(concurrency.optInt("queued", 0));
         }
 
-        // Capacity
+        // Capacity - parse NEW canonical format (v2) with fallback to legacy format (v1)
         if (json.has("capacity")) {
             JSONObject capacity = json.getJSONObject("capacity");
-            builder.cpuPct(capacity.optDouble("cpu_pct", 0.0));
-            builder.memMb(capacity.optDouble("mem_mb", 0.0));
-            builder.ioMbPerSec(capacity.optDouble("io_mb_s", 0.0));
-            builder.iops(capacity.optDouble("iops", 0.0));
-            builder.netMbPerSec(capacity.optDouble("net_mb_s", 0.0));
+            // NEW: canonical units (cpu_millicores, mem_bytes)
+            if (capacity.has("cpu_millicores")) {
+                builder.cpuPct(capacity.getLong("cpu_millicores") / 10.0); // mCPU → %
+                builder.memMb(capacity.getLong("mem_bytes") / (1024.0 * 1024.0)); // bytes → MB
+                builder.ioMbPerSec(capacity.optLong("io_bytes_per_sec", 0) / (1024.0 * 1024.0));
+                builder.iops(capacity.optLong("iops", 0));
+                builder.netMbPerSec(capacity.optLong("net_bytes_per_sec", 0) / (1024.0 * 1024.0));
+            } else {
+                // LEGACY: percentage-based units (cpu_pct, mem_mb)
+                builder.cpuPct(capacity.optDouble("cpu_pct", 0.0));
+                builder.memMb(capacity.optDouble("mem_mb", 0.0));
+                builder.ioMbPerSec(capacity.optDouble("io_mb_s", 0.0));
+                builder.iops(capacity.optDouble("iops", 0.0));
+                builder.netMbPerSec(capacity.optDouble("net_mb_s", 0.0));
+            }
         }
 
-        // Utilization
-        if (json.has("utilization")) {
+        // Utilization - parse NEW reserved format (v2) with fallback to legacy (v1)
+        if (json.has("utilization_reserved")) {
+            JSONObject utilization = json.getJSONObject("utilization_reserved");
+            // NEW: canonical units
+            builder.usedCpuPct(utilization.getLong("cpu_millicores") / 10.0); // mCPU → %
+            builder.usedMemMb(utilization.getLong("mem_bytes") / (1024.0 * 1024.0)); // bytes → MB
+            builder.usedIoMbPerSec(utilization.optLong("io_bytes_per_sec", 0) / (1024.0 * 1024.0));
+            builder.usedIops(utilization.optLong("iops", 0));
+            builder.usedNetMbPerSec(utilization.optLong("net_bytes_per_sec", 0) / (1024.0 * 1024.0));
+        } else if (json.has("utilization")) {
             JSONObject utilization = json.getJSONObject("utilization");
+            // LEGACY: percentage-based units
             builder.usedCpuPct(utilization.optDouble("cpu_pct", 0.0));
             builder.usedMemMb(utilization.optDouble("mem_mb", 0.0));
             builder.usedIoMbPerSec(utilization.optDouble("io_mb_s", 0.0));

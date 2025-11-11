@@ -1,65 +1,82 @@
 package com.navercorp.cubridqa.builder.tester.demand;
 
 /**
- * Immutable snapshot of current resource utilization based on running test predictions.
+ * Immutable snapshot of resource utilization.
  *
- * <p>Represents the sum of predicted resource demands from all currently executing tests.
- * Used by HealthHandler to report accurate real-time utilization instead of conservative
- * fixed estimates.</p>
+ * <p>Can represent either:
+ * <ul>
+ *   <li><b>Reserved</b>: sum of predicted resource demands (reservations)</li>
+ *   <li><b>Actual</b>: sampled current usage from cgroups/Docker stats</li>
+ * </ul></p>
+ *
+ * <p>Uses canonical units (cpuMillicores, memBytes, etc.) for consistency.</p>
  *
  * <p>Thread-safe (immutable).</p>
  */
 public class UtilizationSnapshot {
 
-    private final double totalCpuPct;
-    private final double totalMemMb;
-    private final double totalIoMbPerSec;
-    private final double totalIops;
-    private final double totalNetMbPerSec;
+    private final double totalCpuMillicores;
+    private final long totalMemBytes;
+    private final long totalIoBytesPerSec;
+    private final long totalIops;
+    private final long totalNetBytesPerSec;
     private final int testCount;
     private final int defaultCount;  // Tests using conservative defaults
 
-    private UtilizationSnapshot(Builder builder) {
-        this.totalCpuPct = builder.totalCpuPct;
-        this.totalMemMb = builder.totalMemMb;
-        this.totalIoMbPerSec = builder.totalIoMbPerSec;
-        this.totalIops = builder.totalIops;
-        this.totalNetMbPerSec = builder.totalNetMbPerSec;
-        this.testCount = builder.testCount;
-        this.defaultCount = builder.defaultCount;
+    private UtilizationSnapshot(double cpuMc, long memBytes, long ioBps, long iops, long netBps,
+                                int testCount, int defaultCount) {
+        this.totalCpuMillicores = cpuMc;
+        this.totalMemBytes = memBytes;
+        this.totalIoBytesPerSec = ioBps;
+        this.totalIops = iops;
+        this.totalNetBytesPerSec = netBps;
+        this.testCount = testCount;
+        this.defaultCount = defaultCount;
     }
 
-    public static Builder builder() {
-        return new Builder();
+    /**
+     * Factory method for reserved utilization (from predictions).
+     */
+    public static UtilizationSnapshot reserved(double cpuMc, long memBytes, long ioBps,
+                                               long iops, long netBps, int testCount, int defaultCount) {
+        return new UtilizationSnapshot(cpuMc, memBytes, ioBps, iops, netBps, testCount, defaultCount);
+    }
+
+    /**
+     * Factory method for actual utilization (from sampling).
+     */
+    public static UtilizationSnapshot actual(double cpuMc, long memBytes, long ioBps,
+                                             long iops, long netBps) {
+        return new UtilizationSnapshot(cpuMc, memBytes, ioBps, iops, netBps, 0, 0);
     }
 
     /**
      * Returns empty utilization snapshot (no tests running).
      */
     public static UtilizationSnapshot empty() {
-        return builder().build();
+        return new UtilizationSnapshot(0.0, 0, 0, 0, 0, 0, 0);
     }
 
-    // Getters
+    // Getters (canonical units)
 
-    public double getTotalCpuPct() {
-        return totalCpuPct;
+    public double getTotalCpuMillicores() {
+        return totalCpuMillicores;
     }
 
-    public double getTotalMemMb() {
-        return totalMemMb;
+    public long getTotalMemBytes() {
+        return totalMemBytes;
     }
 
-    public double getTotalIoMbPerSec() {
-        return totalIoMbPerSec;
+    public long getTotalIoBytesPerSec() {
+        return totalIoBytesPerSec;
     }
 
-    public double getTotalIops() {
+    public long getTotalIops() {
         return totalIops;
     }
 
-    public double getTotalNetMbPerSec() {
-        return totalNetMbPerSec;
+    public long getTotalNetBytesPerSec() {
+        return totalNetBytesPerSec;
     }
 
     public int getTestCount() {
@@ -68,6 +85,43 @@ public class UtilizationSnapshot {
 
     public int getDefaultCount() {
         return defaultCount;
+    }
+
+    // TODO: DEPRECATED - Legacy getters for backward compatibility (map canonical → legacy)
+    // These methods are kept for compatibility with existing code that expects legacy units.
+    // New code should use the canonical getters above (getTotalCpuMillicores, getTotalMemBytes, etc.)
+    // Once all calling code is migrated to canonical units, these methods can be removed.
+
+    /**
+     * @deprecated Use {@link #getTotalCpuMillicores()} instead. This method converts mCPU to percentage.
+     */
+    @Deprecated
+    public double getTotalCpuPct() {
+        return totalCpuMillicores / 10.0; // Convert mCPU to %
+    }
+
+    /**
+     * @deprecated Use {@link #getTotalMemBytes()} instead. This method converts bytes to MB.
+     */
+    @Deprecated
+    public double getTotalMemMb() {
+        return totalMemBytes / (1024.0 * 1024.0); // Convert bytes to MB
+    }
+
+    /**
+     * @deprecated Use {@link #getTotalIoBytesPerSec()} instead. This method converts B/s to MB/s.
+     */
+    @Deprecated
+    public double getTotalIoMbPerSec() {
+        return totalIoBytesPerSec / (1024.0 * 1024.0); // Convert B/s to MB/s
+    }
+
+    /**
+     * @deprecated Use {@link #getTotalNetBytesPerSec()} instead. This method converts B/s to MB/s.
+     */
+    @Deprecated
+    public double getTotalNetMbPerSec() {
+        return totalNetBytesPerSec / (1024.0 * 1024.0); // Convert B/s to MB/s
     }
 
     /**
@@ -86,59 +140,7 @@ public class UtilizationSnapshot {
 
     @Override
     public String toString() {
-        return String.format("UtilizationSnapshot{tests=%d, cpu=%.1f%%, mem=%.0fMB, defaults=%d}",
-                testCount, totalCpuPct, totalMemMb, defaultCount);
-    }
-
-    public static final class Builder {
-        private double totalCpuPct = 0.0;
-        private double totalMemMb = 0.0;
-        private double totalIoMbPerSec = 0.0;
-        private double totalIops = 0.0;
-        private double totalNetMbPerSec = 0.0;
-        private int testCount = 0;
-        private int defaultCount = 0;
-
-        private Builder() {
-        }
-
-        public Builder totalCpuPct(double val) {
-            this.totalCpuPct = val;
-            return this;
-        }
-
-        public Builder totalMemMb(double val) {
-            this.totalMemMb = val;
-            return this;
-        }
-
-        public Builder totalIoMbPerSec(double val) {
-            this.totalIoMbPerSec = val;
-            return this;
-        }
-
-        public Builder totalIops(double val) {
-            this.totalIops = val;
-            return this;
-        }
-
-        public Builder totalNetMbPerSec(double val) {
-            this.totalNetMbPerSec = val;
-            return this;
-        }
-
-        public Builder testCount(int val) {
-            this.testCount = val;
-            return this;
-        }
-
-        public Builder defaultCount(int val) {
-            this.defaultCount = val;
-            return this;
-        }
-
-        public UtilizationSnapshot build() {
-            return new UtilizationSnapshot(this);
-        }
+        return String.format("UtilizationSnapshot{tests=%d, cpu=%.0fmCPU, mem=%dB, defaults=%d}",
+                testCount, totalCpuMillicores, totalMemBytes, defaultCount);
     }
 }

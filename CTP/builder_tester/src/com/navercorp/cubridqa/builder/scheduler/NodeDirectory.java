@@ -126,30 +126,46 @@ public class NodeDirectory {
 
     /**
      * Checks if a node has sufficient resource headroom for a test.
-     * Uses a safety margin (default 10%) to prevent oversubscription.
+     * Uses dimension-specific and confidence-aware safety margins to prevent oversubscription.
+     *
+     * CRITICAL FIX: Always applies resource gating, even for unknown predictions (confidence=0).
+     * Unknown tests are conservatively estimated rather than bypassing checks entirely.
      *
      * @param node the node to check
      * @param test the test instance with predicted resource demands
      * @return true if node has enough free resources
      */
     private boolean hasResourceHeadroom(NodeSnapshot node, TestInstance test) {
-        // If no historical data (confidence = 0), use defaults and allow scheduling
-        if (test.getConfidence() == 0.0) {
-            logger.fine(String.format("Test %s has no historical data - allowing scheduling based on concurrency only",
-                    test.getTestKey()));
-            return true;
-        }
+        // TODO: Wire BuilderConfig margins here once config is passed to NodeDirectory
+        // For now, use hardcoded production-safe defaults
+        final double baseCpu = 0.10;  // 10% base margin for CPU
+        final double baseMem = 0.20;  // 20% base margin for memory
+        final double baseIo = 0.30;   // 30% base margin for I/O (highest variability)
+        final double baseNet = 0.25;  // 25% base margin for network
+        final double baseIops = 0.25; // 25% base margin for IOPS
+        final double k = 0.50;        // Extra margin factor for low confidence
 
-        // Apply safety margin (10% extra headroom required)
-        double safetyMargin = 1.10;
+        // Use scalar confidence for all dimensions
+        // Note: TestInstance only has scalar confidence. Per-dimension confidence
+        // is available in PredictedDemand (tester-side) but not yet in TestInstance (builder-side).
+        final double conf = Math.max(0.0, Math.min(1.0, test.getConfidence()));
 
-        // Check each resource dimension
-        double requiredCpu = test.getPredictedCpuPct() * safetyMargin;
-        double requiredMem = test.getPredictedMemMb() * safetyMargin;
-        double requiredIo = test.getPredictedIoMbPerSec() * safetyMargin;
-        double requiredIops = test.getPredictedIops() * safetyMargin;
-        double requiredNet = test.getPredictedNetMbPerSec() * safetyMargin;
+        // Compute dimension-specific margins with confidence scaling
+        double mCpu = baseCpu + k * (1.0 - conf);
+        double mMem = baseMem + k * (1.0 - conf);
+        double mIo = baseIo + k * (1.0 - conf);
+        double mNet = baseNet + k * (1.0 - conf);
+        double mIops = baseIops + k * (1.0 - conf);
 
+        // Compute required resources with margin
+        // IMPORTANT: Memory floor is 100MB in BYTES (104857600), not MB
+        double requiredCpu = test.getPredictedCpuPct() * (1.0 + mCpu);
+        double requiredMem = test.getPredictedMemMb() + Math.max(test.getPredictedMemMb() * mMem, 100.0); // +100MB floor
+        double requiredIo = test.getPredictedIoMbPerSec() * (1.0 + mIo);
+        double requiredIops = test.getPredictedIops() * (1.0 + mIops);
+        double requiredNet = test.getPredictedNetMbPerSec() * (1.0 + mNet);
+
+        // Check headroom across all dimensions
         boolean hasHeadroom = node.getFreeCpuPct() >= requiredCpu
                 && node.getFreeMemMb() >= requiredMem
                 && node.getFreeIoMbPerSec() >= requiredIo
@@ -157,9 +173,12 @@ public class NodeDirectory {
                 && node.getFreeNetMbPerSec() >= requiredNet;
 
         if (!hasHeadroom) {
-            logger.fine(String.format("Node %s lacks resource headroom for test %s: " +
-                    "CPU %.1f < %.1f, Mem %.0f < %.0f, IO %.1f < %.1f, IOPS %.0f < %.0f, Net %.1f < %.1f",
+            logger.fine(String.format(
+                    "Node %s lacks headroom for test %s (conf=%.2f, margins: cpu=%.0f%% mem=%.0f%% io=%.0f%%): " +
+                            "CPU %.1f < %.1f, Mem %.0f < %.0f, IO %.1f < %.1f, IOPS %.0f < %.0f, Net %.1f < %.1f",
                     node.getNodeId(), test.getTestKey(),
+                    conf,
+                    mCpu * 100, mMem * 100, mIo * 100,
                     node.getFreeCpuPct(), requiredCpu,
                     node.getFreeMemMb(), requiredMem,
                     node.getFreeIoMbPerSec(), requiredIo,

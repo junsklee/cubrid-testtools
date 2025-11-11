@@ -283,9 +283,157 @@ scheduling_stale_threshold_ms=60000
 
 ---
 
+### Resource Headroom Safety Margins (v2)
+
+**Since:** v2 Production Hardening (November 2025)
+
+These configuration options control the dimension-specific and confidence-aware safety margins used when checking if a node has sufficient resources for a test. They prevent oversubscription by requiring extra headroom beyond the predicted demand.
+
+#### `scheduling_margin_cpu_base`
+
+**Type:** Double (0.0 to 1.0)
+**Default:** `0.10` (10% base margin)
+
+**Description:**
+Base safety margin for CPU headroom checks. A value of 0.10 means tests require 10% more CPU than predicted to be scheduled.
+
+**Example:**
+```properties
+# Conservative CPU margins (less packing, more safety)
+scheduling_margin_cpu_base=0.15
+
+# Aggressive CPU margins (tighter packing)
+scheduling_margin_cpu_base=0.05
+```
+
+#### `scheduling_margin_mem_base`
+
+**Type:** Double (0.0 to 1.0)
+**Default:** `0.20` (20% base margin)
+
+**Description:**
+Base safety margin for memory headroom checks. Memory gets a higher default margin than CPU because it spikes unpredictably. Additionally, a +100MB absolute floor is always added.
+
+**Example:**
+```properties
+# High memory safety for production
+scheduling_margin_mem_base=0.30
+
+# Tight memory packing (risky)
+scheduling_margin_mem_base=0.10
+```
+
+#### `scheduling_margin_io_base`
+
+**Type:** Double (0.0 to 1.0)
+**Default:** `0.30` (30% base margin)
+
+**Description:**
+Base safety margin for I/O bandwidth headroom checks. I/O gets the highest default margin due to high variability and burstiness.
+
+#### `scheduling_margin_net_base`
+
+**Type:** Double (0.0 to 1.0)
+**Default:** `0.25` (25% base margin)
+
+**Description:**
+Base safety margin for network bandwidth headroom checks.
+
+#### `scheduling_margin_iops_base`
+
+**Type:** Double (0.0 to 1.0)
+**Default:** `0.25` (25% base margin)
+
+**Description:**
+Base safety margin for IOPS headroom checks.
+
+#### `scheduling_margin_confidence_factor`
+
+**Type:** Double (0.0 to 1.0)
+**Default:** `0.50` (50% extra for low confidence)
+
+**Description:**
+Scales margin increase for low-confidence predictions. The final margin for a dimension is:
+
+```
+margin = base_margin + confidence_factor × (1 - confidence)
+```
+
+**Example:**
+For memory with confidence=0.3:
+```
+margin = 0.20 + 0.50 × (1 - 0.3) = 0.20 + 0.35 = 55%
+```
+
+**Tuning Guidelines:**
+- **High confidence_factor** (0.6-0.8): Very conservative for unknown workloads
+- **Medium confidence_factor** (0.4-0.6): Balanced safety vs efficiency (default)
+- **Low confidence_factor** (0.2-0.4): Trust predictions more, risk oversubscription
+
+**Example Configuration:**
+```properties
+# Production-safe margins (recommended)
+scheduling_margin_cpu_base=0.10
+scheduling_margin_mem_base=0.20
+scheduling_margin_io_base=0.30
+scheduling_margin_net_base=0.25
+scheduling_margin_iops_base=0.25
+scheduling_margin_confidence_factor=0.50
+
+# Aggressive packing (use with caution)
+scheduling_margin_cpu_base=0.05
+scheduling_margin_mem_base=0.15
+scheduling_margin_io_base=0.20
+scheduling_margin_net_base=0.15
+scheduling_margin_iops_base=0.15
+scheduling_margin_confidence_factor=0.30
+```
+
+---
+
 ## Tester Configuration
 
 Configuration file: `conf/tester.conf`
+
+### Docker Runtime Limits (v2)
+
+#### `docker_enforce_memory_limits`
+
+**Type:** Boolean (true/false)
+**Default:** `false`
+**Since:** v2 Production Hardening (November 2025)
+
+**Description:**
+Controls whether Docker memory limits are enforced based on predicted demand. When enabled, containers are started with `--memory` and `--memory-swap` flags matching the predicted memory demand (minimum 256MB). CPU limits are always enforced regardless of this setting.
+
+**Example:**
+```properties
+# Disable memory limits (default - prioritizes test success)
+docker_enforce_memory_limits=false
+
+# Enable memory limits (enforces predicted demand)
+docker_enforce_memory_limits=true
+```
+
+**Notes:**
+- **Default is `false`** to ensure passing tests continue to pass without OOM failures
+- When disabled, containers run with unlimited memory while CPU limits still apply
+- Enable only if resource misallocation becomes a problem
+- CPU limits are always enforced (minimum 0.1 CPUs for bootstrapping)
+
+**Verification:**
+```bash
+# Check logs for memory limit status
+tail -50 bin/tester_output.log | grep "Docker limits"
+# With limits disabled: "memory=unlimited (docker_enforce_memory_limits=false)"
+# With limits enabled: "memory=512MB"
+
+# Verify container memory limits
+docker inspect <container_id> --format '{{.HostConfig.Memory}}'
+# 0 = unlimited, >0 = bytes limit
+```
+
+---
 
 ### Metrics Collection and Statistics
 

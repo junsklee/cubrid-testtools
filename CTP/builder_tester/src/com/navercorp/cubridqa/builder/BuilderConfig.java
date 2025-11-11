@@ -48,6 +48,7 @@ public class BuilderConfig {
     private static final String LOG_FETCH_READ_TIMEOUT_SECONDS = "log_fetch_read_timeout_seconds";
     private static final String LOG_FILE_VERIFICATION_TIMEOUT_SECONDS = "log_file_verification_timeout_seconds";
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
+    private static final String DOCKER_ENFORCE_MEMORY_LIMITS = "docker_enforce_memory_limits"; // Enforce Docker memory limits from predictions (default false)
     private static final String CCACHE_ENABLED = "ccache_enabled";
     private static final String CCACHE_DIR = "ccache_dir";
     private static final String CCACHE_MAX_SIZE = "ccache_max_size";
@@ -70,6 +71,14 @@ public class BuilderConfig {
     private static final String SCHEDULING_WEIGHT_AGE_BOOST = "scheduling_weight_age_boost";
     private static final String SCHEDULING_NODE_POLL_INTERVAL_SECONDS = "scheduling_node_poll_interval_seconds";
     private static final String SCHEDULING_NODE_STALE_THRESHOLD_SECONDS = "scheduling_node_stale_threshold_seconds";
+
+    // Dimension-specific safety margins for resource headroom checks
+    private static final String SCHEDULING_MARGIN_CPU_BASE = "scheduling_margin_cpu_base";
+    private static final String SCHEDULING_MARGIN_MEM_BASE = "scheduling_margin_mem_base";
+    private static final String SCHEDULING_MARGIN_IO_BASE = "scheduling_margin_io_base";
+    private static final String SCHEDULING_MARGIN_NET_BASE = "scheduling_margin_net_base";
+    private static final String SCHEDULING_MARGIN_IOPS_BASE = "scheduling_margin_iops_base";
+    private static final String SCHEDULING_MARGIN_CONFIDENCE_FACTOR = "scheduling_margin_confidence_factor";
 
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
@@ -525,6 +534,15 @@ public class BuilderConfig {
         return Boolean.parseBoolean(properties.getProperty(OPTIMIZED_DOCKER_ENABLED, "true"));
     }
     
+    /**
+     * Whether to enforce Docker memory limits based on predicted demand.
+     * Default is false to prioritize test success over resource misallocation.
+     * When enabled, applies --memory and --memory-swap flags to Docker containers.
+     */
+    public boolean isDockerEnforceMemoryLimits() {
+        return Boolean.parseBoolean(properties.getProperty(DOCKER_ENFORCE_MEMORY_LIMITS, "false"));
+    }
+    
     // ---- V2 unified config with migration from v1 (retry_count) ----
     public String getRunMode() {
         String mode = properties.getProperty(RUN_MODE, "until-pass").toLowerCase();
@@ -778,6 +796,32 @@ public class BuilderConfig {
 
     public long getSchedulingNodeStaleThresholdSeconds() {
         return Long.parseLong(properties.getProperty(SCHEDULING_NODE_STALE_THRESHOLD_SECONDS, "30"));
+    }
+
+    // Dimension-specific margin configuration getters
+
+    public double getSchedulingMarginCpuBase() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_CPU_BASE, "0.10"));
+    }
+
+    public double getSchedulingMarginMemBase() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_MEM_BASE, "0.20"));
+    }
+
+    public double getSchedulingMarginIoBase() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_IO_BASE, "0.30"));
+    }
+
+    public double getSchedulingMarginNetBase() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_NET_BASE, "0.25"));
+    }
+
+    public double getSchedulingMarginIopsBase() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_IOPS_BASE, "0.25"));
+    }
+
+    public double getSchedulingMarginConfidenceFactor() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_CONFIDENCE_FACTOR, "0.50"));
     }
 
     @Override

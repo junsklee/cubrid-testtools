@@ -156,14 +156,15 @@ public class Tester {
             useDocker,
             dockerManager,
             new DockerUtils(),
-            observationWriter
+            observationWriter,
+            testStatsStore
         );
 
         // Measure node capacity for health endpoint
         NodeCapacity nodeCapacity = NodeCapacity.measure(config.getWorkDir());
 
         // Create HTTP handlers
-        this.testHandler = new TestHandler(config, testOrchestrator, logger);
+        this.testHandler = new TestHandler(config, testOrchestrator, nodeCapacity, logger);
         this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator);
         this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());

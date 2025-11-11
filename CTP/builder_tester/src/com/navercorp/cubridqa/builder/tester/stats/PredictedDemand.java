@@ -4,14 +4,21 @@ import org.json.JSONObject;
 import java.util.Objects;
 
 /**
- * Immutable prediction of a test's resource demands and duration.
+ * TODO: DEPRECATED - This class uses legacy percentage-based units.
+ *
+ * <p>Immutable prediction of a test's resource demands and duration.</p>
  *
  * <p>Returned by the predictor and used by the scheduler to compute
  * bin-packing scores and estimate completion times.</p>
  *
  * <p>Resource fields are scaled to the target node's hardware capacity
  * and optionally inflated by a safety margin if confidence is low.</p>
+ *
+ * @deprecated Use {@link com.navercorp.cubridqa.builder.tester.demand.PredictedDemand} instead,
+ *             which uses canonical capacity-normalized units (cpuMillicores, memBytes, etc.)
+ *             for hardware-independent predictions.
  */
+@Deprecated
 public final class PredictedDemand {
 
     private final long tpredMs;

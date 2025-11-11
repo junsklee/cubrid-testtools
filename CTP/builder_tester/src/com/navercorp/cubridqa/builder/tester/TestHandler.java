@@ -6,6 +6,8 @@ import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.MultipartHelper;
 import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
 import com.navercorp.cubridqa.builder.http.HttpUtils;
+import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
+import com.navercorp.cubridqa.builder.tester.demand.UtilizationSnapshot;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -23,12 +25,14 @@ import java.util.logging.Logger;
 public class TestHandler implements HttpHandler {
     private final Config config;
     private final TestOrchestrator orchestrator;
+    private final NodeCapacity nodeCapacity;
     private final Logger logger;
     private final HttpResponseWriter responseWriter;
 
-    public TestHandler(Config config, TestOrchestrator orchestrator, Logger logger) {
+    public TestHandler(Config config, TestOrchestrator orchestrator, NodeCapacity nodeCapacity, Logger logger) {
         this.config = config;
         this.orchestrator = orchestrator;
+        this.nodeCapacity = nodeCapacity;
         this.logger = logger;
         this.responseWriter = new HttpResponseWriter();
     }
@@ -51,6 +55,18 @@ public class TestHandler implements HttpHandler {
         try {
             String requestBody = HttpUtils.readRequestBody(exchange);
             JSONObject request = new JSONObject(requestBody);
+
+            // TOCTOU race mitigation: Fast-fail if no local capacity (before expensive Docker setup)
+            // This prevents the race where Builder polls /health (sees capacity) but another test
+            // is admitted before /test arrives. Return 409 so Builder retries on other nodes.
+            PredictedDemand pd = PredictedDemand.fromRequest(request, null);
+            if (!hasLocalHeadroom(pd)) {
+                logger.warning("Rejecting test request due to insufficient capacity");
+                responseWriter.sendJson(exchange, 409, new JSONObject()
+                        .put("status", "rejected")
+                        .put("error", "No capacity - node oversubscribed"));
+                return;
+            }
 
             // Extract request ID if provided
             String requestId = request.optString("requestId", null);
@@ -132,5 +148,70 @@ public class TestHandler implements HttpHandler {
         } finally {
             RequestContext.clear();
         }
+    }
+
+    /**
+     * Checks if the tester has enough local capacity to admit the predicted demand.
+     * Uses the same margin policy as NodeDirectory to prevent TOCTOU oversubscription.
+     *
+     * @param pd the predicted demand
+     * @return true if there's enough headroom
+     */
+    private boolean hasLocalHeadroom(PredictedDemand pd) {
+        // Dimension-specific base margins (same as NodeDirectory)
+        final double baseCpu = 0.10, baseMem = 0.20, baseIo = 0.30;
+        final double baseNet = 0.25, baseIops = 0.25;
+        final double k = 0.50; // Confidence factor
+
+        // Scalar confidence (per-dimension confidence not available at tester level yet)
+        double conf = Math.max(0.0, Math.min(1.0, pd.getConfidence()));
+
+        // Compute dimension-specific margins with confidence scaling
+        double mCpu = baseCpu + k * (1.0 - conf);
+        double mMem = baseMem + k * (1.0 - conf);
+        double mIo = baseIo + k * (1.0 - conf);
+        double mNet = baseNet + k * (1.0 - conf);
+        double mIops = baseIops + k * (1.0 - conf);
+
+        // Get current reserved utilization from orchestrator
+        UtilizationSnapshot reserved = orchestrator.getCurrentUtilization();
+
+        // Convert predicted demand to legacy units for comparison
+        double reqCpuPct = pd.getCpuMillicores() / 10.0; // mCPU → %
+        double reqMemMb = pd.getMemBytes() / (1024.0 * 1024.0); // bytes → MB
+        double reqIoMbPerSec = pd.getIoBytesPerSec() / (1024.0 * 1024.0);
+        double reqNetMbPerSec = pd.getNetBytesPerSec() / (1024.0 * 1024.0);
+        long reqIops = pd.getIops();
+
+        // Apply margins to required resources
+        double requiredCpu = reqCpuPct * (1.0 + mCpu);
+        double requiredMem = reqMemMb + Math.max(reqMemMb * mMem, 100.0); // +100MB floor
+        double requiredIo = reqIoMbPerSec * (1.0 + mIo);
+        double requiredIops = reqIops * (1.0 + mIops);
+        double requiredNet = reqNetMbPerSec * (1.0 + mNet);
+
+        // Compute free capacity (capacity - reserved)
+        double freeCpu = nodeCapacity.getCpuPct() - reserved.getTotalCpuPct();
+        double freeMem = nodeCapacity.getMemMb() - reserved.getTotalMemMb();
+        double freeIo = nodeCapacity.getIoMbPerSec() - reserved.getTotalIoMbPerSec();
+        double freeIops = nodeCapacity.getIops() - reserved.getTotalIops();
+        double freeNet = nodeCapacity.getNetMbPerSec() - reserved.getTotalNetMbPerSec();
+
+        // Check all dimensions
+        boolean hasHeadroom = freeCpu >= requiredCpu
+                && freeMem >= requiredMem
+                && freeIo >= requiredIo
+                && freeIops >= requiredIops
+                && freeNet >= requiredNet;
+
+        if (!hasHeadroom) {
+            logger.fine(String.format(
+                    "Local capacity check failed (conf=%.2f): CPU %.1f < %.1f, Mem %.0f < %.0f, " +
+                            "IO %.1f < %.1f, IOPS %.0f < %.0f, Net %.1f < %.1f",
+                    conf, freeCpu, requiredCpu, freeMem, requiredMem,
+                    freeIo, requiredIo, freeIops, requiredIops, freeNet, requiredNet));
+        }
+
+        return hasHeadroom;
     }
 }

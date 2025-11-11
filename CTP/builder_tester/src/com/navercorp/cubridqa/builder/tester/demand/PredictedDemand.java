@@ -1,92 +1,201 @@
 package com.navercorp.cubridqa.builder.tester.demand;
 
+import com.navercorp.cubridqa.builder.tester.stats.NodeHardware;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+
 /**
- * Immutable representation of predicted resource demands for a test.
+ * Canonical, capacity-normalized predicted demand with optional phases.
  *
- * <p>Contains predictions for duration and multi-dimensional resource usage
- * (CPU, memory, I/O, IOPS, network) along with a confidence score.</p>
+ * <p>Canonical fields use hardware-independent units:
+ * <ul>
+ *   <li>cpuMillicores (int): CPU in mCPU (cores × 1000)</li>
+ *   <li>memBytes (long): Memory in bytes (peak or enforced working set)</li>
+ *   <li>ioBytesPerSec (long): Sequential IO budget in B/s (optional)</li>
+ *   <li>iops (long): IOPS budget (optional)</li>
+ *   <li>netBytesPerSec (long): Network budget in B/s (optional)</li>
+ *   <li>durationMs (long): Predicted duration of the test or current phase</li>
+ *   <li>confidence (double or per-dimension object)</li>
+ * </ul></p>
  *
- * <p>Used by RunningTestTracker to compute actual utilization based on
- * running test predictions rather than conservative fixed estimates.</p>
+ * <p>Legacy fields (still accepted on wire, mapped to canonical):
+ * <ul>
+ *   <li>cpuPct, memMb, ioMbPerSec, netMbPerSec</li>
+ * </ul></p>
+ *
+ * <p>Phases are optional; when present they override single-vector interpretation.</p>
  */
 public class PredictedDemand {
 
+    // Canonical single-vector (used when no phases are provided)
     private final long durationMs;
-    private final double cpuPct;
-    private final double memMb;
-    private final double ioMbPerSec;
-    private final double iops;
-    private final double netMbPerSec;
-    private final double confidence;
+    private final int cpuMillicores;
+    private final long memBytes;
+    private final long ioBytesPerSec;
+    private final long iops;
+    private final long netBytesPerSec;
+    private final double confidence; // scalar (per-dimension optional via confidenceCpu/Mem/Io/Net/Iops)
 
-    private PredictedDemand(Builder builder) {
-        this.durationMs = builder.durationMs;
-        this.cpuPct = builder.cpuPct;
-        this.memMb = builder.memMb;
-        this.ioMbPerSec = builder.ioMbPerSec;
-        this.iops = builder.iops;
-        this.netMbPerSec = builder.netMbPerSec;
-        this.confidence = builder.confidence;
-    }
+    // Optional per-dimension confidences (0..1). If negative, scalar confidence applies.
+    private final double confidenceCpu;
+    private final double confidenceMem;
+    private final double confidenceIo;
+    private final double confidenceNet;
+    private final double confidenceIops;
 
-    public static Builder builder() {
-        return new Builder();
-    }
+    // Optional phases (setup/run). If non-empty, scheduler/tester may reserve per phase.
+    private final List<Phase> phases;
 
     /**
-     * Creates conservative default predictions.
-     * Used when test request has no prediction data.
+     * Represents a single phase of test execution (e.g., "setup", "run").
      */
-    public static PredictedDemand conservative() {
-        return builder()
-                .durationMs(30000L)
-                .cpuPct(50.0)
-                .memMb(512.0)
-                .ioMbPerSec(10.0)
-                .iops(200.0)
-                .netMbPerSec(5.0)
-                .confidence(0.0)
-                .build();
+    public static final class Phase {
+        public final String name;
+        public final long durationMs;
+        public final int cpuMillicores;
+        public final long memBytes;
+        public final long ioBytesPerSec;
+        public final long iops;
+        public final long netBytesPerSec;
+
+        public Phase(String name, long durationMs, int cpuMillicores, long memBytes,
+                     long ioBytesPerSec, long iops, long netBytesPerSec) {
+            this.name = Objects.requireNonNull(name);
+            this.durationMs = Math.max(0, durationMs);
+            this.cpuMillicores = Math.max(0, cpuMillicores);
+            this.memBytes = Math.max(0, memBytes);
+            this.ioBytesPerSec = Math.max(0, ioBytesPerSec);
+            this.iops = Math.max(0, iops);
+            this.netBytesPerSec = Math.max(0, netBytesPerSec);
+        }
+    }
+
+    private PredictedDemand(long durationMs, int cpuMillicores, long memBytes,
+                            long ioBytesPerSec, long iops, long netBytesPerSec,
+                            double confidence, double cCpu, double cMem, double cIo,
+                            double cNet, double cIops, List<Phase> phases) {
+        this.durationMs = Math.max(0, durationMs);
+        this.cpuMillicores = Math.max(0, cpuMillicores);
+        this.memBytes = Math.max(0, memBytes);
+        this.ioBytesPerSec = Math.max(0, ioBytesPerSec);
+        this.iops = Math.max(0, iops);
+        this.netBytesPerSec = Math.max(0, netBytesPerSec);
+        this.confidence = clamp01(confidence);
+        this.confidenceCpu = clampOrNeg(cCpu);
+        this.confidenceMem = clampOrNeg(cMem);
+        this.confidenceIo = clampOrNeg(cIo);
+        this.confidenceNet = clampOrNeg(cNet);
+        this.confidenceIops = clampOrNeg(cIops);
+        this.phases = phases == null ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(phases));
+    }
+
+    private static double clamp01(double v) {
+        if (Double.isNaN(v)) return 0.0;
+        return Math.max(0.0, Math.min(1.0, v));
+    }
+
+    private static double clampOrNeg(double v) {
+        if (Double.isNaN(v)) return -1.0;
+        if (v < 0) return -1.0;
+        return Math.max(0.0, Math.min(1.0, v));
     }
 
     /**
-     * Parses predicted demand from test request JSON.
+     * Conservative defaults scaled to typical "mice" tests.
      *
-     * @param request the test request containing optional "predicted" field
-     * @return PredictedDemand from request, or conservative defaults if absent
+     * @param hw node hardware for scaling (if null, uses absolute defaults)
+     * @return PredictedDemand with conservative resource estimates
      */
-    public static PredictedDemand fromRequest(JSONObject request) {
-        if (!request.has("predicted")) {
-            return conservative();
+    public static PredictedDemand conservative(NodeHardware hw) {
+        if (hw == null) {
+            // Absolute fallback when hardware unknown
+            return new PredictedDemand(30_000, 500, 512L * 1024 * 1024, 10L * 1024 * 1024,
+                    200, 5L * 1024 * 1024, 0.25, -1, -1, -1, -1, -1, null);
+        }
+        // Scale to node: ~0.5 cores per core count, 512MB, moderate IO
+        final int cpuMc = Math.max(500, Math.min((int) (hw.getCpuPct() * 10), (int) (0.5 * hw.getCpuPct() * 10)));
+        final long memB = 512L * 1024 * 1024; // 512MB
+        final long ioB = 10L * 1024 * 1024;  // 10MB/s
+        final long netB = 5L * 1024 * 1024;  // 5MB/s
+        return new PredictedDemand(30_000, cpuMc, memB, ioB, 200, netB, 0.25, -1, -1, -1, -1, -1, null);
+    }
+
+    /**
+     * Parse from request JSON; accepts canonical and legacy fields.
+     *
+     * @param req test request with optional "predicted" block
+     * @param hw  node hardware for legacy→canonical mapping (required for cpuPct conversion)
+     * @return PredictedDemand (conservative defaults if absent)
+     */
+    public static PredictedDemand fromRequest(JSONObject req, NodeHardware hw) {
+        if (req == null || !req.has("predicted")) return conservative(hw);
+        final JSONObject p = req.getJSONObject("predicted");
+
+        // Canonical fields
+        long durationMs = p.optLong("durationMs", 30_000);
+        int cpuMc = p.optInt("cpuMillicores", -1);
+        long memBytes = p.optLong("memBytes", -1);
+        long ioBps = p.optLong("ioBytesPerSec", -1);
+        long iops = p.optLong("iops", -1);
+        long netBps = p.optLong("netBytesPerSec", -1);
+
+        // Legacy mapping → canonical (requires hw)
+        if (cpuMc < 0 && p.has("cpuPct")) {
+            double pct = Math.max(0.0, p.optDouble("cpuPct", 0.0));
+            cpuMc = (int) Math.round((pct / 100.0) * (hw != null ? hw.getCpuPct() : 100.0) * 10.0);
+        }
+        if (memBytes < 0 && p.has("memMb")) {
+            memBytes = (long) Math.max(0, p.optDouble("memMb", 0.0)) * 1024L * 1024L;
+        }
+        if (ioBps < 0 && p.has("ioMbPerSec")) {
+            ioBps = (long) Math.max(0, p.optDouble("ioMbPerSec", 0.0)) * 1024L * 1024L;
+        }
+        if (netBps < 0 && p.has("netMbPerSec")) {
+            netBps = (long) Math.max(0, p.optDouble("netMbPerSec", 0.0)) * 1024L * 1024L;
         }
 
-        JSONObject predicted = request.getJSONObject("predicted");
+        double confidence = p.optDouble("confidence", 0.0);
+        double cCpu = -1, cMem = -1, cIo = -1, cNet = -1, cIops = -1;
+        if (p.has("confidenceObj")) {
+            JSONObject co = p.getJSONObject("confidenceObj");
+            cCpu = co.optDouble("cpu", -1);
+            cMem = co.optDouble("mem", -1);
+            cIo = co.optDouble("io", -1);
+            cNet = co.optDouble("net", -1);
+            cIops = co.optDouble("iops", -1);
+        }
 
-        // Validate and sanitize values
-        return builder()
-                .durationMs(sanitizeLong(predicted.optLong("durationMs", 30000L), 1L, 86400000L))
-                .cpuPct(sanitizeDouble(predicted.optDouble("cpuPct", 50.0), 0.0, 800.0))
-                .memMb(sanitizeDouble(predicted.optDouble("memMb", 512.0), 0.0, 524288.0))
-                .ioMbPerSec(sanitizeDouble(predicted.optDouble("ioMbPerSec", 10.0), 0.0, 10000.0))
-                .iops(sanitizeDouble(predicted.optDouble("iops", 200.0), 0.0, 1000000.0))
-                .netMbPerSec(sanitizeDouble(predicted.optDouble("netMbPerSec", 5.0), 0.0, 10000.0))
-                .confidence(sanitizeDouble(predicted.optDouble("confidence", 0.0), 0.0, 1.0))
-                .build();
-    }
+        List<Phase> phases = null;
+        if (p.has("phases")) {
+            phases = new ArrayList<>();
+            JSONArray arr = p.getJSONArray("phases");
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject ph = arr.getJSONObject(i);
+                phases.add(new Phase(
+                        ph.optString("name", "phase-" + i),
+                        ph.optLong("durationMs", 0L),
+                        ph.optInt("cpuMillicores", Math.max(0, cpuMc)),
+                        ph.optLong("memBytes", Math.max(0, memBytes)),
+                        ph.optLong("ioBytesPerSec", Math.max(0, ioBps)),
+                        ph.optLong("iops", Math.max(0, iops)),
+                        ph.optLong("netBytesPerSec", Math.max(0, netBps))
+                ));
+            }
+        }
 
-    private static long sanitizeLong(long value, long min, long max) {
-        if (value < min) return min;
-        if (value > max) return max;
-        return value;
-    }
+        if (cpuMc < 0) cpuMc = conservative(hw).cpuMillicores;
+        if (memBytes < 0) memBytes = conservative(hw).memBytes;
+        if (ioBps < 0) ioBps = conservative(hw).ioBytesPerSec;
+        if (netBps < 0) netBps = conservative(hw).netBytesPerSec;
+        if (iops < 0) iops = 200;
 
-    private static double sanitizeDouble(double value, double min, double max) {
-        if (Double.isNaN(value) || Double.isInfinite(value)) return min;
-        if (value < min) return min;
-        if (value > max) return max;
-        return value;
+        return new PredictedDemand(durationMs, cpuMc, memBytes, ioBps, iops, netBps,
+                confidence, cCpu, cMem, cIo, cNet, cIops, phases);
     }
 
     // Getters
@@ -95,92 +204,94 @@ public class PredictedDemand {
         return durationMs;
     }
 
-    public double getCpuPct() {
-        return cpuPct;
+    public int getCpuMillicores() {
+        return cpuMillicores;
     }
 
-    public double getMemMb() {
-        return memMb;
+    public long getMemBytes() {
+        return memBytes;
     }
 
-    public double getIoMbPerSec() {
-        return ioMbPerSec;
+    public long getIoBytesPerSec() {
+        return ioBytesPerSec;
     }
 
-    public double getIops() {
+    public long getIops() {
         return iops;
     }
 
-    public double getNetMbPerSec() {
-        return netMbPerSec;
+    public long getNetBytesPerSec() {
+        return netBytesPerSec;
     }
 
     public double getConfidence() {
         return confidence;
     }
 
+    public double getConfidenceCpu() {
+        return confidenceCpu;
+    }
+
+    public double getConfidenceMem() {
+        return confidenceMem;
+    }
+
+    public double getConfidenceIo() {
+        return confidenceIo;
+    }
+
+    public double getConfidenceNet() {
+        return confidenceNet;
+    }
+
+    public double getConfidenceIops() {
+        return confidenceIops;
+    }
+
+    public List<Phase> getPhases() {
+        return phases;
+    }
+
     /**
-     * Returns true if this is a conservative default (no historical data).
+     * Returns true if this is a conservative default (low confidence).
      */
     public boolean isDefault() {
-        return confidence == 0.0;
+        return confidence < 0.5;
+    }
+
+    /**
+     * Converts this prediction to a JSON object for wire transmission.
+     */
+    public JSONObject toJson() {
+        JSONObject o = new JSONObject();
+        o.put("durationMs", durationMs);
+        o.put("cpuMillicores", cpuMillicores);
+        o.put("memBytes", memBytes);
+        o.put("ioBytesPerSec", ioBytesPerSec);
+        o.put("iops", iops);
+        o.put("netBytesPerSec", netBytesPerSec);
+        o.put("confidence", confidence);
+        if (!phases.isEmpty()) {
+            JSONArray arr = new JSONArray();
+            for (Phase ph : phases) {
+                JSONObject pj = new JSONObject()
+                        .put("name", ph.name)
+                        .put("durationMs", ph.durationMs)
+                        .put("cpuMillicores", ph.cpuMillicores)
+                        .put("memBytes", ph.memBytes)
+                        .put("ioBytesPerSec", ph.ioBytesPerSec)
+                        .put("iops", ph.iops)
+                        .put("netBytesPerSec", ph.netBytesPerSec);
+                arr.put(pj);
+            }
+            o.put("phases", arr);
+        }
+        return o;
     }
 
     @Override
     public String toString() {
-        return String.format("PredictedDemand{dur=%dms, cpu=%.1f%%, mem=%.0fMB, conf=%.2f}",
-                durationMs, cpuPct, memMb, confidence);
-    }
-
-    public static final class Builder {
-        private long durationMs = 30000L;
-        private double cpuPct = 50.0;
-        private double memMb = 512.0;
-        private double ioMbPerSec = 10.0;
-        private double iops = 200.0;
-        private double netMbPerSec = 5.0;
-        private double confidence = 0.0;
-
-        private Builder() {
-        }
-
-        public Builder durationMs(long val) {
-            this.durationMs = val;
-            return this;
-        }
-
-        public Builder cpuPct(double val) {
-            this.cpuPct = val;
-            return this;
-        }
-
-        public Builder memMb(double val) {
-            this.memMb = val;
-            return this;
-        }
-
-        public Builder ioMbPerSec(double val) {
-            this.ioMbPerSec = val;
-            return this;
-        }
-
-        public Builder iops(double val) {
-            this.iops = val;
-            return this;
-        }
-
-        public Builder netMbPerSec(double val) {
-            this.netMbPerSec = val;
-            return this;
-        }
-
-        public Builder confidence(double val) {
-            this.confidence = val;
-            return this;
-        }
-
-        public PredictedDemand build() {
-            return new PredictedDemand(this);
-        }
+        return String.format("PredictedDemand{dur=%dms, cpu=%dmCPU, mem=%dB, conf=%.2f}",
+                durationMs, cpuMillicores, memBytes, confidence);
     }
 }

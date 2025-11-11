@@ -154,11 +154,15 @@ public class TestStatsStore {
     }
 
     /**
-     * Records a new observation, updating the in-memory statistics.
+     * Records a new observation, updating the in-memory statistics and writing to WAL.
      *
      * @param obs The observation to record
      */
     public void recordObservation(TestObservation obs) {
+        // Write to WAL first (async, non-blocking)
+        walWriter.append(obs);
+        
+        // Update in-memory statistics
         String testKey = obs.getTestKey();
         TestStats stats = statsMap.computeIfAbsent(testKey, TestStats::new);
         synchronized (stats) {

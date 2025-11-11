@@ -8,6 +8,7 @@ import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservation;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
+import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
 import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
 import com.navercorp.cubridqa.builder.tester.demand.RunningTestTracker;
 import com.navercorp.cubridqa.builder.tester.demand.UtilizationSnapshot;
@@ -33,6 +34,7 @@ public class TestOrchestrator {
     private final Object dockerManager; // DockerManager - using Object to avoid compile dependency
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
     private final TestObservationWriter observationWriter;
+    private final TestStatsStore testStatsStore;
     private final AtomicInteger runningTestCount = new AtomicInteger(0);
     private final RunningTestTracker runningTestTracker = new RunningTestTracker();
 
@@ -40,7 +42,7 @@ public class TestOrchestrator {
                           StandardDockerExecutor standardDockerExecutor,
                           OptimizedDockerExecutor optimizedDockerExecutor,
                           boolean useDocker, Object dockerManager, Object dockerUtils,
-                          TestObservationWriter observationWriter) {
+                          TestObservationWriter observationWriter, TestStatsStore testStatsStore) {
         this.config = config;
         this.directExecutor = directExecutor;
         this.standardDockerExecutor = standardDockerExecutor;
@@ -49,6 +51,7 @@ public class TestOrchestrator {
         this.dockerManager = dockerManager;
         this.dockerUtils = dockerUtils;
         this.observationWriter = observationWriter;
+        this.testStatsStore = testStatsStore;
     }
 
     /**
@@ -61,10 +64,21 @@ public class TestOrchestrator {
         String testKey = request.optString("testKey", "unknown");
 
         // Extract predicted demand from request
-        PredictedDemand demand = PredictedDemand.fromRequest(request);
+        // Pass null for NodeHardware since TestOrchestrator doesn't have access to it
+        // This will use conservative defaults if no prediction is provided
+        PredictedDemand demand = PredictedDemand.fromRequest(request, null);
 
-        // Register test start with tracker
-        runningTestTracker.registerTestStart(testId, testKey, demand);
+        // TODO: Wire up proper state transitions for RunningTestTracker.
+        // Currently using admit() for both soft and hard admission. Should be:
+        //   1. admit(testId, testKey, demand) - soft admission (here, before execution) ✓
+        //   2. startRunning(testId) - hard reservation (right before Docker/executor starts)
+        //   3. updatePhase(testId, phase) - if test has phases (setup → run transition)
+        //   4. unregister(testId) - release reservation (in finally block) ✓
+        // This ensures reserved utilization matches actual running tests and supports
+        // phase-based resource modeling (different CPU/mem for setup vs run).
+
+        // Admit test to tracker (reserves capacity)
+        runningTestTracker.admit(testId, testKey, demand);
         runningTestCount.incrementAndGet();
         try {
             // Unified execution semantics (v2): minRuns, maxRuns, optional timeBudgetMs
@@ -253,8 +267,8 @@ public class TestOrchestrator {
 
             return finalResponse;
         } finally {
-            // Unregister test from tracker
-            runningTestTracker.unregisterTestEnd(testId);
+            // Unregister test from tracker (releases reserved capacity)
+            runningTestTracker.unregister(testId);
             runningTestCount.decrementAndGet();
         }
     }
@@ -489,7 +503,15 @@ public class TestOrchestrator {
             if (result.getTimestamp() != null) {
                 builder.timestamp(Instant.ofEpochMilli(result.getTimestamp()));
             }
-            observationWriter.recordObservation(builder.build());
+            TestObservation obs = builder.build();
+            
+            // Write to old gzipped WAL for backward compatibility (if needed)
+            observationWriter.recordObservation(obs);
+            
+            // Write to new segmented WAL via TestStatsStore (also updates in-memory stats)
+            if (testStatsStore != null) {
+                testStatsStore.recordObservation(obs);
+            }
         } catch (Exception e) {
             logger.fine("Failed to record test observation: " + e.getMessage());
         }
