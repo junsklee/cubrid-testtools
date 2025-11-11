@@ -253,9 +253,8 @@ public class WALSegmentWriter {
             throw new IOException("No open WAL segment");
         }
 
-        JSONObject json = obs.toJSON();
         // CRITICAL: Ensure newline termination for line integrity
-        String line = json.toString() + "\n";
+        String line = obs.toJsonLine() + "\n";
         byte[] bytes = line.getBytes("UTF-8");
 
         currentWriter.write(line);

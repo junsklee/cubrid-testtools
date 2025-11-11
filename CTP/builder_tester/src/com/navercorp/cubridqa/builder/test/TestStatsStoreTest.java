@@ -4,6 +4,8 @@ import com.navercorp.cubridqa.builder.tester.stats.TestObservation;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
 import com.navercorp.cubridqa.builder.tester.stats.TestStats;
 import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
+import com.navercorp.cubridqa.builder.tester.stats.WALManifest;
+import com.navercorp.cubridqa.builder.tester.stats.WALSegmentWriter;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -43,7 +45,11 @@ public class TestStatsStoreTest {
         String testKey = "shell/sql/basic/test_insert.sh";
 
         try (TempStoreDir tempDir = createTempStoreDir("aggregation")) {
-            TestStatsStore store = new TestStatsStore(tempDir.profilesDir(), 60);
+            Path walDir = tempDir.profilesDir().resolve("wal");
+            WALManifest manifest = new WALManifest(tempDir.profilesDir());
+            WALSegmentWriter walWriter = new WALSegmentWriter(tempDir.profilesDir(), manifest);
+            TestStatsStore store = new TestStatsStore(tempDir.profilesDir(), 60, walWriter, manifest, walDir);
+            walWriter.start();
             store.start();
             try {
                 for (int i = 0; i < 3; i++) {
@@ -76,13 +82,17 @@ public class TestStatsStoreTest {
 
         try (TempStoreDir tempDir = createTempStoreDir("snapshot")) {
             Path snapshotPath = tempDir.snapshotPath();
-
-            TestStatsStore writerStore = new TestStatsStore(tempDir.profilesDir(), 1);
+            Path walDir = tempDir.profilesDir().resolve("wal");
+            WALManifest manifest = new WALManifest(tempDir.profilesDir());
+            WALSegmentWriter walWriter = new WALSegmentWriter(tempDir.profilesDir(), manifest);
+            TestStatsStore writerStore = new TestStatsStore(tempDir.profilesDir(), 1, walWriter, manifest, walDir);
+            walWriter.start();
             writerStore.start();
             try {
                 writerStore.recordObservation(createObservation(testKey, 17_500, Instant.now()));
             } finally {
                 writerStore.stop(); // writes final snapshot
+                walWriter.stop();
             }
 
             assert Files.exists(snapshotPath) : "Snapshot file should exist after stop()";
@@ -90,7 +100,10 @@ public class TestStatsStoreTest {
             assert snapshotJson.has("timestamp") : "Snapshot missing timestamp";
             assert snapshotJson.getJSONObject("tests").has(testKey) : "Snapshot missing test entry";
 
-            TestStatsStore readerStore = new TestStatsStore(tempDir.profilesDir(), 60);
+            WALManifest manifest2 = new WALManifest(tempDir.profilesDir());
+            WALSegmentWriter walWriter2 = new WALSegmentWriter(tempDir.profilesDir(), manifest2);
+            TestStatsStore readerStore = new TestStatsStore(tempDir.profilesDir(), 60, walWriter2, manifest2, walDir);
+            walWriter2.start();
             readerStore.start();
             try {
                 TestStats restored = readerStore.getStats(testKey);
@@ -98,6 +111,7 @@ public class TestStatsStoreTest {
                 assert restored.getObservationCount() == 1 : "Restored observation count mismatch";
             } finally {
                 readerStore.stop();
+                walWriter2.stop();
             }
 
             System.out.println("  ✓ Snapshot round-trip succeeded (" + snapshotPath + ")");
@@ -118,7 +132,11 @@ public class TestStatsStoreTest {
                 createObservation("shell/sql/perf/test_02.sh", 18_500, Instant.now().plusSeconds(1))
             );
 
-            TestStatsStore store = new TestStatsStore(tempDir.profilesDir(), 60);
+            Path walDir = tempDir.profilesDir().resolve("wal");
+            WALManifest manifest = new WALManifest(tempDir.profilesDir());
+            WALSegmentWriter walWriter = new WALSegmentWriter(tempDir.profilesDir(), manifest);
+            TestStatsStore store = new TestStatsStore(tempDir.profilesDir(), 60, walWriter, manifest, walDir);
+            walWriter.start();
             store.start();
             try {
                 assert store.getTestCount() == 2 : "Should load two distinct tests from WAL";
@@ -127,6 +145,7 @@ public class TestStatsStoreTest {
                 assert store.getStats("shell/sql/perf/test_02.sh") != null : "Missing WAL test stats";
             } finally {
                 store.stop();
+                walWriter.stop();
             }
 
             System.out.println("  ✓ Replayed WAL entries without snapshot");
@@ -141,12 +160,17 @@ public class TestStatsStoreTest {
 
         try (TempStoreDir tempDir = createTempStoreDir("wal_snapshot")) {
             // Seed snapshot with one observation
-            TestStatsStore initialStore = new TestStatsStore(tempDir.profilesDir(), 60);
+            Path walDir = tempDir.profilesDir().resolve("wal");
+            WALManifest manifest1 = new WALManifest(tempDir.profilesDir());
+            WALSegmentWriter walWriter1 = new WALSegmentWriter(tempDir.profilesDir(), manifest1);
+            TestStatsStore initialStore = new TestStatsStore(tempDir.profilesDir(), 60, walWriter1, manifest1, walDir);
+            walWriter1.start();
             initialStore.start();
             try {
                 initialStore.recordObservation(createObservation(testKey, 12_000, Instant.now()));
             } finally {
                 initialStore.stop(); // writes snapshot
+                walWriter1.stop();
             }
 
             Files.deleteIfExists(tempDir.walPath());
@@ -159,7 +183,10 @@ public class TestStatsStoreTest {
                 createObservation(testKey, 15_000, newTimestamp)   // should be replayed
             );
 
-            TestStatsStore replayStore = new TestStatsStore(tempDir.profilesDir(), 60);
+            WALManifest manifest2 = new WALManifest(tempDir.profilesDir());
+            WALSegmentWriter walWriter2 = new WALSegmentWriter(tempDir.profilesDir(), manifest2);
+            TestStatsStore replayStore = new TestStatsStore(tempDir.profilesDir(), 60, walWriter2, manifest2, walDir);
+            walWriter2.start();
             replayStore.start();
             try {
                 TestStats stats = replayStore.getStats(testKey);
@@ -168,6 +195,7 @@ public class TestStatsStoreTest {
                     "Only snapshot + new WAL entry should be counted (expected 2, got " + stats.getObservationCount() + ")";
             } finally {
                 replayStore.stop();
+                walWriter2.stop();
             }
 
             System.out.println("  ✓ Replayed WAL and skipped stale entries (total observations=2)");

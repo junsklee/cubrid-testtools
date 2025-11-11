@@ -302,6 +302,12 @@ public final class TestObservation {
         if (json.has("metrics_complete")) {
             builder.metricsComplete(json.getBoolean("metrics_complete"));
         }
+        if (json.has("extra")) {
+            JSONObject extraObj = json.getJSONObject("extra");
+            for (String key : extraObj.keySet()) {
+                builder.extra(key, extraObj.get(key));
+            }
+        }
 
         return builder.build();
     }
