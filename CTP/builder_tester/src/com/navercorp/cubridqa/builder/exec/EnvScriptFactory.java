@@ -24,6 +24,7 @@ public class EnvScriptFactory {
 
         script.append("# Execute test\n");
         script.append("set +e\n");
+        script.append("set -x\n\n");
         script.append("sh \"").append(testScript).append("\"\n");
         script.append("TEST_EXIT_CODE=$?\n");
         script.append("set -e\n\n");
@@ -60,7 +61,6 @@ public class EnvScriptFactory {
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
         script.append("set -e\n");
-        script.append("set -x\n\n");
 
         script.append("# Resolve test directory inside the mounted shell testcase tree\n");
         script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
@@ -257,12 +257,13 @@ public class EnvScriptFactory {
         script.append(": > \"$CUBRID_DATABASES/databases.txt\"\n\n");
 
         if (expectedBuildVersion != null && !expectedBuildVersion.isEmpty()) {
-            script.append("# Verify expected build version\n");
-            script.append("INSTALLED_VER=$(cubrid_rel 2>/dev/null | head -1)\n");
-            script.append("echo \"Installed version: $INSTALLED_VER\"\n");
-            script.append("if [[ \"$INSTALLED_VER\" != *\"").append(expectedBuildVersion).append("\"* ]]; then\n");
-            script.append("    echo \"WARNING: Expected build version ").append(expectedBuildVersion);
-            script.append(" not found in installed version\"\n");
+            script.append("# Verify build commit hash\n");
+            script.append("INSTALLED_VER=$(cubrid_rel 2>/dev/null | sed -n 's/.*-\\([a-z0-9]\\{7\\}\\))/\\1/p' | head -1)\n");
+            script.append("if [[ \"$INSTALLED_VER\" == *\"0000000\"* ]]; then\n");
+            script.append("    echo \"Actual build commit hash: ").append(expectedBuildVersion).append(". To guarantee your build's commit hash, please build CUBRID with ccache off.\"\n");
+            script.append("elif [[ \"$INSTALLED_VER\" != *\"").append(expectedBuildVersion).append("\"* ]]; then\n");
+            script.append("    echo \"WARNING: Expected build commit hash ").append(expectedBuildVersion);
+            script.append(" not found in CUBRID build version (cubrid_rel)\"\n");
             script.append("fi\n\n");
         }
 
@@ -284,7 +285,6 @@ public class EnvScriptFactory {
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
         script.append("set -e\n");
-        script.append("set -x\n\n");
 
         script.append("# Resolve test directory inside the mounted shell testcase tree\n");
         script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
@@ -421,11 +421,12 @@ public class EnvScriptFactory {
 
         if (expectedBuildVersion != null && !expectedBuildVersion.isEmpty()) {
             script.append("# Verify expected build version\n");
-            script.append("INSTALLED_VER=$(cubrid_rel 2>/dev/null | head -1)\n");
-            script.append("echo \"Installed version: $INSTALLED_VER\"\n");
-            script.append("if [[ \"$INSTALLED_VER\" != *\"").append(expectedBuildVersion).append("\"* ]]; then\n");
-            script.append("    echo \"WARNING: Expected build version ").append(expectedBuildVersion);
-            script.append(" not found in installed version\"\n");
+            script.append("INSTALLED_VER=$(cubrid_rel 2>/dev/null | sed -n 's/.*-\\([a-z0-9]\\{7\\}\\))/\\1/p' | head -1)\n");
+            script.append("if [[ \"$INSTALLED_VER\" == *\"0000000\"* ]]; then\n");
+            script.append("    echo \"Actual build commit hash: ").append(expectedBuildVersion).append(". To guarantee your build's commit hash, please build CUBRID with ccache off.\"\n");
+            script.append("elif [[ \"$INSTALLED_VER\" != *\"").append(expectedBuildVersion).append("\"* ]]; then\n");
+            script.append("    echo \"WARNING: Expected build commit hash ").append(expectedBuildVersion);
+            script.append(" not found in CUBRID build version (cubrid_rel)\"\n");
             script.append("fi\n\n");
         }
 
@@ -447,6 +448,7 @@ public class EnvScriptFactory {
         script.append("# Run test\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
         script.append("set +e\n");
+        script.append("set -x\n\n");
         script.append("sh ").append(testScript).append("\n");
         script.append("TEST_EXIT=$?\n");
         script.append("set -e\n\n");
