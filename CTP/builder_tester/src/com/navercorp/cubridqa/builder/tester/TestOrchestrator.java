@@ -504,13 +504,14 @@ public class TestOrchestrator {
                 builder.timestamp(Instant.ofEpochMilli(result.getTimestamp()));
             }
             TestObservation obs = builder.build();
-            
+
             // Write to old gzipped WAL for backward compatibility (if needed)
             observationWriter.recordObservation(obs);
-            
+
             // Write to new segmented WAL via TestStatsStore (also updates in-memory stats)
+            // Pass requestId from builder request for request journal tracking
             if (testStatsStore != null) {
-                testStatsStore.recordObservation(obs);
+                testStatsStore.recordObservation(obs, request.getRequestId());
             }
         } catch (Exception e) {
             logger.fine("Failed to record test observation: " + e.getMessage());

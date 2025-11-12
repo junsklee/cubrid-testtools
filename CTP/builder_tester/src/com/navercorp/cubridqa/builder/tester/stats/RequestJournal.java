@@ -14,16 +14,18 @@ import java.util.logging.Logger;
 import static java.nio.file.StandardOpenOption.*;
 
 /**
- * Per-request journal that records all observations for a single tester run.
+ * Per-request journal that records all observations for a single builder request.
  *
- * <p>Creates human-readable JSON files in profiles/requests/ directory with format:
- * req_YYYYMMDD_HHMMSS_xxxx.json
+ * <p>Creates human-readable JSONL files in profiles/requests/ directory with format:
+ * req_YYYYMMDD_HHMMSS_xxxx.jl
+ *
+ * <p>Each line contains one test observation as a JSON object.
  *
  * <p>Design principles:
  * - Minimal code surface (no new config keys)
  * - Thread-safe buffered writes
- * - Atomic flush on shutdown
- * - Human-readable format for debugging and analysis
+ * - Atomic flush when all tests for the request complete
+ * - JSONL format for easy processing and streaming
  */
 public final class RequestJournal {
     private static final Logger logger = Logger.getLogger(RequestJournal.class.getName());
@@ -81,6 +83,7 @@ public final class RequestJournal {
 
     /**
      * Flushes buffered observations to disk and closes the journal.
+     * Writes in JSONL format: one JSON object per line.
      *
      * <p>This method is idempotent and safe to call multiple times.
      *
@@ -94,30 +97,35 @@ public final class RequestJournal {
         closed = true;
 
         try {
-            JSONObject root = new JSONObject();
             List<JSONObject> copy;
             synchronized (buffer) {
                 copy = new ArrayList<>(buffer);
             }
 
-            root.put("request", requestId)
-                .put("generated_at", Instant.now().toString())
-                .put("node", node == null ? JSONObject.NULL : node)
-                .put("commit", commit == null ? JSONObject.NULL : commit)
-                .put("count", copy.size())
-                .put("tests", copy);
+            if (copy.isEmpty()) {
+                logger.fine("[RequestJournal] No observations to flush for " + requestId);
+                return;
+            }
 
-            byte[] bytes = root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            Path tmp = requestsDir.resolve(requestId + ".json.tmp");
+            // Write JSONL format: one JSON object per line
+            StringBuilder jsonl = new StringBuilder();
+            for (JSONObject obj : copy) {
+                jsonl.append(obj.toString()).append('\n');
+            }
+
+            byte[] bytes = jsonl.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            Path tmp = requestsDir.resolve(requestId + ".jl.tmp");
 
             try (FileChannel ch = FileChannel.open(tmp, CREATE, TRUNCATE_EXISTING, WRITE)) {
                 ch.write(ByteBuffer.wrap(bytes));
                 ch.force(true);
             }
 
-            Path dst = requestsDir.resolve(requestId + ".json");
+            Path dst = requestsDir.resolve(requestId + ".jl");
             Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             WALUtils.fsyncDirectory(requestsDir);
+
+            logger.info("[RequestJournal] Flushed " + copy.size() + " observations to " + dst);
 
         } catch (Exception e) {
             // Log and proceed; WAL still preserves data

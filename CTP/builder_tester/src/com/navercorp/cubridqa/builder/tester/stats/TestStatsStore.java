@@ -52,8 +52,8 @@ public class TestStatsStore {
     private final WALManifest manifest;
     private final Path walDir;
 
-    // Request journal (optional, may be null)
-    private volatile RequestJournal requestJournal;
+    // Request journals: one per builder requestId
+    private final ConcurrentHashMap<String, RequestJournal> requestJournals;
 
     // Node hardware for latest.json.gz export (optional, may be null)
     private volatile JSONObject nodeHardwareJson;
@@ -83,6 +83,7 @@ public class TestStatsStore {
         this.manifest = manifest;
         this.walDir = walDir;
         this.statsMap = new ConcurrentHashMap<>();
+        this.requestJournals = new ConcurrentHashMap<>();
         this.lastSnapshotTime = Instant.EPOCH;
         this.snapshotCoordinator = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "snapshot-coordinator");
@@ -141,11 +142,11 @@ public class TestStatsStore {
     public void stop() {
         // Shutdown coordinator first
         snapshotCoordinator.shutdown();
-        
+
         try {
             // Optional: force a last snapshot before shutdown
             coordinatedSnapshot();
-            
+
             // Wait for coordinator to finish (with timeout)
             if (!snapshotCoordinator.awaitTermination(10, TimeUnit.SECONDS)) {
                 logger.warning("[TestStatsStore] Coordinator did not terminate within timeout, forcing shutdown");
@@ -160,17 +161,67 @@ public class TestStatsStore {
         } catch (Exception e) {
             logger.log(Level.WARNING, "[TestStatsStore] Error during final snapshot on shutdown", e);
         }
-        
+
+        // Flush all request journals
+        flushAllRequestJournals();
+
         // Coordinator is now stopped - safe to stop writer
     }
 
     /**
-     * Sets the request journal for per-request observation tracking.
-     *
-     * @param requestJournal The request journal to use
+     * Flushes and closes all open request journals.
+     * Called during tester shutdown to persist all request data.
      */
-    public void setRequestJournal(RequestJournal requestJournal) {
-        this.requestJournal = requestJournal;
+    private void flushAllRequestJournals() {
+        if (requestJournals.isEmpty()) {
+            return;
+        }
+
+        logger.info("Flushing " + requestJournals.size() + " request journal(s)...");
+        String nodeName = System.getenv("HOSTNAME");
+        if (nodeName == null) {
+            nodeName = "unknown";
+        }
+
+        for (Map.Entry<String, RequestJournal> entry : requestJournals.entrySet()) {
+            String requestId = entry.getKey();
+            RequestJournal journal = entry.getValue();
+            if (journal != null) {
+                try {
+                    journal.flushAndClose(nodeName, null);
+                    logger.info("Flushed request journal: " + requestId);
+                } catch (Exception e) {
+                    logger.log(Level.WARNING, "Failed to flush request journal: " + requestId, e);
+                }
+            }
+        }
+
+        requestJournals.clear();
+    }
+
+
+    /**
+     * Flushes and closes a specific request journal.
+     * Called by FinalizeRequestHandler when the builder signals that all tests for a requestId are complete.
+     *
+     * @param requestId The request ID to flush
+     */
+    public void flushRequestJournal(String requestId) {
+        RequestJournal journal = requestJournals.remove(requestId);
+        if (journal != null) {
+            try {
+                String nodeName = System.getenv("HOSTNAME");
+                if (nodeName == null) {
+                    nodeName = "unknown";
+                }
+                journal.flushAndClose(nodeName, null);
+                logger.info("Flushed request journal: " + requestId);
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Failed to flush request journal: " + requestId, e);
+            }
+        } else {
+            logger.fine("No request journal found for requestId: " + requestId);
+        }
     }
 
     /**
@@ -184,17 +235,30 @@ public class TestStatsStore {
 
     /**
      * Records a new observation from live test execution.
-     * Writes to WAL, request journal, and updates in-memory statistics.
+     * Writes to WAL, request journal (if requestId provided), and updates in-memory statistics.
      *
      * @param obs The observation to record
+     * @param requestId The builder's request ID (optional, may be null)
      */
-    public void recordObservation(TestObservation obs) {
+    public void recordObservation(TestObservation obs, String requestId) {
         // Write to WAL first (async, non-blocking)
         walWriter.append(obs);
 
-        // Append to request journal if available
-        if (requestJournal != null) {
-            requestJournal.append(obs);
+        // Append to request journal if requestId is provided
+        if (requestId != null && !requestId.isEmpty()) {
+            RequestJournal journal = requestJournals.computeIfAbsent(requestId, rid -> {
+                try {
+                    logger.fine("Creating RequestJournal for requestId: " + rid);
+                    return new RequestJournal(profilesDir, rid);
+                } catch (IOException e) {
+                    logger.log(Level.WARNING, "Failed to create RequestJournal for " + rid, e);
+                    return null;
+                }
+            });
+
+            if (journal != null) {
+                journal.append(obs);
+            }
         }
 
         // Update in-memory statistics
@@ -490,24 +554,42 @@ public class TestStatsStore {
      * If any step fails, do not cleanup; leave retained list as-is. Next cycle will retry.
      */
     private void coordinatedSnapshot() {
+        Path snapshotPath = null;
         try {
             // 1) Write snapshot (fsync file → rename → fsync dir)
-            Path snapshotPath = writeSnapshotInternal();
+            snapshotPath = writeSnapshotInternal();
             if (snapshotPath == null) {
                 logger.warning("[Coordinator] Snapshot write failed, skipping rotation and manifest update");
                 return;
             }
 
             // 2) Rotate WAL; get closed segment (durable)
-            String closedSegment = walWriter.rotateNow();
-            String newOpenWal = walWriter.getCurrentSegmentName();
+            String closedSegment = null;
+            String newOpenWal = null;
+            try {
+                closedSegment = walWriter.rotateNow();
+                newOpenWal = walWriter.getCurrentSegmentName();
+            } catch (IOException e) {
+                logger.log(Level.WARNING, "[Coordinator] WAL rotation failed, but snapshot was written successfully", e);
+                // Continue to update manifest with current WAL segment if rotation failed
+                newOpenWal = walWriter.getCurrentSegmentName();
+                if (newOpenWal == null || newOpenWal.isEmpty()) {
+                    logger.warning("[Coordinator] Cannot determine current WAL segment, skipping manifest update");
+                    return;
+                }
+            }
 
             // 3) Update MANIFEST (fsync file → rename → fsync dir)
-            manifest.updateAfterSnapshot(
-                    snapshotPath.getFileName().toString(),
-                    closedSegment,
-                    newOpenWal
-            );
+            try {
+                manifest.updateAfterSnapshot(
+                        snapshotPath.getFileName().toString(),
+                        closedSegment,
+                        newOpenWal
+                );
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "[Coordinator] Manifest update failed, but snapshot was written successfully", e);
+                // Snapshot is already written, so we can continue
+            }
 
             // 4) Cleanup old segments (post-manifest)
             List<String> toCleanup = manifest.getSegmentsToCleanup();
@@ -528,19 +610,32 @@ public class TestStatsStore {
             }
 
             // 5) Write latest.json.gz (after MANIFEST update, before cleanup)
-            writeLatestFromStatsMap(nodeHardwareJson);
+            try {
+                writeLatestFromStatsMap(nodeHardwareJson);
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "[Coordinator] Failed to write latest.json.gz", e);
+                // Non-fatal, continue
+            }
 
             // 6) Cleanup old segments (after latest.json.gz written)
             if (!toCleanup.isEmpty()) {
-                manifest.removeSegments(toCleanup);
-                logger.info(String.format("[Coordinator] Cleanup: %d deleted, %d failed", deletedCount, failedCount));
+                try {
+                    manifest.removeSegments(toCleanup);
+                    logger.info(String.format("[Coordinator] Cleanup: %d deleted, %d failed", deletedCount, failedCount));
+                } catch (Exception e) {
+                    logger.log(Level.WARNING, "[Coordinator] Failed to remove segments from manifest", e);
+                }
             }
 
             logger.info(String.format("[Coordinator] Snapshot complete: %d tests, closed=%s, new=%s",
-                    statsMap.size(), closedSegment, newOpenWal));
+                    statsMap.size(), closedSegment != null ? closedSegment : "none", newOpenWal));
 
         } catch (Throwable t) {
             logger.log(Level.SEVERE, "[Coordinator] Snapshot coordination failed", t);
+            // If snapshot was written, log that it succeeded even though coordination failed
+            if (snapshotPath != null) {
+                logger.info("[Coordinator] Snapshot file was written successfully despite coordination failure");
+            }
             // Keep going; we'll try again next tick
         }
     }

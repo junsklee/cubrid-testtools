@@ -57,7 +57,7 @@ public class TestStatsStoreTest {
                         testKey,
                         10_000 + i * 1_000L,
                         Instant.now().plusMillis(i * 100)
-                    ));
+                    ), null);
                 }
 
                 TestStats stats = store.getStats(testKey);
@@ -89,7 +89,7 @@ public class TestStatsStoreTest {
             walWriter.start();
             writerStore.start();
             try {
-                writerStore.recordObservation(createObservation(testKey, 17_500, Instant.now()));
+                writerStore.recordObservation(createObservation(testKey, 17_500, Instant.now()), null);
             } finally {
                 writerStore.stop(); // writes final snapshot
                 walWriter.stop();
@@ -167,7 +167,7 @@ public class TestStatsStoreTest {
             walWriter1.start();
             initialStore.start();
             try {
-                initialStore.recordObservation(createObservation(testKey, 12_000, Instant.now()));
+                initialStore.recordObservation(createObservation(testKey, 12_000, Instant.now()), null);
             } finally {
                 initialStore.stop(); // writes snapshot
                 walWriter1.stop();

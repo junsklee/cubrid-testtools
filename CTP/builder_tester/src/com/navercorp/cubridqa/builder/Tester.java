@@ -6,6 +6,7 @@ import com.navercorp.cubridqa.builder.tester.TestOrchestrator;
 import com.navercorp.cubridqa.builder.tester.HealthHandler;
 import com.navercorp.cubridqa.builder.tester.ScoreHandler;
 import com.navercorp.cubridqa.builder.tester.LogStreamHandler;
+import com.navercorp.cubridqa.builder.tester.FinalizeRequestHandler;
 import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
 import com.navercorp.cubridqa.builder.tester.NodeCapacity;
 import com.navercorp.cubridqa.builder.logs.LogLocator;
@@ -24,7 +25,6 @@ import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
 import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
 import com.navercorp.cubridqa.builder.tester.stats.WALManifest;
 import com.navercorp.cubridqa.builder.tester.stats.WALSegmentWriter;
-import com.navercorp.cubridqa.builder.tester.stats.RequestJournal;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.File;
@@ -82,21 +82,6 @@ public class Tester {
     // Statistics store
     private final TestStatsStore testStatsStore;
     private final WALSegmentWriter walWriter;
-
-    // Request journal
-    private final RequestJournal requestJournal;
-    private final String requestId;
-
-    /**
-     * Generates a unique request ID for this tester run.
-     * Format: req_YYYYMMDD_HHMMSS_xxxx
-     */
-    private static String newRequestId() {
-        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneId.of("UTC"));
-        String ts = now.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        String suf = java.util.UUID.randomUUID().toString().substring(0, 4);
-        return "req_" + ts + "_" + suf;
-    }
 
     public Tester(Config config) throws IOException {
         this.config = config;
@@ -163,12 +148,6 @@ public class Tester {
         long snapshotIntervalSeconds = config.getLongOrDefault("stats.snapshot_interval_seconds", 300L);
         this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds, walWriter, manifest, walDir);
 
-        // Initialize request journal for per-request tracking
-        this.requestId = newRequestId();
-        this.requestJournal = new RequestJournal(profilesDir, requestId);
-        testStatsStore.setRequestJournal(requestJournal);
-        logger.info("Request journal initialized: " + requestId);
-
         // Create orchestrator
         this.testOrchestrator = new TestOrchestrator(
             config,
@@ -193,6 +172,7 @@ public class Tester {
         this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator);
         this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
+        FinalizeRequestHandler finalizeRequestHandler = new FinalizeRequestHandler(testStatsStore);
         
         // Build cache is ready for use
         
@@ -223,6 +203,7 @@ public class Tester {
         this.server.createContext("/health", healthHandler);
         this.server.createContext("/score", scoreHandler);
         this.server.createContext("/log/", logStreamHandler);
+        this.server.createContext("/finalize-request", finalizeRequestHandler);
         int maxThreads = Math.max(1, config.getMaxConcurrentTests());
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }
@@ -251,17 +232,9 @@ public class Tester {
     }
     
     public void stop() {
-        // Stop TestStatsStore (writes final snapshot)
+        // Stop TestStatsStore (writes final snapshot and flushes request journals)
         testStatsStore.stop();
         logger.info("TestStatsStore stopped");
-
-        // Flush and close request journal
-        String nodeName = System.getenv("HOSTNAME");
-        if (nodeName == null) {
-            nodeName = "unknown";
-        }
-        requestJournal.flushAndClose(nodeName, null);
-        logger.info("RequestJournal flushed: " + requestId);
 
         // Stop WAL writer (releases lock, closes segment)
         walWriter.stop();

@@ -170,6 +170,9 @@ public class BuilderTask {
             final String finalBuildType = buildType;
             final String testRequestId = RequestContext.getRequestId();
 
+            // Track which testers received tests for this requestId
+            Set<String> testersUsed = ConcurrentHashMap.newKeySet();
+
             // Choose distribution strategy
             if (config.isSmartSchedulingEnabled()) {
                 taskLogger.info("Using SMART SCHEDULING for test distribution");
@@ -179,11 +182,17 @@ public class BuilderTask {
                     workerIps,
                     finalBuildType,
                     testRequestId,
-                    workerCapacities
+                    workerCapacities,
+                    testersUsed
                 );
             } else {
                 taskLogger.info("Using LEGACY work-queue distribution");
-                distributeTestsLegacy(builtPackages, tests, workerCapacities, dispatchCounts, finalBuildType, testRequestId, totalTestExecutions);
+                distributeTestsLegacy(builtPackages, tests, workerCapacities, dispatchCounts, finalBuildType, testRequestId, totalTestExecutions, testersUsed);
+            }
+            
+            // Send finalize requests to all testers that received tests for this requestId
+            if (testRequestId != null && !testRequestId.isEmpty() && !testersUsed.isEmpty()) {
+                sendFinalizeRequests(testRequestId, testersUsed);
             }
             
             // Calculate execution time and send callback with results
@@ -1706,6 +1715,61 @@ public class BuilderTask {
         taskLogger.info("CUBRID repository ready");
     }
     
+    /**
+     * Sends finalize requests to all testers that received tests for a requestId.
+     * This signals the testers to flush and close the request journal.
+     *
+     * @param requestId The request ID to finalize
+     * @param testersUsed Set of tester IPs (host:port format) that received tests
+     */
+    private void sendFinalizeRequests(String requestId, Set<String> testersUsed) {
+        taskLogger.info("Sending finalize requests for requestId: " + requestId + " to " + testersUsed.size() + " tester(s)");
+        
+        for (String testerIp : testersUsed) {
+            try {
+                // Parse host and port from testerIp (supports "host:port" format)
+                String host = testerIp;
+                int port = config.getTesterPort();
+                
+                if (testerIp.contains(":")) {
+                    String[] parts = testerIp.split(":");
+                    host = parts[0];
+                    try {
+                        port = Integer.parseInt(parts[1]);
+                    } catch (NumberFormatException e) {
+                        taskLogger.warning("Invalid port in testerIp: " + testerIp);
+                    }
+                }
+                
+                // Send finalize request
+                URL url = new URL("http://" + host + ":" + port + "/finalize-request");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(10000); // 10 second timeout for finalize
+                
+                JSONObject requestBody = new JSONObject()
+                    .put("requestId", requestId);
+                
+                try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream())) {
+                    writer.write(requestBody.toString());
+                }
+                
+                int responseCode = conn.getResponseCode();
+                if (responseCode == 200) {
+                    taskLogger.info("Finalize request sent successfully to " + testerIp + " for requestId: " + requestId);
+                } else {
+                    taskLogger.warning("Finalize request to " + testerIp + " returned HTTP " + responseCode + " for requestId: " + requestId);
+                }
+                
+            } catch (Exception e) {
+                taskLogger.log(Level.WARNING, "Failed to send finalize request to " + testerIp + " for requestId: " + requestId, e);
+            }
+        }
+    }
+    
     private void sendCallback(String callbackUrl, long durationMs) {
         try {
             // Include original requestId so the report server saves under the correct request directory
@@ -2068,7 +2132,8 @@ public class BuilderTask {
      */
     private void distributeTestsLegacy(Map<String, String> builtPackages, JSONArray tests,
                                        Map<String, Integer> workerCapacities, Map<String, AtomicInteger> dispatchCounts,
-                                       String buildType, String testRequestId, int totalTestExecutions) {
+                                       String buildType, String testRequestId, int totalTestExecutions,
+                                       Set<String> testersUsed) {
         ConcurrentLinkedQueue<TestJob> pendingJobs = new ConcurrentLinkedQueue<>();
         AtomicInteger globalTestIndex = new AtomicInteger(0);
 
@@ -2122,6 +2187,8 @@ public class BuilderTask {
                             if (testRequestId != null) {
                                 RequestContext.setRequestId(testRequestId);
                             }
+                            // Track that this tester received a test for this requestId
+                            testersUsed.add(finalWorker);
                             JSONObject testResult = runTest(job.commit, job.buildPackage, job.testPath,
                                 finalWorker, this.baselineCommit, buildType);
                             results.add(testResult);
@@ -2168,7 +2235,7 @@ public class BuilderTask {
      */
     private void distributeTestsWithSmartScheduling(Map<String, String> builtPackages, JSONArray tests,
                                                      List<String> workerIps, String buildType, String testRequestId,
-                                                     Map<String, Integer> workerCapacities) {
+                                                     Map<String, Integer> workerCapacities, Set<String> testersUsed) {
         taskLogger.info("[Smart Scheduling] Initializing scheduler...");
 
         // Initialize scheduler components
@@ -2298,6 +2365,8 @@ public class BuilderTask {
                         if (testRequestId != null) {
                             RequestContext.setRequestId(testRequestId);
                         }
+                        // Track that this tester received a test for this requestId
+                        testersUsed.add(workerIp);
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
                             a.getTestKey(), workerIp, this.baselineCommit, buildType, a.getTest());
                         results.add(testResult);
