@@ -6,6 +6,7 @@ Complete documentation for the CUBRID Builder-Tester system.
 
 - [Main README](../README.md) - System overview and getting started
 - [MULTI_NODE_TESTING.md](MULTI_NODE_TESTING.md) - Multi-node testing setup and usage
+- **[IO_FIRST_SCHEDULING_IMPLEMENTATION.md](IO_FIRST_SCHEDULING_IMPLEMENTATION.md)** - Complete context for I/O-first scheduling implementation (November 2025)
 
 ## New Features (Nov 2024)
 

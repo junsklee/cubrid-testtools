@@ -32,13 +32,16 @@ public class HealthHandler implements HttpHandler {
     private final BuilderConfig config;
     private final NodeCapacity nodeCapacity;
     private final TestOrchestrator testOrchestrator; // For running test count
+    private final ActualSampler actualSampler; // For actual resource sampling
 
     public HealthHandler(BuilderConfig config, HttpResponseWriter responseWriter,
-                         NodeCapacity nodeCapacity, TestOrchestrator testOrchestrator) {
+                         NodeCapacity nodeCapacity, TestOrchestrator testOrchestrator,
+                         ActualSampler actualSampler) {
         this.config = config;
         this.responseWriter = responseWriter;
         this.nodeCapacity = nodeCapacity;
         this.testOrchestrator = testOrchestrator;
+        this.actualSampler = actualSampler;
     }
 
     @Override
@@ -112,26 +115,38 @@ public class HealthHandler implements HttpHandler {
         }
         response.put("utilization_reserved", utilizationReserved);
 
-        // Utilization Actual (sampled from cgroups/Docker stats - stub for now)
-        // TODO: Implement actual sampling via ActualSampler
+        // Utilization Actual (sampled from Docker stats)
+        UtilizationSnapshot actual = actualSampler != null
+            ? actualSampler.sampleCurrentUtilization()
+            : UtilizationSnapshot.empty();
+
         JSONObject utilizationActual = new JSONObject();
-        utilizationActual.put("cpu_millicores", 0);  // Placeholder
-        utilizationActual.put("mem_bytes", 0L);      // Placeholder
-        utilizationActual.put("io_read_bytes_per_sec", 0L);  // Placeholder
-        utilizationActual.put("io_write_bytes_per_sec", 0L);  // Placeholder
-        utilizationActual.put("iops", 0L);           // Placeholder
-        utilizationActual.put("net_bytes_per_sec", 0L); // Placeholder
+        utilizationActual.put("cpu_millicores", (long) actual.getTotalCpuMillicores());
+        utilizationActual.put("mem_bytes", actual.getTotalMemBytes());
+        utilizationActual.put("io_read_bytes_per_sec", actual.getTotalIoReadBytesPerSec());
+        utilizationActual.put("io_write_bytes_per_sec", actual.getTotalIoWriteBytesPerSec());
+        utilizationActual.put("iops", actual.getTotalIops());
+        utilizationActual.put("net_bytes_per_sec", actual.getTotalNetBytesPerSec());
         response.put("utilization_actual", utilizationActual);
 
         // Error ratios (actual - reserved) / reserved
-        // Placeholder for now since actual sampling not yet implemented
+        // Shows prediction accuracy for feedback loops
         JSONObject errorRatio = new JSONObject();
-        errorRatio.put("cpu", 0.0);
-        errorRatio.put("mem", 0.0);
-        errorRatio.put("io_r", 0.0);  // Read IO error ratio
-        errorRatio.put("io_w", 0.0);  // Write IO error ratio
-        errorRatio.put("iops", 0.0);
-        errorRatio.put("net", 0.0);
+
+        // Get reserved values from utilizationReserved object
+        long reservedCpu = utilizationReserved.optLong("cpu_millicores", 0);
+        long reservedMem = utilizationReserved.optLong("mem_bytes", 0);
+        long reservedIoRead = utilizationReserved.optLong("io_read_bytes_per_sec", 0);
+        long reservedIoWrite = utilizationReserved.optLong("io_write_bytes_per_sec", 0);
+        long reservedIops = utilizationReserved.optLong("iops", 0);
+        long reservedNet = utilizationReserved.optLong("net_bytes_per_sec", 0);
+
+        errorRatio.put("cpu", calculateErrorRatio(actual.getTotalCpuMillicores(), reservedCpu));
+        errorRatio.put("mem", calculateErrorRatio(actual.getTotalMemBytes(), reservedMem));
+        errorRatio.put("io_r", calculateErrorRatio(actual.getTotalIoReadBytesPerSec(), reservedIoRead));
+        errorRatio.put("io_w", calculateErrorRatio(actual.getTotalIoWriteBytesPerSec(), reservedIoWrite));
+        errorRatio.put("iops", calculateErrorRatio(actual.getTotalIops(), reservedIops));
+        errorRatio.put("net", calculateErrorRatio(actual.getTotalNetBytesPerSec(), reservedNet));
         response.put("error_ratio", errorRatio);
 
         // Optional: publish safety headroom as an advisory value
@@ -226,5 +241,16 @@ public class HealthHandler implements HttpHandler {
         }
 
         return packages;
+    }
+
+    /**
+     * Calculates error ratio: (actual - reserved) / reserved
+     * Returns 0.0 if reserved is 0 (no prediction to compare against)
+     */
+    private double calculateErrorRatio(double actual, long reserved) {
+        if (reserved <= 0) {
+            return 0.0;
+        }
+        return (actual - reserved) / (double) reserved;
     }
 }

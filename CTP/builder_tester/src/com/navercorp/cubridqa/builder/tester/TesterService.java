@@ -54,7 +54,8 @@ public class TesterService {
         // For now, provide dummy values. Use Tester.java instead for full functionality.
         NodeCapacity dummyCapacity = NodeCapacity.measure(config.getWorkDir());
         TestOrchestrator dummyOrchestrator = null; // TesterService doesn't have orchestrator
-        this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator));
+        ActualSampler actualSampler = new ActualSampler(config);
+        this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator, actualSampler));
         this.apiServer.registerHandler("/log/", new LogStreamHandler(logLocator, responseWriter));
         
         // Create work directory if it doesn't exist

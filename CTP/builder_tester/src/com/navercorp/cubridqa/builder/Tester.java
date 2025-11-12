@@ -9,6 +9,7 @@ import com.navercorp.cubridqa.builder.tester.LogStreamHandler;
 import com.navercorp.cubridqa.builder.tester.FinalizeRequestHandler;
 import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
 import com.navercorp.cubridqa.builder.tester.NodeCapacity;
+import com.navercorp.cubridqa.builder.tester.ActualSampler;
 import com.navercorp.cubridqa.builder.logs.LogLocator;
 import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
@@ -167,9 +168,12 @@ public class Tester {
         // Set node hardware for latest.json.gz export
         testStatsStore.setNodeHardwareJson(nodeCapacity.toJSON());
 
+        // Create actual resource sampler for health metrics
+        ActualSampler actualSampler = new ActualSampler(config);
+
         // Create HTTP handlers
         this.testHandler = new TestHandler(config, testOrchestrator, nodeCapacity, logger);
-        this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator);
+        this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator, actualSampler);
         this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
         FinalizeRequestHandler finalizeRequestHandler = new FinalizeRequestHandler(testStatsStore);

@@ -85,6 +85,10 @@ public class SmartSchedulingIntegrationTest {
             .usedCpuPct(150.0)
             .memMb(32_768.0)
             .usedMemMb(10_000.0)
+            .ioReadMbPerSec(250.0)   // Override with custom values
+            .ioWriteMbPerSec(250.0)
+            .usedIoReadMbPerSec(60.0)
+            .usedIoWriteMbPerSec(60.0)
             .build());
 
         directory.updateSnapshot("node-power", nodeBuilder("node-power")
@@ -92,6 +96,10 @@ public class SmartSchedulingIntegrationTest {
             .usedCpuPct(200.0)
             .memMb(64_000.0)
             .usedMemMb(12_000.0)
+            .ioReadMbPerSec(400.0)   // Higher I/O capacity for power node
+            .ioWriteMbPerSec(400.0)
+            .usedIoReadMbPerSec(40.0)
+            .usedIoWriteMbPerSec(40.0)
             .build());
 
         ReadyQueue readyQueue = new ReadyQueue(20_000);
@@ -178,7 +186,11 @@ public class SmartSchedulingIntegrationTest {
             .memMb(32_768.0)
             .usedMemMb(8_000.0)
             .ioMbPerSec(600.0)
+            .ioReadMbPerSec(300.0)   // Split I/O 50/50 for read/write
+            .ioWriteMbPerSec(300.0)
             .usedIoMbPerSec(100.0)
+            .usedIoReadMbPerSec(50.0)
+            .usedIoWriteMbPerSec(50.0)
             .iops(20_000.0)
             .usedIops(2_000.0)
             .netMbPerSec(125.0)
