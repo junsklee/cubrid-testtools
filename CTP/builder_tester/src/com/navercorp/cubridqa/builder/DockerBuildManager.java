@@ -452,6 +452,26 @@ public class DockerBuildManager {
                 writer.println();
             }
 
+            writer.println("create_package() {");
+            writer.println("  local dest=\"$1\"");
+            writer.println("  echo \"Creating build package at $dest\"");
+            writer.println("  if [ ! -d _install/CUBRID ]; then");
+            writer.println("    echo '[WARN] Expected _install/CUBRID not found; packaging entire build directory' >&2");
+            writer.println("    if command -v pigz >/dev/null 2>&1; then");
+            writer.println("      tar cf - . | pigz -1 > \"$dest\"");
+            writer.println("    else");
+            writer.println("      tar cf - . | gzip -1 > \"$dest\"");
+            writer.println("    fi");
+            writer.println("    return");
+            writer.println("  fi");
+            writer.println("  if command -v pigz >/dev/null 2>&1; then");
+            writer.println("    tar cf - _install/CUBRID | pigz -1 > \"$dest\"");
+            writer.println("  else");
+            writer.println("    tar cf - _install/CUBRID | gzip -1 > \"$dest\"");
+            writer.println("  fi");
+            writer.println("}");
+            writer.println();
+
             writer.println("# Prepare an isolated working directory per build to avoid collisions");
             writer.println("# Use fixed build directory for ccache optimization");
             writer.println("if [ -d /work ]; then");
