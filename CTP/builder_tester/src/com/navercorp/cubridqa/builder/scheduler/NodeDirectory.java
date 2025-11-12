@@ -1,5 +1,6 @@
 package com.navercorp.cubridqa.builder.scheduler;
 
+import com.navercorp.cubridqa.builder.BuilderConfig;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -31,18 +32,24 @@ public class NodeDirectory {
     private final List<String> testerNodes;  // List of "host:port" strings
     private final long pollIntervalSeconds;
     private final long staleThresholdSeconds;
+    private final BuilderConfig config;  // Optional config for margins/weights (null for tests)
 
     private final ConcurrentHashMap<String, NodeSnapshot> nodeMap;
     private final ScheduledExecutorService pollScheduler;
 
     public NodeDirectory(List<String> testerNodes) {
-        this(testerNodes, DEFAULT_POLL_INTERVAL_SECONDS, DEFAULT_STALE_THRESHOLD_SECONDS);
+        this(testerNodes, DEFAULT_POLL_INTERVAL_SECONDS, DEFAULT_STALE_THRESHOLD_SECONDS, null);
     }
 
     public NodeDirectory(List<String> testerNodes, long pollIntervalSeconds, long staleThresholdSeconds) {
+        this(testerNodes, pollIntervalSeconds, staleThresholdSeconds, null);
+    }
+
+    public NodeDirectory(List<String> testerNodes, long pollIntervalSeconds, long staleThresholdSeconds, BuilderConfig config) {
         this.testerNodes = new ArrayList<>(testerNodes);
         this.pollIntervalSeconds = pollIntervalSeconds;
         this.staleThresholdSeconds = staleThresholdSeconds;
+        this.config = config;
         this.nodeMap = new ConcurrentHashMap<>();
         this.pollScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "NodeDirectory-Poller");
@@ -136,14 +143,15 @@ public class NodeDirectory {
      * @return true if node has enough free resources
      */
     private boolean hasResourceHeadroom(NodeSnapshot node, TestInstance test) {
-        // TODO: Wire BuilderConfig margins here once config is passed to NodeDirectory
-        // For now, use hardcoded production-safe defaults
-        final double baseCpu = 0.10;  // 10% base margin for CPU
-        final double baseMem = 0.20;  // 20% base margin for memory
-        final double baseIo = 0.30;   // 30% base margin for I/O (highest variability)
-        final double baseNet = 0.25;  // 25% base margin for network
-        final double baseIops = 0.25; // 25% base margin for IOPS
-        final double k = 0.50;        // Extra margin factor for low confidence
+        // Use config if available, otherwise fall back to hardcoded production-safe defaults
+        final double baseCpu = config != null ? config.getSchedulingMarginCpuBase() : 0.10;
+        final double baseMem = config != null ? config.getSchedulingMarginMemBase() : 0.20;
+        final double baseIoRead = config != null ? config.getSchedulingMarginIoReadBase() : 0.35;
+        final double baseIoWrite = config != null ? config.getSchedulingMarginIoWriteBase() : 0.35;
+        final double baseNet = config != null ? config.getSchedulingMarginNetBase() : 0.25;
+        final double baseIops = config != null ? config.getSchedulingMarginIopsBase() : 0.25;
+        final double k = config != null ? config.getSchedulingMarginConfidenceFactor() : 0.50;
+        final double ioSafetyHeadroom = config != null ? config.getIoSafetyHeadroomRatio() : 0.15;
 
         // Use scalar confidence for all dimensions
         // Note: TestInstance only has scalar confidence. Per-dimension confidence
@@ -153,7 +161,8 @@ public class NodeDirectory {
         // Compute dimension-specific margins with confidence scaling
         double mCpu = baseCpu + k * (1.0 - conf);
         double mMem = baseMem + k * (1.0 - conf);
-        double mIo = baseIo + k * (1.0 - conf);
+        double mIoRead = baseIoRead + k * (1.0 - conf);
+        double mIoWrite = baseIoWrite + k * (1.0 - conf);
         double mNet = baseNet + k * (1.0 - conf);
         double mIops = baseIops + k * (1.0 - conf);
 
@@ -161,27 +170,37 @@ public class NodeDirectory {
         // IMPORTANT: Memory floor is 100MB in BYTES (104857600), not MB
         double requiredCpu = test.getPredictedCpuPct() * (1.0 + mCpu);
         double requiredMem = test.getPredictedMemMb() + Math.max(test.getPredictedMemMb() * mMem, 100.0); // +100MB floor
-        double requiredIo = test.getPredictedIoMbPerSec() * (1.0 + mIo);
+        double requiredIoRead = test.getPredictedIoReadMbPerSec() * (1.0 + mIoRead);
+        double requiredIoWrite = test.getPredictedIoWriteMbPerSec() * (1.0 + mIoWrite);
         double requiredIops = test.getPredictedIops() * (1.0 + mIops);
         double requiredNet = test.getPredictedNetMbPerSec() * (1.0 + mNet);
 
+        // Get free capacity (accounting for safety headroom)
+        double freeIoRead = node.getFreeIoReadMbPerSec();
+        double freeIoWrite = node.getFreeIoWriteMbPerSec();
+        long keepFreeRead = (long) (node.getIoReadCapacityBytesPerSec() * ioSafetyHeadroom) / (1024 * 1024);
+        long keepFreeWrite = (long) (node.getIoWriteCapacityBytesPerSec() * ioSafetyHeadroom) / (1024 * 1024);
+
         // Check headroom across all dimensions
+        // I/O-first: Enforce per-direction headroom; also honor global IO keep-free
         boolean hasHeadroom = node.getFreeCpuPct() >= requiredCpu
                 && node.getFreeMemMb() >= requiredMem
-                && node.getFreeIoMbPerSec() >= requiredIo
+                && (requiredIoRead <= 0 || (freeIoRead - keepFreeRead >= requiredIoRead))
+                && (requiredIoWrite <= 0 || (freeIoWrite - keepFreeWrite >= requiredIoWrite))
                 && node.getFreeIops() >= requiredIops
                 && node.getFreeNetMbPerSec() >= requiredNet;
 
         if (!hasHeadroom) {
             logger.fine(String.format(
-                    "Node %s lacks headroom for test %s (conf=%.2f, margins: cpu=%.0f%% mem=%.0f%% io=%.0f%%): " +
-                            "CPU %.1f < %.1f, Mem %.0f < %.0f, IO %.1f < %.1f, IOPS %.0f < %.0f, Net %.1f < %.1f",
+                    "Node %s lacks headroom for test %s (conf=%.2f, margins: cpu=%.0f%% mem=%.0f%% io_r=%.0f%% io_w=%.0f%%): " +
+                            "CPU %.1f < %.1f, Mem %.0f < %.0f, IO_R %.1f < %.1f (keep_free=%.0f), IO_W %.1f < %.1f (keep_free=%.0f), IOPS %.0f < %.0f, Net %.1f < %.1f",
                     node.getNodeId(), test.getTestKey(),
                     conf,
-                    mCpu * 100, mMem * 100, mIo * 100,
+                    mCpu * 100, mMem * 100, mIoRead * 100, mIoWrite * 100,
                     node.getFreeCpuPct(), requiredCpu,
                     node.getFreeMemMb(), requiredMem,
-                    node.getFreeIoMbPerSec(), requiredIo,
+                    freeIoRead, requiredIoRead, (double) keepFreeRead,
+                    freeIoWrite, requiredIoWrite, (double) keepFreeWrite,
                     node.getFreeIops(), requiredIops,
                     node.getFreeNetMbPerSec(), requiredNet));
         }

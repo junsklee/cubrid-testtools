@@ -18,16 +18,20 @@ public class UtilizationSnapshot {
     private final double totalCpuMillicores;
     private final long totalMemBytes;
     private final long totalIoBytesPerSec;
+    private final long totalIoReadBytesPerSec;
+    private final long totalIoWriteBytesPerSec;
     private final long totalIops;
     private final long totalNetBytesPerSec;
     private final int testCount;
     private final int defaultCount;  // Tests using conservative defaults
 
     private UtilizationSnapshot(double cpuMc, long memBytes, long ioBps, long iops, long netBps,
-                                int testCount, int defaultCount) {
+                                int testCount, int defaultCount, long ioReadBps, long ioWriteBps) {
         this.totalCpuMillicores = cpuMc;
         this.totalMemBytes = memBytes;
         this.totalIoBytesPerSec = ioBps;
+        this.totalIoReadBytesPerSec = Math.max(0, ioReadBps);
+        this.totalIoWriteBytesPerSec = Math.max(0, ioWriteBps);
         this.totalIops = iops;
         this.totalNetBytesPerSec = netBps;
         this.testCount = testCount;
@@ -38,23 +42,24 @@ public class UtilizationSnapshot {
      * Factory method for reserved utilization (from predictions).
      */
     public static UtilizationSnapshot reserved(double cpuMc, long memBytes, long ioBps,
-                                               long iops, long netBps, int testCount, int defaultCount) {
-        return new UtilizationSnapshot(cpuMc, memBytes, ioBps, iops, netBps, testCount, defaultCount);
+                                               long iops, long netBps, int testCount, int defaultCount,
+                                               long ioReadBps, long ioWriteBps) {
+        return new UtilizationSnapshot(cpuMc, memBytes, ioBps, iops, netBps, testCount, defaultCount, ioReadBps, ioWriteBps);
     }
 
     /**
      * Factory method for actual utilization (from sampling).
      */
     public static UtilizationSnapshot actual(double cpuMc, long memBytes, long ioBps,
-                                             long iops, long netBps) {
-        return new UtilizationSnapshot(cpuMc, memBytes, ioBps, iops, netBps, 0, 0);
+                                             long iops, long netBps, long ioReadBps, long ioWriteBps) {
+        return new UtilizationSnapshot(cpuMc, memBytes, ioBps, iops, netBps, 0, 0, ioReadBps, ioWriteBps);
     }
 
     /**
      * Returns empty utilization snapshot (no tests running).
      */
     public static UtilizationSnapshot empty() {
-        return new UtilizationSnapshot(0.0, 0, 0, 0, 0, 0, 0);
+        return new UtilizationSnapshot(0.0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     // Getters (canonical units)
@@ -69,6 +74,14 @@ public class UtilizationSnapshot {
 
     public long getTotalIoBytesPerSec() {
         return totalIoBytesPerSec;
+    }
+
+    public long getTotalIoReadBytesPerSec() {
+        return totalIoReadBytesPerSec;
+    }
+
+    public long getTotalIoWriteBytesPerSec() {
+        return totalIoWriteBytesPerSec;
     }
 
     public long getTotalIops() {

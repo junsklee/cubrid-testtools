@@ -135,6 +135,8 @@ public class ScoreFunctionTest {
             .predictedCpuPct(120.0)
             .predictedMemMb(1024.0)
             .predictedIoMbPerSec(10.0)
+            .predictedIoReadMbPerSec(5.0)  // Split 50/50
+            .predictedIoWriteMbPerSec(5.0)
             .predictedIops(200.0)
             .predictedNetMbPerSec(5.0);
     }
@@ -152,7 +154,11 @@ public class ScoreFunctionTest {
             .memMb(32_768.0)
             .usedMemMb(8_192.0)
             .ioMbPerSec(600.0)
+            .ioReadMbPerSec(300.0)  // Split 50/50
+            .ioWriteMbPerSec(300.0)
             .usedIoMbPerSec(100.0)
+            .usedIoReadMbPerSec(50.0)  // Split 50/50
+            .usedIoWriteMbPerSec(50.0)
             .iops(20_000.0)
             .usedIops(2_000.0)
             .netMbPerSec(125.0)

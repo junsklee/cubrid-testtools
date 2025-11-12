@@ -138,11 +138,15 @@ public class NodeDirectoryTest {
             .cpuPct(400.0)
             .memMb(32_768.0)
             .ioMbPerSec(500.0)
+            .ioReadMbPerSec(250.0)  // Split 50/50
+            .ioWriteMbPerSec(250.0)
             .iops(20_000.0)
             .netMbPerSec(125.0)
             .usedCpuPct(100.0)
             .usedMemMb(8_000.0)
             .usedIoMbPerSec(100.0)
+            .usedIoReadMbPerSec(50.0)  // Split 50/50
+            .usedIoWriteMbPerSec(50.0)
             .usedIops(2_000.0)
             .usedNetMbPerSec(20.0);
     }

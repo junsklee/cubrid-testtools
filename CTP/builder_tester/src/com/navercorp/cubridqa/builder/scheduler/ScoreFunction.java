@@ -17,11 +17,17 @@ package com.navercorp.cubridqa.builder.scheduler;
 public class ScoreFunction {
 
     // Scoring weights (configurable)
-    private final double w1; // Resource pressure weight
+    private final double w1; // Resource pressure weight (overall)
     private final double w2; // Duration weight
     private final double w3; // Image cache penalty weight
     private final double w4; // Package cache penalty weight
     private final double w5; // Age boost weight (negative)
+    
+    // Per-dimension weights for pressure computation (IO-first)
+    private final double wIO;  // IO weight multiplier (default 2.50)
+    private final double wCPU; // CPU weight (default 1.00)
+    private final double wMEM; // Memory weight (default 1.10)
+    private final double wNET; // Network weight (default 0.80)
 
     // Reference values for normalization
     private static final long T_REF_MS = 30_000L;  // 30 seconds reference duration
@@ -53,11 +59,24 @@ public class ScoreFunction {
      * in-flight assignments.
      */
     public ScoreFunction(double w1, double w2, double w3, double w4, double w5, NodeLoadProvider loadProvider) {
+        this(w1, w2, w3, w4, w5, 2.50, 1.00, 1.10, 0.80, loadProvider);
+    }
+
+    /**
+     * Creates a ScoreFunction with custom weights including per-dimension IO/CPU/MEM/NET weights.
+     */
+    public ScoreFunction(double w1, double w2, double w3, double w4, double w5,
+                        double wIO, double wCPU, double wMEM, double wNET,
+                        NodeLoadProvider loadProvider) {
         this.w1 = w1;
         this.w2 = w2;
         this.w3 = w3;
         this.w4 = w4;
         this.w5 = w5;
+        this.wIO = wIO;
+        this.wCPU = wCPU;
+        this.wMEM = wMEM;
+        this.wNET = wNET;
         this.nodeLoadProvider = loadProvider != null ? loadProvider : NodeLoadProvider.NOOP;
     }
 
@@ -89,17 +108,30 @@ public class ScoreFunction {
     }
 
     /**
-     * Computes resource pressure using dominant resource fairness.
-     * Returns max(q_d / f_d) across all resource dimensions.
+     * Computes resource pressure using dominant resource fairness with IO-first weighting.
+     * Returns max(w_d × (q_d / f_d)) across all resource dimensions, with IO weighted heavily.
      */
     private double computePressure(TestInstance test, NodeSnapshot node) {
         double cpuPressure = test.getPredictedCpuPct() / Math.max(EPSILON, node.getFreeCpuPct());
         double memPressure = test.getPredictedMemMb() / Math.max(EPSILON, node.getFreeMemMb());
-        double ioPressure = test.getPredictedIoMbPerSec() / Math.max(EPSILON, node.getFreeIoMbPerSec());
+        
+        // I/O-first: Compute separate read/write pressure, take the worse, and apply heavy weight
+        double ioReadPressure = test.getPredictedIoReadMbPerSec() / Math.max(EPSILON, node.getFreeIoReadMbPerSec());
+        double ioWritePressure = test.getPredictedIoWriteMbPerSec() / Math.max(EPSILON, node.getFreeIoWriteMbPerSec());
+        double ioPressure = Math.max(ioReadPressure, ioWritePressure); // Take worse of read/write
+        
         double iopsPressure = test.getPredictedIops() / Math.max(EPSILON, node.getFreeIops());
         double netPressure = test.getPredictedNetMbPerSec() / Math.max(EPSILON, node.getFreeNetMbPerSec());
 
-        return Math.max(Math.max(Math.max(Math.max(cpuPressure, memPressure), ioPressure), iopsPressure), netPressure);
+        // Apply per-dimension weights (IO-dominant)
+        double weightedIo = wIO * ioPressure;
+        double weightedCpu = wCPU * cpuPressure;
+        double weightedMem = wMEM * memPressure;
+        double weightedNet = wNET * netPressure;
+        double weightedIops = wIO * iopsPressure; // IOPS also gets IO weight
+
+        // Return the maximum weighted pressure (IO will dominate due to higher weight)
+        return Math.max(Math.max(Math.max(Math.max(weightedIo, weightedCpu), weightedMem), weightedIops), weightedNet);
     }
 
     /**

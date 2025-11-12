@@ -142,6 +142,10 @@ public class SmartSchedulingIntegrationTest {
 
     private static TestInstance toTestInstance(String testKey, String imageTag, String buildPackage,
                                                PredictedDemand demand, Instant submittedAt) {
+        double ioMbPerSec = demand.getIoMbPerSec();
+        // Split IO 50/50 for read/write (default behavior)
+        double ioReadMbPerSec = ioMbPerSec / 2.0;
+        double ioWriteMbPerSec = ioMbPerSec - ioReadMbPerSec;
         return TestInstance.builder()
             .testKey(testKey)
             .commit("commit-smart")
@@ -152,7 +156,9 @@ public class SmartSchedulingIntegrationTest {
             .predictedDurationMs(demand.getTpredMs())
             .predictedCpuPct(demand.getCpuPct())
             .predictedMemMb(demand.getMemMb())
-            .predictedIoMbPerSec(demand.getIoMbPerSec())
+            .predictedIoMbPerSec(ioMbPerSec)
+            .predictedIoReadMbPerSec(ioReadMbPerSec)
+            .predictedIoWriteMbPerSec(ioWriteMbPerSec)
             .predictedIops(demand.getIops())
             .predictedNetMbPerSec(demand.getNetMbPerSec())
             .confidence(demand.getConfidence())

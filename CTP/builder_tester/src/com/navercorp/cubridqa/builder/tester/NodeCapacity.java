@@ -32,6 +32,8 @@ public class NodeCapacity {
     private final double cpuPct;
     private final double memMb;
     private final double ioMbPerSec;
+    private final double ioReadMbPerSec;
+    private final double ioWriteMbPerSec;
     private final double iops;
     private final double netMbPerSec;
     private final long diskFreeMb;
@@ -41,6 +43,8 @@ public class NodeCapacity {
         this.cpuPct = builder.cpuPct;
         this.memMb = builder.memMb;
         this.ioMbPerSec = builder.ioMbPerSec;
+        this.ioReadMbPerSec = builder.ioReadMbPerSec;
+        this.ioWriteMbPerSec = builder.ioWriteMbPerSec;
         this.iops = builder.iops;
         this.netMbPerSec = builder.netMbPerSec;
         this.diskFreeMb = builder.diskFreeMb;
@@ -57,6 +61,22 @@ public class NodeCapacity {
 
     public double getIoMbPerSec() {
         return ioMbPerSec;
+    }
+
+    public double getIoReadMbPerSec() {
+        return ioReadMbPerSec;
+    }
+
+    public double getIoWriteMbPerSec() {
+        return ioWriteMbPerSec;
+    }
+
+    public long getIoReadCapacityBytesPerSec() {
+        return (long) (ioReadMbPerSec * 1024 * 1024);
+    }
+
+    public long getIoWriteCapacityBytesPerSec() {
+        return (long) (ioWriteMbPerSec * 1024 * 1024);
     }
 
     public double getIops() {
@@ -132,9 +152,13 @@ public class NodeCapacity {
 
         // Estimate I/O capacity (conservative defaults for now)
         // Future: Could run fio or dd benchmark at startup
-        builder.ioMbPerSec(500.0); // Conservative HDD/SSD baseline
+        // For read/write, split total capacity 50/50 by default (can be overridden via config)
+        double totalIoMbPerSec = 500.0; // Conservative HDD/SSD baseline
+        builder.ioMbPerSec(totalIoMbPerSec);
+        builder.ioReadMbPerSec(totalIoMbPerSec / 2.0);  // Split evenly
+        builder.ioWriteMbPerSec(totalIoMbPerSec / 2.0);
         builder.iops(10000.0);     // Conservative baseline
-        logger.info("NodeCapacity: I/O estimates: " + builder.ioMbPerSec + " MB/s, " + builder.iops + " IOPS");
+        logger.info("NodeCapacity: I/O estimates: " + builder.ioMbPerSec + " MB/s total (read: " + builder.ioReadMbPerSec + ", write: " + builder.ioWriteMbPerSec + "), " + builder.iops + " IOPS");
 
         // Estimate network capacity (conservative defaults)
         // Future: Could run iperf benchmark at startup
@@ -148,6 +172,8 @@ public class NodeCapacity {
         private double cpuPct = 0.0;
         private double memMb = 0.0;
         private double ioMbPerSec = 0.0;
+        private double ioReadMbPerSec = 0.0;
+        private double ioWriteMbPerSec = 0.0;
         private double iops = 0.0;
         private double netMbPerSec = 0.0;
         private long diskFreeMb = 0L;
@@ -165,6 +191,16 @@ public class NodeCapacity {
 
         public Builder ioMbPerSec(double val) {
             this.ioMbPerSec = val;
+            return this;
+        }
+
+        public Builder ioReadMbPerSec(double val) {
+            this.ioReadMbPerSec = val;
+            return this;
+        }
+
+        public Builder ioWriteMbPerSec(double val) {
+            this.ioWriteMbPerSec = val;
             return this;
         }
 

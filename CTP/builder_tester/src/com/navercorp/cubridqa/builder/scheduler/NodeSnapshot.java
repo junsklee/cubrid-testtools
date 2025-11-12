@@ -29,6 +29,8 @@ public class NodeSnapshot {
     private final double cpuPct;
     private final double memMb;
     private final double ioMbPerSec;
+    private final double ioReadMbPerSec;
+    private final double ioWriteMbPerSec;
     private final double iops;
     private final double netMbPerSec;
 
@@ -36,6 +38,8 @@ public class NodeSnapshot {
     private final double usedCpuPct;
     private final double usedMemMb;
     private final double usedIoMbPerSec;
+    private final double usedIoReadMbPerSec;
+    private final double usedIoWriteMbPerSec;
     private final double usedIops;
     private final double usedNetMbPerSec;
 
@@ -57,11 +61,15 @@ public class NodeSnapshot {
         this.cpuPct = builder.cpuPct;
         this.memMb = builder.memMb;
         this.ioMbPerSec = builder.ioMbPerSec;
+        this.ioReadMbPerSec = builder.ioReadMbPerSec;
+        this.ioWriteMbPerSec = builder.ioWriteMbPerSec;
         this.iops = builder.iops;
         this.netMbPerSec = builder.netMbPerSec;
         this.usedCpuPct = builder.usedCpuPct;
         this.usedMemMb = builder.usedMemMb;
         this.usedIoMbPerSec = builder.usedIoMbPerSec;
+        this.usedIoReadMbPerSec = builder.usedIoReadMbPerSec;
+        this.usedIoWriteMbPerSec = builder.usedIoWriteMbPerSec;
         this.usedIops = builder.usedIops;
         this.usedNetMbPerSec = builder.usedNetMbPerSec;
         this.cachedImages = Collections.unmodifiableSet(new HashSet<>(builder.cachedImages));
@@ -105,14 +113,30 @@ public class NodeSnapshot {
             if (capacity.has("cpu_millicores")) {
                 builder.cpuPct(capacity.getLong("cpu_millicores") / 10.0); // mCPU → %
                 builder.memMb(capacity.getLong("mem_bytes") / (1024.0 * 1024.0)); // bytes → MB
-                builder.ioMbPerSec(capacity.optLong("io_bytes_per_sec", 0) / (1024.0 * 1024.0));
+                // Parse read/write IO capacity (new format)
+                long ioReadBps = capacity.optLong("io_read_bytes_per_sec", -1);
+                long ioWriteBps = capacity.optLong("io_write_bytes_per_sec", -1);
+                if (ioReadBps >= 0 && ioWriteBps >= 0) {
+                    builder.ioReadMbPerSec(ioReadBps / (1024.0 * 1024.0));
+                    builder.ioWriteMbPerSec(ioWriteBps / (1024.0 * 1024.0));
+                    builder.ioMbPerSec((ioReadBps + ioWriteBps) / (1024.0 * 1024.0)); // Total
+                } else {
+                    // Fallback to legacy single IO value, split 50/50
+                    double totalIo = capacity.optLong("io_bytes_per_sec", 0) / (1024.0 * 1024.0);
+                    builder.ioMbPerSec(totalIo);
+                    builder.ioReadMbPerSec(totalIo / 2.0);
+                    builder.ioWriteMbPerSec(totalIo / 2.0);
+                }
                 builder.iops(capacity.optLong("iops", 0));
                 builder.netMbPerSec(capacity.optLong("net_bytes_per_sec", 0) / (1024.0 * 1024.0));
             } else {
                 // LEGACY: percentage-based units (cpu_pct, mem_mb)
                 builder.cpuPct(capacity.optDouble("cpu_pct", 0.0));
                 builder.memMb(capacity.optDouble("mem_mb", 0.0));
-                builder.ioMbPerSec(capacity.optDouble("io_mb_s", 0.0));
+                double totalIo = capacity.optDouble("io_mb_s", 0.0);
+                builder.ioMbPerSec(totalIo);
+                builder.ioReadMbPerSec(totalIo / 2.0); // Split evenly for legacy
+                builder.ioWriteMbPerSec(totalIo / 2.0);
                 builder.iops(capacity.optDouble("iops", 0.0));
                 builder.netMbPerSec(capacity.optDouble("net_mb_s", 0.0));
             }
@@ -124,7 +148,20 @@ public class NodeSnapshot {
             // NEW: canonical units
             builder.usedCpuPct(utilization.getLong("cpu_millicores") / 10.0); // mCPU → %
             builder.usedMemMb(utilization.getLong("mem_bytes") / (1024.0 * 1024.0)); // bytes → MB
-            builder.usedIoMbPerSec(utilization.optLong("io_bytes_per_sec", 0) / (1024.0 * 1024.0));
+            // Parse read/write IO utilization (new format)
+            long usedIoReadBps = utilization.optLong("io_read_bytes_per_sec", -1);
+            long usedIoWriteBps = utilization.optLong("io_write_bytes_per_sec", -1);
+            if (usedIoReadBps >= 0 && usedIoWriteBps >= 0) {
+                builder.usedIoReadMbPerSec(usedIoReadBps / (1024.0 * 1024.0));
+                builder.usedIoWriteMbPerSec(usedIoWriteBps / (1024.0 * 1024.0));
+                builder.usedIoMbPerSec((usedIoReadBps + usedIoWriteBps) / (1024.0 * 1024.0)); // Total
+            } else {
+                // Fallback to legacy single IO value, split 50/50
+                double totalUsedIo = utilization.optLong("io_bytes_per_sec", 0) / (1024.0 * 1024.0);
+                builder.usedIoMbPerSec(totalUsedIo);
+                builder.usedIoReadMbPerSec(totalUsedIo / 2.0);
+                builder.usedIoWriteMbPerSec(totalUsedIo / 2.0);
+            }
             builder.usedIops(utilization.optLong("iops", 0));
             builder.usedNetMbPerSec(utilization.optLong("net_bytes_per_sec", 0) / (1024.0 * 1024.0));
         } else if (json.has("utilization")) {
@@ -132,7 +169,10 @@ public class NodeSnapshot {
             // LEGACY: percentage-based units
             builder.usedCpuPct(utilization.optDouble("cpu_pct", 0.0));
             builder.usedMemMb(utilization.optDouble("mem_mb", 0.0));
-            builder.usedIoMbPerSec(utilization.optDouble("io_mb_s", 0.0));
+            double totalUsedIo = utilization.optDouble("io_mb_s", 0.0);
+            builder.usedIoMbPerSec(totalUsedIo);
+            builder.usedIoReadMbPerSec(totalUsedIo / 2.0); // Split evenly for legacy
+            builder.usedIoWriteMbPerSec(totalUsedIo / 2.0);
             builder.usedIops(utilization.optDouble("iops", 0.0));
             builder.usedNetMbPerSec(utilization.optDouble("net_mb_s", 0.0));
         }
@@ -207,6 +247,14 @@ public class NodeSnapshot {
         return ioMbPerSec;
     }
 
+    public double getIoReadMbPerSec() {
+        return ioReadMbPerSec;
+    }
+
+    public double getIoWriteMbPerSec() {
+        return ioWriteMbPerSec;
+    }
+
     public double getIops() {
         return iops;
     }
@@ -225,6 +273,14 @@ public class NodeSnapshot {
 
     public double getUsedIoMbPerSec() {
         return usedIoMbPerSec;
+    }
+
+    public double getUsedIoReadMbPerSec() {
+        return usedIoReadMbPerSec;
+    }
+
+    public double getUsedIoWriteMbPerSec() {
+        return usedIoWriteMbPerSec;
     }
 
     public double getUsedIops() {
@@ -273,6 +329,22 @@ public class NodeSnapshot {
         return Math.max(0.0, ioMbPerSec - usedIoMbPerSec);
     }
 
+    public double getFreeIoReadMbPerSec() {
+        return Math.max(0.0, ioReadMbPerSec - usedIoReadMbPerSec);
+    }
+
+    public double getFreeIoWriteMbPerSec() {
+        return Math.max(0.0, ioWriteMbPerSec - usedIoWriteMbPerSec);
+    }
+
+    public long getIoReadCapacityBytesPerSec() {
+        return (long) (ioReadMbPerSec * 1024 * 1024);
+    }
+
+    public long getIoWriteCapacityBytesPerSec() {
+        return (long) (ioWriteMbPerSec * 1024 * 1024);
+    }
+
     public double getFreeIops() {
         return Math.max(0.0, iops - usedIops);
     }
@@ -296,11 +368,15 @@ public class NodeSnapshot {
         private double cpuPct = 0.0;
         private double memMb = 0.0;
         private double ioMbPerSec = 0.0;
+        private double ioReadMbPerSec = 0.0;
+        private double ioWriteMbPerSec = 0.0;
         private double iops = 0.0;
         private double netMbPerSec = 0.0;
         private double usedCpuPct = 0.0;
         private double usedMemMb = 0.0;
         private double usedIoMbPerSec = 0.0;
+        private double usedIoReadMbPerSec = 0.0;
+        private double usedIoWriteMbPerSec = 0.0;
         private double usedIops = 0.0;
         private double usedNetMbPerSec = 0.0;
         private Set<String> cachedImages = new HashSet<>();
@@ -356,6 +432,16 @@ public class NodeSnapshot {
             return this;
         }
 
+        public Builder ioReadMbPerSec(double val) {
+            this.ioReadMbPerSec = val;
+            return this;
+        }
+
+        public Builder ioWriteMbPerSec(double val) {
+            this.ioWriteMbPerSec = val;
+            return this;
+        }
+
         public Builder iops(double val) {
             this.iops = val;
             return this;
@@ -378,6 +464,16 @@ public class NodeSnapshot {
 
         public Builder usedIoMbPerSec(double val) {
             this.usedIoMbPerSec = val;
+            return this;
+        }
+
+        public Builder usedIoReadMbPerSec(double val) {
+            this.usedIoReadMbPerSec = val;
+            return this;
+        }
+
+        public Builder usedIoWriteMbPerSec(double val) {
+            this.usedIoWriteMbPerSec = val;
             return this;
         }
 

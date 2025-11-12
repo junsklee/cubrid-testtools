@@ -79,6 +79,96 @@ scheduling_mice_threshold_ms=10000
 
 All weights should sum to approximately 1.0 for balanced scoring. Individual weights can exceed 1.0 if you want to heavily favor one dimension, but keep total reasonable (<2.0).
 
+#### I/O-First Scheduling Weights (November 2025)
+
+**Since:** November 2025
+
+The scoring function now uses per-dimension weights to make I/O the dominant scheduling constraint. These weights are applied to the pressure calculation for each resource dimension.
+
+#### `scheduling_weight_io`
+
+**Type:** Double
+**Default:** `2.50`
+**Range:** `0.5` to `10.0` recommended
+
+**Description:**
+Weight multiplier for I/O pressure (read/write bandwidth). This is the heaviest weight by default, making I/O the primary scheduling constraint. The I/O pressure is computed as `max(readPressure, writePressure)` to handle asymmetric workloads.
+
+**Example:**
+```properties
+# Very I/O-dominant (prioritize I/O capacity above all)
+scheduling_weight_io=5.00
+
+# Balanced I/O emphasis (default)
+scheduling_weight_io=2.50
+
+# Less I/O emphasis (more balanced with CPU/memory)
+scheduling_weight_io=1.50
+```
+
+**Tuning Guidelines:**
+- **Increase** if I/O is your primary bottleneck (storage-bound workloads)
+- **Decrease** if CPU or memory are more constrained
+- Default 2.50 makes I/O 2.5× more important than CPU in scoring
+
+#### `scheduling_weight_cpu`
+
+**Type:** Double
+**Default:** `1.00`
+**Range:** `0.5` to `5.0` recommended
+
+**Description:**
+Weight multiplier for CPU pressure. Used as the baseline (1.00) for other weights.
+
+**Example:**
+```properties
+# CPU-dominant (rare, usually I/O is bottleneck)
+scheduling_weight_cpu=2.00
+scheduling_weight_io=1.00
+
+# Default (I/O-dominant)
+scheduling_weight_cpu=1.00
+scheduling_weight_io=2.50
+```
+
+#### `scheduling_weight_mem`
+
+**Type:** Double
+**Default:** `1.10`
+**Range:** `0.5` to `5.0` recommended
+
+**Description:**
+Weight multiplier for memory pressure. Slightly higher than CPU (1.10) to account for memory spikes.
+
+**Example:**
+```properties
+# Memory-dominant (memory-constrained workloads)
+scheduling_weight_mem=2.00
+
+# Default
+scheduling_weight_mem=1.10
+```
+
+#### `scheduling_weight_net`
+
+**Type:** Double
+**Default:** `0.80`
+**Range:** `0.1` to `3.0` recommended
+
+**Description:**
+Weight multiplier for network bandwidth pressure. Lower than CPU/memory since network is typically less of a bottleneck.
+
+**Example:**
+```properties
+# Network-dominant (network-constrained workloads)
+scheduling_weight_net=2.00
+
+# Default (network less important)
+scheduling_weight_net=0.80
+```
+
+**Note:** IOPS pressure uses the same weight as I/O (`scheduling_weight_io`) since IOPS are I/O-related.
+
 #### `scheduling_weight_pressure`
 
 **Type:** Double (0.0 to 1.0 recommended)
@@ -323,13 +413,41 @@ scheduling_margin_mem_base=0.30
 scheduling_margin_mem_base=0.10
 ```
 
-#### `scheduling_margin_io_base`
+#### `scheduling_margin_io_read_base`
 
 **Type:** Double (0.0 to 1.0)
-**Default:** `0.30` (30% base margin)
+**Default:** `0.35` (35% base margin)
 
 **Description:**
-Base safety margin for I/O bandwidth headroom checks. I/O gets the highest default margin due to high variability and burstiness.
+Base safety margin for **read** I/O bandwidth headroom checks. Read I/O gets a high default margin due to high variability and burstiness (e.g., index scans, log replays).
+
+**Example:**
+```properties
+# Conservative read margins (less packing, more safety)
+scheduling_margin_io_read_base=0.45
+
+# Aggressive read margins (tighter packing)
+scheduling_margin_io_read_base=0.25
+```
+
+#### `scheduling_margin_io_write_base`
+
+**Type:** Double (0.0 to 1.0)
+**Default:** `0.35` (35% base margin)
+
+**Description:**
+Base safety margin for **write** I/O bandwidth headroom checks. Write I/O gets a high default margin due to high variability and burstiness (e.g., DB create/drop, journaling, data file writes).
+
+**Example:**
+```properties
+# Conservative write margins (less packing, more safety)
+scheduling_margin_io_write_base=0.45
+
+# Aggressive write margins (tighter packing)
+scheduling_margin_io_write_base=0.25
+```
+
+**Note:** The legacy `scheduling_margin_io_base` option is deprecated. Use `scheduling_margin_io_read_base` and `scheduling_margin_io_write_base` instead for granular control.
 
 #### `scheduling_margin_net_base`
 
@@ -372,10 +490,11 @@ margin = 0.20 + 0.50 × (1 - 0.3) = 0.20 + 0.35 = 55%
 
 **Example Configuration:**
 ```properties
-# Production-safe margins (recommended)
+# Production-safe margins (recommended) - I/O-first
 scheduling_margin_cpu_base=0.10
 scheduling_margin_mem_base=0.20
-scheduling_margin_io_base=0.30
+scheduling_margin_io_read_base=0.35
+scheduling_margin_io_write_base=0.35
 scheduling_margin_net_base=0.25
 scheduling_margin_iops_base=0.25
 scheduling_margin_confidence_factor=0.50
@@ -383,11 +502,44 @@ scheduling_margin_confidence_factor=0.50
 # Aggressive packing (use with caution)
 scheduling_margin_cpu_base=0.05
 scheduling_margin_mem_base=0.15
-scheduling_margin_io_base=0.20
+scheduling_margin_io_read_base=0.25
+scheduling_margin_io_write_base=0.25
 scheduling_margin_net_base=0.15
 scheduling_margin_iops_base=0.15
 scheduling_margin_confidence_factor=0.30
 ```
+
+#### `io_safety_headroom_ratio`
+
+**Type:** Double (0.0 to 0.5)
+**Default:** `0.15` (15%)
+**Since:** November 2025
+
+**Description:**
+Global safety headroom ratio for I/O capacity. This fraction of total I/O capacity (read and write separately) is kept free at all times to prevent disk saturation. This is in addition to the dimension-specific margins.
+
+**Example:**
+```properties
+# Conservative (keep 20% free)
+io_safety_headroom_ratio=0.20
+
+# Default (keep 15% free)
+io_safety_headroom_ratio=0.15
+
+# Aggressive (keep 10% free)
+io_safety_headroom_ratio=0.10
+```
+
+**Tuning Guidelines:**
+- **Increase** if you experience disk saturation or I/O contention
+- **Decrease** if you want to maximize utilization (risky)
+- Applied separately to read and write capacity
+- Example: With 100 MB/s read capacity and 15% headroom, only 85 MB/s is available for scheduling
+
+**Effect on Admission:**
+A test requiring 50 MB/s read on a node with 100 MB/s capacity and 15% headroom:
+- Available capacity: 100 - (100 × 0.15) = 85 MB/s
+- Test must pass margin check: `requiredRead × (1 + margin) ≤ 85 MB/s`
 
 ---
 

@@ -21,6 +21,8 @@ public class TestInstance {
     private final double predictedCpuPct;
     private final double predictedMemMb;
     private final double predictedIoMbPerSec;
+    private final double predictedIoReadMbPerSec;
+    private final double predictedIoWriteMbPerSec;
     private final double predictedIops;
     private final double predictedNetMbPerSec;
     private final double confidence;
@@ -36,6 +38,8 @@ public class TestInstance {
         this.predictedCpuPct = builder.predictedCpuPct;
         this.predictedMemMb = builder.predictedMemMb;
         this.predictedIoMbPerSec = builder.predictedIoMbPerSec;
+        this.predictedIoReadMbPerSec = builder.predictedIoReadMbPerSec;
+        this.predictedIoWriteMbPerSec = builder.predictedIoWriteMbPerSec;
         this.predictedIops = builder.predictedIops;
         this.predictedNetMbPerSec = builder.predictedNetMbPerSec;
         this.confidence = builder.confidence;
@@ -83,6 +87,14 @@ public class TestInstance {
 
     public double getPredictedIoMbPerSec() {
         return predictedIoMbPerSec;
+    }
+
+    public double getPredictedIoReadMbPerSec() {
+        return predictedIoReadMbPerSec;
+    }
+
+    public double getPredictedIoWriteMbPerSec() {
+        return predictedIoWriteMbPerSec;
     }
 
     public double getPredictedIops() {
@@ -133,6 +145,8 @@ public class TestInstance {
         private double predictedCpuPct = 50.0;
         private double predictedMemMb = 512.0;
         private double predictedIoMbPerSec = 10.0;
+        private double predictedIoReadMbPerSec = 5.0;  // Default: split evenly
+        private double predictedIoWriteMbPerSec = 5.0;
         private double predictedIops = 200.0;
         private double predictedNetMbPerSec = 5.0;
         private double confidence = 0.0;
@@ -187,6 +201,21 @@ public class TestInstance {
 
         public Builder predictedIoMbPerSec(double val) {
             this.predictedIoMbPerSec = val;
+            // If read/write not explicitly set, split evenly
+            if (this.predictedIoReadMbPerSec == 5.0 && this.predictedIoWriteMbPerSec == 5.0) {
+                this.predictedIoReadMbPerSec = val / 2.0;
+                this.predictedIoWriteMbPerSec = val / 2.0;
+            }
+            return this;
+        }
+
+        public Builder predictedIoReadMbPerSec(double val) {
+            this.predictedIoReadMbPerSec = val;
+            return this;
+        }
+
+        public Builder predictedIoWriteMbPerSec(double val) {
+            this.predictedIoWriteMbPerSec = val;
             return this;
         }
 

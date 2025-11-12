@@ -36,17 +36,19 @@ public class RunningTestTracker {
         volatile State state;
         volatile PredictedDemand.Phase currentPhase; // null if single-vector
         volatile int cpuMc;
-        volatile long memBytes, ioBps, iops, netBps;
+        volatile long memBytes, ioBps, ioReadBps, ioWriteBps, iops, netBps;
         volatile boolean isDefault;
         final Instant startedAt;
 
         RunningTestInfo(String testId, String testKey, int cpuMc, long memBytes,
-                        long ioBps, long iops, long netBps, boolean isDefault) {
+                        long ioBps, long ioReadBps, long ioWriteBps, long iops, long netBps, boolean isDefault) {
             this.testId = testId;
             this.testKey = testKey;
             this.cpuMc = cpuMc;
             this.memBytes = memBytes;
             this.ioBps = ioBps;
+            this.ioReadBps = ioReadBps;
+            this.ioWriteBps = ioWriteBps;
             this.iops = iops;
             this.netBps = netBps;
             this.state = State.ADMITTED;
@@ -61,6 +63,8 @@ public class RunningTestTracker {
     private final DoubleAdder totalCpuMc = new DoubleAdder();
     private final LongAdder totalMemBytes = new LongAdder();
     private final LongAdder totalIoBps = new LongAdder();
+    private final LongAdder totalIoReadBps = new LongAdder();
+    private final LongAdder totalIoWriteBps = new LongAdder();
     private final LongAdder totalIops = new LongAdder();
     private final LongAdder totalNetBps = new LongAdder();
     private final LongAdder totalCount = new LongAdder();
@@ -74,11 +78,13 @@ public class RunningTestTracker {
         int cpu = (p != null ? p.cpuMillicores : d.getCpuMillicores());
         long mem = (p != null ? p.memBytes : d.getMemBytes());
         long io = (p != null ? p.ioBytesPerSec : d.getIoBytesPerSec());
+        long ioRead = (p != null ? p.ioReadBytesPerSec : d.getIoReadBytesPerSec());
+        long ioWrite = (p != null ? p.ioWriteBytesPerSec : d.getIoWriteBytesPerSec());
         long iops = (p != null ? p.iops : d.getIops());
         long net = (p != null ? p.netBytesPerSec : d.getNetBytesPerSec());
         boolean isDefault = d.isDefault();
 
-        RunningTestInfo info = new RunningTestInfo(testId, testKey, cpu, mem, io, iops, net, isDefault);
+        RunningTestInfo info = new RunningTestInfo(testId, testKey, cpu, mem, io, ioRead, ioWrite, iops, net, isDefault);
         info.currentPhase = p;
         tests.put(testId, info);
 
@@ -98,6 +104,8 @@ public class RunningTestTracker {
         totalCpuMc.add(info.cpuMc);
         totalMemBytes.add(info.memBytes);
         totalIoBps.add(info.ioBps);
+        totalIoReadBps.add(info.ioReadBps);
+        totalIoWriteBps.add(info.ioWriteBps);
         totalIops.add(info.iops);
         totalNetBps.add(info.netBps);
         totalCount.increment();
@@ -121,6 +129,8 @@ public class RunningTestTracker {
         totalCpuMc.add(-info.cpuMc);
         totalMemBytes.add(-info.memBytes);
         totalIoBps.add(-info.ioBps);
+        totalIoReadBps.add(-info.ioReadBps);
+        totalIoWriteBps.add(-info.ioWriteBps);
         totalIops.add(-info.iops);
         totalNetBps.add(-info.netBps);
 
@@ -129,11 +139,15 @@ public class RunningTestTracker {
         info.cpuMc = next.cpuMillicores;
         info.memBytes = next.memBytes;
         info.ioBps = next.ioBytesPerSec;
+        info.ioReadBps = next.ioReadBytesPerSec;
+        info.ioWriteBps = next.ioWriteBytesPerSec;
         info.iops = next.iops;
         info.netBps = next.netBytesPerSec;
         totalCpuMc.add(info.cpuMc);
         totalMemBytes.add(info.memBytes);
         totalIoBps.add(info.ioBps);
+        totalIoReadBps.add(info.ioReadBps);
+        totalIoWriteBps.add(info.ioWriteBps);
         totalIops.add(info.iops);
         totalNetBps.add(info.netBps);
 
@@ -154,6 +168,8 @@ public class RunningTestTracker {
             totalCpuMc.add(-info.cpuMc);
             totalMemBytes.add(-info.memBytes);
             totalIoBps.add(-info.ioBps);
+            totalIoReadBps.add(-info.ioReadBps);
+            totalIoWriteBps.add(-info.ioWriteBps);
             totalIops.add(-info.iops);
             totalNetBps.add(-info.netBps);
             totalCount.decrement();
@@ -178,7 +194,9 @@ public class RunningTestTracker {
                 totalIops.sum(),
                 totalNetBps.sum(),
                 (int) totalCount.sum(),
-                (int) defaultCount.sum()
+                (int) defaultCount.sum(),
+                totalIoReadBps.sum(),
+                totalIoWriteBps.sum()
         );
     }
 
@@ -205,6 +223,8 @@ public class RunningTestTracker {
         totalCpuMc.reset();
         totalMemBytes.reset();
         totalIoBps.reset();
+        totalIoReadBps.reset();
+        totalIoWriteBps.reset();
         totalIops.reset();
         totalNetBps.reset();
         totalCount.reset();

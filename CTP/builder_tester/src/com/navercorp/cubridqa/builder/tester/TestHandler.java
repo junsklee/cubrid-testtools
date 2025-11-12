@@ -158,10 +158,11 @@ public class TestHandler implements HttpHandler {
      * @return true if there's enough headroom
      */
     private boolean hasLocalHeadroom(PredictedDemand pd) {
-        // Dimension-specific base margins (same as NodeDirectory)
-        final double baseCpu = 0.10, baseMem = 0.20, baseIo = 0.30;
+        // Dimension-specific base margins (same as NodeDirectory) - I/O-first with separate read/write
+        final double baseCpu = 0.10, baseMem = 0.20, baseIoRead = 0.35, baseIoWrite = 0.35;
         final double baseNet = 0.25, baseIops = 0.25;
         final double k = 0.50; // Confidence factor
+        final double ioSafetyHeadroom = 0.15; // 15% global IO safety headroom
 
         // Scalar confidence (per-dimension confidence not available at tester level yet)
         double conf = Math.max(0.0, Math.min(1.0, pd.getConfidence()));
@@ -169,7 +170,8 @@ public class TestHandler implements HttpHandler {
         // Compute dimension-specific margins with confidence scaling
         double mCpu = baseCpu + k * (1.0 - conf);
         double mMem = baseMem + k * (1.0 - conf);
-        double mIo = baseIo + k * (1.0 - conf);
+        double mIoRead = baseIoRead + k * (1.0 - conf);
+        double mIoWrite = baseIoWrite + k * (1.0 - conf);
         double mNet = baseNet + k * (1.0 - conf);
         double mIops = baseIops + k * (1.0 - conf);
 
@@ -179,37 +181,47 @@ public class TestHandler implements HttpHandler {
         // Convert predicted demand to legacy units for comparison
         double reqCpuPct = pd.getCpuMillicores() / 10.0; // mCPU → %
         double reqMemMb = pd.getMemBytes() / (1024.0 * 1024.0); // bytes → MB
-        double reqIoMbPerSec = pd.getIoBytesPerSec() / (1024.0 * 1024.0);
+        double reqIoReadMbPerSec = pd.getIoReadBytesPerSec() / (1024.0 * 1024.0);
+        double reqIoWriteMbPerSec = pd.getIoWriteBytesPerSec() / (1024.0 * 1024.0);
         double reqNetMbPerSec = pd.getNetBytesPerSec() / (1024.0 * 1024.0);
         long reqIops = pd.getIops();
 
         // Apply margins to required resources
         double requiredCpu = reqCpuPct * (1.0 + mCpu);
         double requiredMem = reqMemMb + Math.max(reqMemMb * mMem, 100.0); // +100MB floor
-        double requiredIo = reqIoMbPerSec * (1.0 + mIo);
+        double requiredIoRead = reqIoReadMbPerSec * (1.0 + mIoRead);
+        double requiredIoWrite = reqIoWriteMbPerSec * (1.0 + mIoWrite);
         double requiredIops = reqIops * (1.0 + mIops);
         double requiredNet = reqNetMbPerSec * (1.0 + mNet);
 
         // Compute free capacity (capacity - reserved)
         double freeCpu = nodeCapacity.getCpuPct() - reserved.getTotalCpuPct();
         double freeMem = nodeCapacity.getMemMb() - reserved.getTotalMemMb();
-        double freeIo = nodeCapacity.getIoMbPerSec() - reserved.getTotalIoMbPerSec();
+        double freeIoRead = nodeCapacity.getIoReadMbPerSec() - reserved.getTotalIoReadBytesPerSec() / (1024.0 * 1024.0);
+        double freeIoWrite = nodeCapacity.getIoWriteMbPerSec() - reserved.getTotalIoWriteBytesPerSec() / (1024.0 * 1024.0);
         double freeIops = nodeCapacity.getIops() - reserved.getTotalIops();
-        double freeNet = nodeCapacity.getNetMbPerSec() - reserved.getTotalNetMbPerSec();
+        double freeNet = nodeCapacity.getNetMbPerSec() - reserved.getTotalNetBytesPerSec() / (1024.0 * 1024.0);
 
-        // Check all dimensions
+        // Get safety headroom
+        double keepFreeRead = nodeCapacity.getIoReadMbPerSec() * ioSafetyHeadroom;
+        double keepFreeWrite = nodeCapacity.getIoWriteMbPerSec() * ioSafetyHeadroom;
+
+        // Check all dimensions - I/O-first: enforce per-direction headroom
         boolean hasHeadroom = freeCpu >= requiredCpu
                 && freeMem >= requiredMem
-                && freeIo >= requiredIo
+                && (requiredIoRead <= 0 || (freeIoRead - keepFreeRead >= requiredIoRead))
+                && (requiredIoWrite <= 0 || (freeIoWrite - keepFreeWrite >= requiredIoWrite))
                 && freeIops >= requiredIops
                 && freeNet >= requiredNet;
 
         if (!hasHeadroom) {
             logger.fine(String.format(
                     "Local capacity check failed (conf=%.2f): CPU %.1f < %.1f, Mem %.0f < %.0f, " +
-                            "IO %.1f < %.1f, IOPS %.0f < %.0f, Net %.1f < %.1f",
+                            "IO_R %.1f < %.1f (keep_free=%.0f), IO_W %.1f < %.1f (keep_free=%.0f), IOPS %.0f < %.0f, Net %.1f < %.1f",
                     conf, freeCpu, requiredCpu, freeMem, requiredMem,
-                    freeIo, requiredIo, freeIops, requiredIops, freeNet, requiredNet));
+                    freeIoRead, requiredIoRead, keepFreeRead,
+                    freeIoWrite, requiredIoWrite, keepFreeWrite,
+                    freeIops, requiredIops, freeNet, requiredNet));
         }
 
         return hasHeadroom;

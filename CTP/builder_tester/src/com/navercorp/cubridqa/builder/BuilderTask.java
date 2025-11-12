@@ -1312,12 +1312,16 @@ public class BuilderTask {
                     .put("cpuPct", testInstance.getPredictedCpuPct())
                     .put("memMb", testInstance.getPredictedMemMb())
                     .put("ioMbPerSec", testInstance.getPredictedIoMbPerSec())
+                    .put("ioReadBytesPerSec", (long) (testInstance.getPredictedIoReadMbPerSec() * 1024 * 1024))
+                    .put("ioWriteBytesPerSec", (long) (testInstance.getPredictedIoWriteMbPerSec() * 1024 * 1024))
                     .put("iops", testInstance.getPredictedIops())
                     .put("netMbPerSec", testInstance.getPredictedNetMbPerSec())
                     .put("confidence", testInstance.getConfidence());
                 testRequest.put("predicted", predicted);
-                taskLogger.fine(String.format("Sending test with predictions: CPU=%.1f%%, mem=%.0fMB, conf=%.2f",
-                    testInstance.getPredictedCpuPct(), testInstance.getPredictedMemMb(), testInstance.getConfidence()));
+                taskLogger.fine(String.format("Sending test with predictions: CPU=%.1f%%, mem=%.0fMB, IO_R=%.1fMB/s, IO_W=%.1fMB/s, conf=%.2f",
+                    testInstance.getPredictedCpuPct(), testInstance.getPredictedMemMb(),
+                    testInstance.getPredictedIoReadMbPerSec(), testInstance.getPredictedIoWriteMbPerSec(),
+                    testInstance.getConfidence()));
             }
 
             // Add request ID if available
@@ -2260,7 +2264,8 @@ public class BuilderTask {
         NodeDirectory nodeDirectory = new NodeDirectory(
             schedulerNodes,
             config.getSchedulingNodePollIntervalSeconds(),
-            config.getSchedulingNodeStaleThresholdSeconds()
+            config.getSchedulingNodeStaleThresholdSeconds(),
+            config
         );
         nodeDirectory.start();
 
@@ -2270,6 +2275,10 @@ public class BuilderTask {
             config.getSchedulingWeightImageCache(),
             config.getSchedulingWeightPackageCache(),
             config.getSchedulingWeightAgeBoost(),
+            config.getSchedulingWeightIo(),
+            config.getSchedulingWeightCpu(),
+            config.getSchedulingWeightMem(),
+            config.getSchedulingWeightNet(),
             loadProvider
         );
 

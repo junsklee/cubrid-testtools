@@ -55,7 +55,9 @@ This document describes the **implemented** architecture for tracking predicted 
     "durationMs": 45000,
     "cpuPct": 75.5,
     "memMb": 1024.0,
-    "ioMbPerSec": 15.2,
+    "ioMbPerSec": 15.2,              // Legacy: total I/O (backward compatible)
+    "ioReadBytesPerSec": 10485760,   // NEW: read I/O in bytes/sec (10 MB/s)
+    "ioWriteBytesPerSec": 5242880,   // NEW: write I/O in bytes/sec (5 MB/s)
     "iops": 300.0,
     "netMbPerSec": 8.5,
     "confidence": 0.85
@@ -77,7 +79,9 @@ This document describes the **implemented** architecture for tracking predicted 
    - Static factory `fromRequest(JSONObject)` parses from test request
    - Static factory `conservative()` provides default values
    - Validates and sanitizes all values (prevents NaN, negative, unrealistic values)
-   - Default values: 30s duration, 50% CPU, 512 MB memory, 10 MB/s I/O, 200 IOPS, 5 MB/s network
+   - Default values: 30s duration, 50% CPU, 512 MB memory, 10 MB/s I/O (split 50/50 read/write), 200 IOPS, 5 MB/s network
+   - **I/O-first enhancement (Nov 2025):** Separate `ioReadBytesPerSec` and `ioWriteBytesPerSec` fields
+   - Backward compatible: Legacy `ioMbPerSec` automatically splits 50/50 if read/write not provided
 
 2. **UtilizationSnapshot.java** - `src/com/navercorp/cubridqa/builder/tester/demand/UtilizationSnapshot.java`
    - Immutable snapshot of current utilization
@@ -147,15 +151,16 @@ utilization.put("cpu_pct", runningTests * 50.0);  // ❌ Inaccurate
 utilization.put("mem_mb", runningTests * 512.0);  // ❌ Inaccurate
 ```
 
-**Current (Actual Predicted Demands):**
+**Current (Actual Predicted Demands with I/O-First Enhancement):**
 ```java
 if (testOrchestrator != null) {
     UtilizationSnapshot util = testOrchestrator.getCurrentUtilization();
-    utilization.put("cpu_pct", util.getTotalCpuPct());
-    utilization.put("mem_mb", util.getTotalMemMb());
-    utilization.put("io_mb_s", util.getTotalIoMbPerSec());
+    utilization.put("cpu_millicores", (long) util.getTotalCpuMillicores());
+    utilization.put("mem_bytes", util.getTotalMemBytes());
+    utilization.put("io_read_bytes_per_sec", util.getTotalIoReadBytesPerSec());  // NEW: separate read
+    utilization.put("io_write_bytes_per_sec", util.getTotalIoWriteBytesPerSec()); // NEW: separate write
     utilization.put("iops", util.getTotalIops());
-    utilization.put("net_mb_s", util.getTotalNetMbPerSec());
+    utilization.put("net_bytes_per_sec", util.getTotalNetBytesPerSec());
 
     // Log if tests are using defaults
     if (util.hasDefaults()) {
@@ -163,6 +168,28 @@ if (testOrchestrator != null) {
                 new Object[]{util.getDefaultCount(), util.getTestCount()});
     }
 }
+```
+
+**Capacity Reporting (I/O-First Enhancement):**
+```java
+JSONObject capacity = new JSONObject();
+capacity.put("cpu_millicores", (int) (nodeCapacity.getCpuPct() / 100.0 * 1000.0));
+capacity.put("mem_bytes", (long) (nodeCapacity.getMemMb() * 1024 * 1024));
+capacity.put("io_read_bytes_per_sec", nodeCapacity.getIoReadCapacityBytesPerSec());  // NEW
+capacity.put("io_write_bytes_per_sec", nodeCapacity.getIoWriteCapacityBytesPerSec()); // NEW
+capacity.put("iops", (long) nodeCapacity.getIops());
+capacity.put("net_bytes_per_sec", (long) (nodeCapacity.getNetMbPerSec() * 1024 * 1024));
+```
+
+**Safety Headroom Reporting (I/O-First Enhancement):**
+```java
+double ioReadCap = capacity.optDouble("io_read_bytes_per_sec", 0);
+double ioWriteCap = capacity.optDouble("io_write_bytes_per_sec", 0);
+double headroom = config.getIoSafetyHeadroomRatio(); // Default 15%
+JSONObject safety = new JSONObject();
+safety.put("io_read_keep_free", (long) (ioReadCap * headroom));
+safety.put("io_write_keep_free", (long) (ioWriteCap * headroom));
+response.put("safety_headroom", safety);
 ```
 
 **Behavior:**
@@ -194,7 +221,9 @@ if (testOrchestrator != null) {
            .put("durationMs", testInstance.getPredictedDurationMs())
            .put("cpuPct", testInstance.getPredictedCpuPct())
            .put("memMb", testInstance.getPredictedMemMb())
-           .put("ioMbPerSec", testInstance.getPredictedIoMbPerSec())
+           .put("ioMbPerSec", testInstance.getPredictedIoMbPerSec())  // Legacy (backward compatible)
+           .put("ioReadBytesPerSec", (long) (testInstance.getPredictedIoReadMbPerSec() * 1024 * 1024))  // NEW
+           .put("ioWriteBytesPerSec", (long) (testInstance.getPredictedIoWriteMbPerSec() * 1024 * 1024)) // NEW
            .put("iops", testInstance.getPredictedIops())
            .put("netMbPerSec", testInstance.getPredictedNetMbPerSec())
            .put("confidence", testInstance.getConfidence());

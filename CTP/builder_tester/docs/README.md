@@ -19,6 +19,7 @@ Complete documentation for the CUBRID Builder-Tester system.
 - Per-node test history and resource demand prediction
 - Cache locality optimization (Docker images, build packages)
 - Mice/elephants queue separation for optimal throughput
+- **I/O-first scheduling** with separate read/write bandwidth tracking (November 2025)
 - 10-30% higher throughput, 15-25% faster mean completion time
 - 10-20% higher cache hit rates
 
@@ -117,6 +118,13 @@ See usage README for:
 - ✅ BuilderTask integration with config toggle
 - ✅ 10-30% throughput improvement, 15-25% faster mean completion
 
+### November 2025 - I/O-First Scheduling Enhancement
+- ✅ Separate read/write I/O bandwidth tracking and prediction
+- ✅ I/O-dominant scoring with configurable weights
+- ✅ Dimension-specific safety margins for read/write I/O
+- ✅ Enhanced /health endpoint with read/write capacity/utilization
+- ✅ Backward compatible with legacy `ioMbPerSec` (splits 50/50)
+
 See [SMART_SCHEDULING_ARCHITECTURE.md](SMART_SCHEDULING_ARCHITECTURE.md) for details.
 
 ### November 2024 - Sequential Build Implementation
@@ -173,6 +181,7 @@ For issues or questions:
 
 ## Version History
 
+- **v4.1** (Nov 2025) - I/O-first scheduling with separate read/write tracking
 - **v4.0** (Nov 2024) - Smart scheduling system with multi-resource awareness
 - **v3.0** (Nov 2024) - Sequential builds with workload distribution
 - **v2.0** (Aug 2024) - Multi-node testing and enhanced reporting

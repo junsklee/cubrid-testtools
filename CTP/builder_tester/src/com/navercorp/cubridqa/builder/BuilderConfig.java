@@ -824,6 +824,36 @@ public class BuilderConfig {
         return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_CONFIDENCE_FACTOR, "0.50"));
     }
 
+    // IO-first scheduling weights
+    public double getSchedulingWeightIo() {
+        return Double.parseDouble(properties.getProperty("scheduling_weight_io", "2.50"));
+    }
+
+    public double getSchedulingWeightCpu() {
+        return Double.parseDouble(properties.getProperty("scheduling_weight_cpu", "1.00"));
+    }
+
+    public double getSchedulingWeightMem() {
+        return Double.parseDouble(properties.getProperty("scheduling_weight_mem", "1.10"));
+    }
+
+    public double getSchedulingWeightNet() {
+        return Double.parseDouble(properties.getProperty("scheduling_weight_net", "0.80"));
+    }
+
+    // IO margin configuration
+    public double getSchedulingMarginIoReadBase() {
+        return Double.parseDouble(properties.getProperty("scheduling_margin_io_read_base", "0.35"));
+    }
+
+    public double getSchedulingMarginIoWriteBase() {
+        return Double.parseDouble(properties.getProperty("scheduling_margin_io_write_base", "0.35"));
+    }
+
+    public double getIoSafetyHeadroomRatio() {
+        return Double.parseDouble(properties.getProperty("io_safety_headroom_ratio", "0.15"));
+    }
+
     @Override
     public String toString() {
         return "BuilderConfig{" +

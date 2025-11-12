@@ -75,7 +75,8 @@ public class HealthHandler implements HttpHandler {
         // NodeCapacity.getCpuPct() is cores×100, so divide by 100 to get cores, then multiply by 1000 for millicores
         capacity.put("cpu_millicores", (int) (nodeCapacity.getCpuPct() / 100.0 * 1000.0));
         capacity.put("mem_bytes", (long) (nodeCapacity.getMemMb() * 1024 * 1024)); // Convert MB to bytes
-        capacity.put("io_bytes_per_sec", (long) (nodeCapacity.getIoMbPerSec() * 1024 * 1024));
+        capacity.put("io_read_bytes_per_sec", nodeCapacity.getIoReadCapacityBytesPerSec());
+        capacity.put("io_write_bytes_per_sec", nodeCapacity.getIoWriteCapacityBytesPerSec());
         capacity.put("iops", (long) nodeCapacity.getIops());
         capacity.put("net_bytes_per_sec", (long) (nodeCapacity.getNetMbPerSec() * 1024 * 1024));
         response.put("capacity", capacity);
@@ -86,7 +87,8 @@ public class HealthHandler implements HttpHandler {
             UtilizationSnapshot reserved = testOrchestrator.getCurrentUtilization();
             utilizationReserved.put("cpu_millicores", (long) reserved.getTotalCpuMillicores());
             utilizationReserved.put("mem_bytes", reserved.getTotalMemBytes());
-            utilizationReserved.put("io_bytes_per_sec", reserved.getTotalIoBytesPerSec());
+            utilizationReserved.put("io_read_bytes_per_sec", reserved.getTotalIoReadBytesPerSec());
+            utilizationReserved.put("io_write_bytes_per_sec", reserved.getTotalIoWriteBytesPerSec());
             utilizationReserved.put("iops", reserved.getTotalIops());
             utilizationReserved.put("net_bytes_per_sec", reserved.getTotalNetBytesPerSec());
             utilizationReserved.put("tests", reserved.getTestCount());
@@ -101,7 +103,8 @@ public class HealthHandler implements HttpHandler {
             // Fallback if orchestrator not available
             utilizationReserved.put("cpu_millicores", 0);
             utilizationReserved.put("mem_bytes", 0L);
-            utilizationReserved.put("io_bytes_per_sec", 0L);
+            utilizationReserved.put("io_read_bytes_per_sec", 0L);
+            utilizationReserved.put("io_write_bytes_per_sec", 0L);
             utilizationReserved.put("iops", 0L);
             utilizationReserved.put("net_bytes_per_sec", 0L);
             utilizationReserved.put("tests", 0);
@@ -114,7 +117,8 @@ public class HealthHandler implements HttpHandler {
         JSONObject utilizationActual = new JSONObject();
         utilizationActual.put("cpu_millicores", 0);  // Placeholder
         utilizationActual.put("mem_bytes", 0L);      // Placeholder
-        utilizationActual.put("io_bytes_per_sec", 0L);  // Placeholder
+        utilizationActual.put("io_read_bytes_per_sec", 0L);  // Placeholder
+        utilizationActual.put("io_write_bytes_per_sec", 0L);  // Placeholder
         utilizationActual.put("iops", 0L);           // Placeholder
         utilizationActual.put("net_bytes_per_sec", 0L); // Placeholder
         response.put("utilization_actual", utilizationActual);
@@ -124,10 +128,20 @@ public class HealthHandler implements HttpHandler {
         JSONObject errorRatio = new JSONObject();
         errorRatio.put("cpu", 0.0);
         errorRatio.put("mem", 0.0);
-        errorRatio.put("io", 0.0);
+        errorRatio.put("io_r", 0.0);  // Read IO error ratio
+        errorRatio.put("io_w", 0.0);  // Write IO error ratio
         errorRatio.put("iops", 0.0);
         errorRatio.put("net", 0.0);
         response.put("error_ratio", errorRatio);
+
+        // Optional: publish safety headroom as an advisory value
+        double ioReadCap = capacity.optDouble("io_read_bytes_per_sec", 0);
+        double ioWriteCap = capacity.optDouble("io_write_bytes_per_sec", 0);
+        double headroom = config.getIoSafetyHeadroomRatio(); // Default 15%
+        JSONObject safety = new JSONObject();
+        safety.put("io_read_keep_free", (long) (ioReadCap * headroom));
+        safety.put("io_write_keep_free", (long) (ioWriteCap * headroom));
+        response.put("safety_headroom", safety);
 
         // Docker images
         JSONObject images = new JSONObject();

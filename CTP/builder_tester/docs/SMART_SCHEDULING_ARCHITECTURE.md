@@ -548,23 +548,46 @@ Lower score = better placement
 
 **Component Definitions:**
 
-**1. Pressure (Dominant Resource):**
+**1. Pressure (I/O-First Dominant Resource):**
 ```java
 private double computePressure(TestInstance test, NodeSnapshot node) {
     PredictedDemand demand = test.getPredictedDemand();
 
     double cpuPressure = demand.getCpuPct() / Math.max(0.01, node.getFreeCpuPct());
     double memPressure = demand.getMemMb() / (double) Math.max(1, node.getFreeMemMb());
-    double ioPressure = demand.getIoMbsec() / Math.max(0.01, node.getFreeIoMbsec());
+    
+    // I/O-first: Compute separate read/write pressure, take the worse
+    double ioReadPressure = demand.getIoReadMbPerSec() / Math.max(0.01, node.getFreeIoReadMbPerSec());
+    double ioWritePressure = demand.getIoWriteMbPerSec() / Math.max(0.01, node.getFreeIoWriteMbPerSec());
+    double ioPressure = Math.max(ioReadPressure, ioWritePressure); // Worst-case I/O
+    
     double iopsPressure = demand.getIops() / (double) Math.max(1, node.getFreeIops());
     double netPressure = demand.getNetMbsec() / Math.max(0.01, node.getFreeNetMbsec());
 
-    // Return dominant resource (highest pressure)
-    return Math.max(Math.max(Math.max(cpuPressure, memPressure),
-                             Math.max(ioPressure, iopsPressure)),
-                    netPressure);
+    // Apply per-dimension weights (I/O-dominant)
+    double weightedIo = wIO * ioPressure;        // Default: 2.50
+    double weightedCpu = wCPU * cpuPressure;     // Default: 1.00
+    double weightedMem = wMEM * memPressure;     // Default: 1.10
+    double weightedNet = wNET * netPressure;     // Default: 0.80
+    double weightedIops = wIO * iopsPressure;    // IOPS also gets I/O weight
+
+    // Return maximum weighted pressure (I/O will dominate due to higher weight)
+    return Math.max(Math.max(Math.max(Math.max(weightedIo, weightedCpu), 
+                                      weightedMem), weightedIops), weightedNet);
 }
 ```
+
+**I/O-First Scheduling (November 2025 Enhancement):**
+
+The scoring function now treats I/O (read/write bandwidth) as a first-class, heavily-weighted dimension:
+
+- **Separate read/write tracking:** Tests predict `ioReadBytesPerSec` and `ioWriteBytesPerSec` separately
+- **Worst-case I/O pressure:** Uses `max(readPressure, writePressure)` to handle asymmetric workloads
+- **I/O-dominant weights:** Default I/O weight (2.50) is 2.5× higher than CPU (1.00), making I/O the primary scheduling constraint
+- **Dimension-specific margins:** Separate safety margins for read (`scheduling_margin_io_read_base`) and write (`scheduling_margin_io_write_base`) I/O
+- **Safety headroom:** Global `io_safety_headroom_ratio` (default 15%) keeps capacity free to prevent disk saturation
+
+This ensures that nodes with sufficient I/O capacity are prioritized, preventing I/O-bound tests from saturating storage devices.
 
 **2. Duration (Normalized):**
 ```java

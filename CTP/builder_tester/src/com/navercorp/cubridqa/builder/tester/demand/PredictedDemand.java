@@ -37,6 +37,8 @@ public class PredictedDemand {
     private final int cpuMillicores;
     private final long memBytes;
     private final long ioBytesPerSec;
+    private final long ioReadBytesPerSec;
+    private final long ioWriteBytesPerSec;
     private final long iops;
     private final long netBytesPerSec;
     private final double confidence; // scalar (per-dimension optional via confidenceCpu/Mem/Io/Net/Iops)
@@ -60,29 +62,37 @@ public class PredictedDemand {
         public final int cpuMillicores;
         public final long memBytes;
         public final long ioBytesPerSec;
+        public final long ioReadBytesPerSec;
+        public final long ioWriteBytesPerSec;
         public final long iops;
         public final long netBytesPerSec;
 
         public Phase(String name, long durationMs, int cpuMillicores, long memBytes,
-                     long ioBytesPerSec, long iops, long netBytesPerSec) {
+                     long ioBytesPerSec, long ioReadBytesPerSec, long ioWriteBytesPerSec,
+                     long iops, long netBytesPerSec) {
             this.name = Objects.requireNonNull(name);
             this.durationMs = Math.max(0, durationMs);
             this.cpuMillicores = Math.max(0, cpuMillicores);
             this.memBytes = Math.max(0, memBytes);
             this.ioBytesPerSec = Math.max(0, ioBytesPerSec);
+            this.ioReadBytesPerSec = Math.max(0, ioReadBytesPerSec);
+            this.ioWriteBytesPerSec = Math.max(0, ioWriteBytesPerSec);
             this.iops = Math.max(0, iops);
             this.netBytesPerSec = Math.max(0, netBytesPerSec);
         }
     }
 
     private PredictedDemand(long durationMs, int cpuMillicores, long memBytes,
-                            long ioBytesPerSec, long iops, long netBytesPerSec,
+                            long ioBytesPerSec, long ioReadBytesPerSec, long ioWriteBytesPerSec,
+                            long iops, long netBytesPerSec,
                             double confidence, double cCpu, double cMem, double cIo,
                             double cNet, double cIops, List<Phase> phases) {
         this.durationMs = Math.max(0, durationMs);
         this.cpuMillicores = Math.max(0, cpuMillicores);
         this.memBytes = Math.max(0, memBytes);
         this.ioBytesPerSec = Math.max(0, ioBytesPerSec);
+        this.ioReadBytesPerSec = Math.max(0, ioReadBytesPerSec);
+        this.ioWriteBytesPerSec = Math.max(0, ioWriteBytesPerSec);
         this.iops = Math.max(0, iops);
         this.netBytesPerSec = Math.max(0, netBytesPerSec);
         this.confidence = clamp01(confidence);
@@ -114,15 +124,20 @@ public class PredictedDemand {
     public static PredictedDemand conservative(NodeHardware hw) {
         if (hw == null) {
             // Absolute fallback when hardware unknown
-            return new PredictedDemand(30_000, 500, 512L * 1024 * 1024, 10L * 1024 * 1024,
+            final long ioB = 10L * 1024 * 1024;  // 10MB/s total
+            final long ioRB = ioB / 2;            // split read/write conservatively
+            final long ioWB = ioB - ioRB;
+            return new PredictedDemand(30_000, 500, 512L * 1024 * 1024, ioB, ioRB, ioWB,
                     200, 5L * 1024 * 1024, 0.25, -1, -1, -1, -1, -1, null);
         }
         // Scale to node: ~0.5 cores per core count, 512MB, moderate IO
         final int cpuMc = Math.max(500, Math.min((int) (hw.getCpuPct() * 10), (int) (0.5 * hw.getCpuPct() * 10)));
         final long memB = 512L * 1024 * 1024; // 512MB
-        final long ioB = 10L * 1024 * 1024;  // 10MB/s
+        final long ioB = 10L * 1024 * 1024;  // 10MB/s total
+        final long ioRB = ioB / 2;            // split read/write conservatively
+        final long ioWB = ioB - ioRB;
         final long netB = 5L * 1024 * 1024;  // 5MB/s
-        return new PredictedDemand(30_000, cpuMc, memB, ioB, 200, netB, 0.25, -1, -1, -1, -1, -1, null);
+        return new PredictedDemand(30_000, cpuMc, memB, ioB, ioRB, ioWB, 200, netB, 0.25, -1, -1, -1, -1, -1, null);
     }
 
     /**
@@ -141,6 +156,8 @@ public class PredictedDemand {
         int cpuMc = p.optInt("cpuMillicores", -1);
         long memBytes = p.optLong("memBytes", -1);
         long ioBps = p.optLong("ioBytesPerSec", -1);
+        long ioReadBps = p.optLong("ioReadBytesPerSec", -1);
+        long ioWriteBps = p.optLong("ioWriteBytesPerSec", -1);
         long iops = p.optLong("iops", -1);
         long netBps = p.optLong("netBytesPerSec", -1);
 
@@ -154,7 +171,14 @@ public class PredictedDemand {
         }
         if (ioBps < 0 && p.has("ioMbPerSec")) {
             ioBps = (long) Math.max(0, p.optDouble("ioMbPerSec", 0.0)) * 1024L * 1024L;
+            // Legacy single IO value → split evenly if read/write not provided
+            if (ioReadBps < 0 && ioWriteBps < 0) {
+                ioReadBps = ioBps / 2;
+                ioWriteBps = ioBps - ioReadBps;
+            }
         }
+        if (ioReadBps < 0) ioReadBps = Math.max(0, p.optLong("ioReadBytesPerSec", -1));
+        if (ioWriteBps < 0) ioWriteBps = Math.max(0, p.optLong("ioWriteBytesPerSec", -1));
         if (netBps < 0 && p.has("netMbPerSec")) {
             netBps = (long) Math.max(0, p.optDouble("netMbPerSec", 0.0)) * 1024L * 1024L;
         }
@@ -176,12 +200,22 @@ public class PredictedDemand {
             JSONArray arr = p.getJSONArray("phases");
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject ph = arr.getJSONObject(i);
+                long phIoBps = ph.optLong("ioBytesPerSec", Math.max(0, ioBps));
+                long phIoReadBps = ph.optLong("ioReadBytesPerSec", -1);
+                long phIoWriteBps = ph.optLong("ioWriteBytesPerSec", -1);
+                if (phIoReadBps < 0 && phIoWriteBps < 0) {
+                    // Use parent values or split evenly
+                    phIoReadBps = (ioReadBps >= 0 ? ioReadBps : phIoBps / 2);
+                    phIoWriteBps = (ioWriteBps >= 0 ? ioWriteBps : phIoBps - phIoReadBps);
+                }
                 phases.add(new Phase(
                         ph.optString("name", "phase-" + i),
                         ph.optLong("durationMs", 0L),
                         ph.optInt("cpuMillicores", Math.max(0, cpuMc)),
                         ph.optLong("memBytes", Math.max(0, memBytes)),
-                        ph.optLong("ioBytesPerSec", Math.max(0, ioBps)),
+                        phIoBps,
+                        phIoReadBps,
+                        phIoWriteBps,
                         ph.optLong("iops", Math.max(0, iops)),
                         ph.optLong("netBytesPerSec", Math.max(0, netBps))
                 ));
@@ -190,11 +224,13 @@ public class PredictedDemand {
 
         if (cpuMc < 0) cpuMc = conservative(hw).cpuMillicores;
         if (memBytes < 0) memBytes = conservative(hw).memBytes;
-        if (ioBps < 0) ioBps = conservative(hw).ioBytesPerSec;
+        if (ioBps < 0) ioBps = Math.max(0, ioReadBps) + Math.max(0, ioWriteBps);
+        if (ioReadBps < 0) ioReadBps = 0;
+        if (ioWriteBps < 0) ioWriteBps = 0;
         if (netBps < 0) netBps = conservative(hw).netBytesPerSec;
         if (iops < 0) iops = 200;
 
-        return new PredictedDemand(durationMs, cpuMc, memBytes, ioBps, iops, netBps,
+        return new PredictedDemand(durationMs, cpuMc, memBytes, ioBps, ioReadBps, ioWriteBps, iops, netBps,
                 confidence, cCpu, cMem, cIo, cNet, cIops, phases);
     }
 
@@ -214,6 +250,14 @@ public class PredictedDemand {
 
     public long getIoBytesPerSec() {
         return ioBytesPerSec;
+    }
+
+    public long getIoReadBytesPerSec() {
+        return ioReadBytesPerSec;
+    }
+
+    public long getIoWriteBytesPerSec() {
+        return ioWriteBytesPerSec;
     }
 
     public long getIops() {
@@ -268,6 +312,8 @@ public class PredictedDemand {
         o.put("cpuMillicores", cpuMillicores);
         o.put("memBytes", memBytes);
         o.put("ioBytesPerSec", ioBytesPerSec);
+        o.put("ioReadBytesPerSec", ioReadBytesPerSec);
+        o.put("ioWriteBytesPerSec", ioWriteBytesPerSec);
         o.put("iops", iops);
         o.put("netBytesPerSec", netBytesPerSec);
         o.put("confidence", confidence);
@@ -280,6 +326,8 @@ public class PredictedDemand {
                         .put("cpuMillicores", ph.cpuMillicores)
                         .put("memBytes", ph.memBytes)
                         .put("ioBytesPerSec", ph.ioBytesPerSec)
+                        .put("ioReadBytesPerSec", ph.ioReadBytesPerSec)
+                        .put("ioWriteBytesPerSec", ph.ioWriteBytesPerSec)
                         .put("iops", ph.iops)
                         .put("netBytesPerSec", ph.netBytesPerSec);
                 arr.put(pj);
