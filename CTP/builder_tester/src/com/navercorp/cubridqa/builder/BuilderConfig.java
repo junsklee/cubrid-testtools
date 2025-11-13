@@ -49,6 +49,13 @@ public class BuilderConfig {
     private static final String LOG_FILE_VERIFICATION_TIMEOUT_SECONDS = "log_file_verification_timeout_seconds";
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String DOCKER_ENFORCE_MEMORY_LIMITS = "docker_enforce_memory_limits"; // Enforce Docker memory limits from predictions (default false)
+    private static final String DOCKER_ENFORCE_CPU_LIMITS = "docker_enforce_cpu_limits"; // Enforce Docker CPU limits from predictions (default false)
+    // Resource limit override values (null = use predicted demand)
+    private static final String DOCKER_CPU_LIMIT_MILLICORES = "docker_cpu_limit_millicores";
+    private static final String DOCKER_MEMORY_LIMIT_MB = "docker_memory_limit_mb";
+    private static final String DOCKER_IO_READ_LIMIT_MBPS = "docker_io_read_limit_mbps";
+    private static final String DOCKER_IO_WRITE_LIMIT_MBPS = "docker_io_write_limit_mbps";
+    private static final String DOCKER_IO_DEVICE = "docker_io_device"; // Block device for I/O limits (auto-detect if not set)
     private static final String CCACHE_ENABLED = "ccache_enabled";
     private static final String CCACHE_DIR = "ccache_dir";
     private static final String CCACHE_MAX_SIZE = "ccache_max_size";
@@ -535,14 +542,114 @@ public class BuilderConfig {
     }
     
     /**
-     * Whether to enforce Docker memory limits based on predicted demand.
-     * Default is false to prioritize test success over resource misallocation.
+     * Whether to enforce Docker memory limits based on configured or predicted demand.
+     * Default is true with configured limits providing safe resource constraints.
      * When enabled, applies --memory and --memory-swap flags to Docker containers.
+     * Set to false to disable memory limits entirely.
      */
     public boolean isDockerEnforceMemoryLimits() {
-        return Boolean.parseBoolean(properties.getProperty(DOCKER_ENFORCE_MEMORY_LIMITS, "false"));
+        return Boolean.parseBoolean(properties.getProperty(DOCKER_ENFORCE_MEMORY_LIMITS, "true"));
     }
-    
+
+    /**
+     * Whether to enforce Docker CPU limits based on configured or predicted demand.
+     * Default is true with configured limits providing safe resource constraints.
+     * When enabled, applies --cpus flag to Docker containers.
+     * Set to false to disable CPU limits entirely.
+     */
+    public boolean isDockerEnforceCpuLimits() {
+        return Boolean.parseBoolean(properties.getProperty(DOCKER_ENFORCE_CPU_LIMITS, "true"));
+    }
+
+    /**
+     * Get the configured CPU limit in millicores for Docker containers.
+     * If set, this overrides the predicted demand value.
+     * @return CPU limit in millicores, or null to use predicted demand
+     */
+    public Integer getDockerCpuLimitMillicores() {
+        String value = properties.getProperty(DOCKER_CPU_LIMIT_MILLICORES);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            int millicores = Integer.parseInt(value.trim());
+            return millicores > 0 ? millicores : null;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid docker_cpu_limit_millicores value: " + value + ". Using predicted demand.");
+            return null;
+        }
+    }
+
+    /**
+     * Get the configured memory limit in MB for Docker containers.
+     * If set, this overrides the predicted demand value.
+     * @return Memory limit in MB, or null to use predicted demand
+     */
+    public Integer getDockerMemoryLimitMb() {
+        String value = properties.getProperty(DOCKER_MEMORY_LIMIT_MB);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            int mb = Integer.parseInt(value.trim());
+            return mb > 0 ? mb : null;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid docker_memory_limit_mb value: " + value + ". Using predicted demand.");
+            return null;
+        }
+    }
+
+    /**
+     * Get the configured I/O read limit in MB/s for Docker containers.
+     * If set, this overrides the predicted demand value.
+     * @return I/O read limit in MB/s, or null to use predicted demand
+     */
+    public Integer getDockerIoReadLimitMbps() {
+        String value = properties.getProperty(DOCKER_IO_READ_LIMIT_MBPS);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            int mbps = Integer.parseInt(value.trim());
+            return mbps > 0 ? mbps : null;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid docker_io_read_limit_mbps value: " + value + ". Using predicted demand.");
+            return null;
+        }
+    }
+
+    /**
+     * Get the configured I/O write limit in MB/s for Docker containers.
+     * If set, this overrides the predicted demand value.
+     * @return I/O write limit in MB/s, or null to use predicted demand
+     */
+    public Integer getDockerIoWriteLimitMbps() {
+        String value = properties.getProperty(DOCKER_IO_WRITE_LIMIT_MBPS);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            int mbps = Integer.parseInt(value.trim());
+            return mbps > 0 ? mbps : null;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid docker_io_write_limit_mbps value: " + value + ". Using predicted demand.");
+            return null;
+        }
+    }
+
+    /**
+     * Get the configured block device for Docker I/O limits.
+     * If not set, the system will attempt to auto-detect the root device.
+     * @return Device path (e.g., "/dev/sda"), or null for auto-detection
+     */
+    public String getDockerIoDevice() {
+        String value = properties.getProperty(DOCKER_IO_DEVICE);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        return value.trim();
+    }
+
     // ---- V2 unified config with migration from v1 (retry_count) ----
     public String getRunMode() {
         String mode = properties.getProperty(RUN_MODE, "until-pass").toLowerCase();

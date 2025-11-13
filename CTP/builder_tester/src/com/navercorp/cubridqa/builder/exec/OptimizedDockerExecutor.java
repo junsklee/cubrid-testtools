@@ -230,27 +230,106 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         dockerCommand.add("docker");
         dockerCommand.add("run");
 
-        // Runtime limits from predicted demand (enforce admission control)
+        // Runtime limits from predicted demand or configured values (enforce admission control)
         com.navercorp.cubridqa.builder.tester.demand.PredictedDemand pd = request.getPredictedDemand();
-        if (pd != null) {
-            // CPU: millicores → --cpus (minimum 0.1 for bootstrapping)
-            double cpus = Math.max(0.1, pd.getCpuMillicores() / 1000.0);
-            dockerCommand.add("--cpus=" + String.format(java.util.Locale.ROOT, "%.3f", cpus));
 
-            // Memory limits: only apply if explicitly enabled via config (default disabled to prioritize test success)
-            if (config.isDockerEnforceMemoryLimits()) {
-                // Memory: bytes → --memory/--memory-swap (minimum 256MB, no swap bursting)
-                long memBytes = Math.max(256L * 1024 * 1024, pd.getMemBytes());
-                dockerCommand.add("--memory=" + memBytes);
-                dockerCommand.add("--memory-swap=" + memBytes); // Disable swap to prevent thrashing
-
-                testLogger.info(String.format("Docker limits: cpus=%.3f, memory=%dMB",
-                        cpus, memBytes / (1024 * 1024)));
-            } else {
-                testLogger.info(String.format("Docker limits: cpus=%.3f, memory=unlimited (docker_enforce_memory_limits=false)",
-                        cpus));
+        // CPU limits: only apply if explicitly enabled via config (default disabled to prioritize test success)
+        boolean cpuLimitsApplied = false;
+        double cpus = 0.0;
+        if (config.isDockerEnforceCpuLimits()) {
+            // Priority: configured value > predicted demand > minimum
+            Integer configuredMillicores = config.getDockerCpuLimitMillicores();
+            if (configuredMillicores != null) {
+                // Use configured value
+                cpus = Math.max(0.1, configuredMillicores / 1000.0);
+                dockerCommand.add("--cpus=" + String.format(java.util.Locale.ROOT, "%.3f", cpus));
+                cpuLimitsApplied = true;
+                testLogger.fine(String.format("Using configured CPU limit: %d millicores (%.3f cpus)", configuredMillicores, cpus));
+            } else if (pd != null) {
+                // Use predicted demand
+                cpus = Math.max(0.1, pd.getCpuMillicores() / 1000.0);
+                dockerCommand.add("--cpus=" + String.format(java.util.Locale.ROOT, "%.3f", cpus));
+                cpuLimitsApplied = true;
+                testLogger.fine(String.format("Using predicted CPU demand: %d millicores (%.3f cpus)", pd.getCpuMillicores(), cpus));
             }
         }
+
+        // Memory limits: only apply if explicitly enabled via config (default disabled to prioritize test success)
+        boolean memLimitsApplied = false;
+        long memBytes = 0;
+        if (config.isDockerEnforceMemoryLimits()) {
+            // Priority: configured value > predicted demand > minimum
+            Integer configuredMb = config.getDockerMemoryLimitMb();
+            if (configuredMb != null) {
+                // Use configured value
+                memBytes = Math.max(256L * 1024 * 1024, configuredMb * 1024L * 1024);
+                dockerCommand.add("--memory=" + memBytes);
+                dockerCommand.add("--memory-swap=" + memBytes); // Disable swap to prevent thrashing
+                memLimitsApplied = true;
+                testLogger.fine(String.format("Using configured memory limit: %d MB", configuredMb));
+            } else if (pd != null) {
+                // Use predicted demand
+                memBytes = Math.max(256L * 1024 * 1024, pd.getMemBytes());
+                dockerCommand.add("--memory=" + memBytes);
+                dockerCommand.add("--memory-swap=" + memBytes); // Disable swap to prevent thrashing
+                memLimitsApplied = true;
+                testLogger.fine(String.format("Using predicted memory demand: %d bytes (%d MB)", pd.getMemBytes(), pd.getMemBytes() / (1024 * 1024)));
+            }
+        }
+
+        // I/O throughput limits: apply read/write limits if configured
+        boolean ioLimitsApplied = false;
+        long ioReadBps = 0;
+        long ioWriteBps = 0;
+        Integer configuredReadMbps = config.getDockerIoReadLimitMbps();
+        Integer configuredWriteMbps = config.getDockerIoWriteLimitMbps();
+
+        if (configuredReadMbps != null || configuredWriteMbps != null) {
+            // Detect or get configured block device
+            String devicePath = config.getDockerIoDevice();
+            if (devicePath == null) {
+                devicePath = DockerIoLimits.detectRootDevice(testLogger);
+            }
+
+            if (devicePath != null) {
+                if (configuredReadMbps != null) {
+                    ioReadBps = configuredReadMbps * 1024L * 1024; // Convert MB/s to bytes/s
+                    dockerCommand.add("--device-read-bps");
+                    dockerCommand.add(devicePath + ":" + ioReadBps);
+                    testLogger.fine(String.format("Using I/O read limit: %d MB/s (%d bytes/s) on %s",
+                        configuredReadMbps, ioReadBps, devicePath));
+                }
+
+                if (configuredWriteMbps != null) {
+                    ioWriteBps = configuredWriteMbps * 1024L * 1024; // Convert MB/s to bytes/s
+                    dockerCommand.add("--device-write-bps");
+                    dockerCommand.add(devicePath + ":" + ioWriteBps);
+                    testLogger.fine(String.format("Using I/O write limit: %d MB/s (%d bytes/s) on %s",
+                        configuredWriteMbps, ioWriteBps, devicePath));
+                }
+
+                ioLimitsApplied = true;
+            } else {
+                testLogger.warning("I/O limits configured but device detection failed. Limits not applied.");
+            }
+        }
+
+        // Log the limits configuration
+        StringBuilder limitsMsg = new StringBuilder("Docker limits: ");
+        limitsMsg.append(cpuLimitsApplied ? String.format("cpus=%.3f", cpus) : "cpus=unlimited");
+        limitsMsg.append(", ");
+        limitsMsg.append(memLimitsApplied ? String.format("memory=%dMB", memBytes / (1024 * 1024)) : "memory=unlimited");
+        if (ioLimitsApplied) {
+            limitsMsg.append(", I/O: ");
+            if (configuredReadMbps != null) {
+                limitsMsg.append(String.format("read=%dMB/s", configuredReadMbps));
+            }
+            if (configuredWriteMbps != null) {
+                if (configuredReadMbps != null) limitsMsg.append(" ");
+                limitsMsg.append(String.format("write=%dMB/s", configuredWriteMbps));
+            }
+        }
+        testLogger.info(limitsMsg.toString());
 
         // Limit container log growth to prevent host disk exhaustion
         dockerCommand.add("--log-driver");
