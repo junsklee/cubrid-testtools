@@ -41,23 +41,53 @@ public class DockerIoLimits {
 
     /**
      * Detect root device using lsblk command.
+     * First finds the device mounted on /, then gets its parent device.
      */
     private static String detectViaLsblk(Logger logger) {
         try {
-            ProcessBuilder pb = new ProcessBuilder("lsblk", "-no", "PKNAME", "/");
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
+            // First, find which device is mounted on /
+            ProcessBuilder pb1 = new ProcessBuilder("findmnt", "-n", "-o", "SOURCE", "/");
+            pb1.redirectErrorStream(true);
+            Process process1 = pb1.start();
 
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String mountedDevice = null;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process1.getInputStream()))) {
                 String line = reader.readLine();
                 if (line != null && !line.trim().isEmpty()) {
-                    String device = "/dev/" + line.trim();
-                    logger.fine("Detected root device via lsblk: " + device);
-                    return device;
+                    mountedDevice = line.trim();
                 }
             }
+            process1.waitFor();
 
-            process.waitFor();
+            if (mountedDevice == null || !mountedDevice.startsWith("/dev/")) {
+                logger.fine("Could not find mounted device for /");
+                return null;
+            }
+
+            // Now get the parent device name using lsblk
+            ProcessBuilder pb2 = new ProcessBuilder("lsblk", "-no", "PKNAME", mountedDevice);
+            pb2.redirectErrorStream(false); // Don't merge stderr to stdout
+            Process process2 = pb2.start();
+
+            String parentDevice = null;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process2.getInputStream()))) {
+                String line = reader.readLine();
+                if (line != null && !line.trim().isEmpty() && !line.contains("not a block device")) {
+                    parentDevice = "/dev/" + line.trim();
+                }
+            }
+            process2.waitFor();
+
+            // If we got a parent device, use it; otherwise use the base of the mounted device
+            if (parentDevice != null && !parentDevice.equals("/dev/")) {
+                logger.fine("Detected root device via lsblk: " + parentDevice);
+                return parentDevice;
+            } else {
+                // Extract base device from mounted device (e.g., /dev/sda1 -> /dev/sda)
+                String baseDevice = extractBaseDevice(mountedDevice);
+                logger.fine("Detected root device via lsblk (base extraction): " + baseDevice);
+                return baseDevice;
+            }
         } catch (Exception e) {
             logger.fine("lsblk detection failed: " + e.getMessage());
         }
@@ -65,15 +95,17 @@ public class DockerIoLimits {
     }
 
     /**
-     * Detect root device by parsing /proc/mounts.
+     * Detect root device by parsing /proc/mounts directly (no external command).
      */
     private static String detectViaProcMounts(Logger logger) {
         try {
-            ProcessBuilder pb = new ProcessBuilder("cat", "/proc/mounts");
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
+            java.nio.file.Path mountsPath = java.nio.file.Paths.get("/proc/mounts");
+            if (!java.nio.file.Files.exists(mountsPath)) {
+                logger.fine("/proc/mounts does not exist");
+                return null;
+            }
 
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            try (BufferedReader reader = java.nio.file.Files.newBufferedReader(mountsPath)) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String[] parts = line.split("\\s+");
@@ -89,8 +121,6 @@ public class DockerIoLimits {
                     }
                 }
             }
-
-            process.waitFor();
         } catch (Exception e) {
             logger.fine("/proc/mounts detection failed: " + e.getMessage());
         }
@@ -102,20 +132,24 @@ public class DockerIoLimits {
      */
     private static String detectViaFindmnt(Logger logger) {
         try {
-            ProcessBuilder pb = new ProcessBuilder("findmnt", "-no", "SOURCE", "/");
-            pb.redirectErrorStream(true);
+            ProcessBuilder pb = new ProcessBuilder("findmnt", "-n", "-o", "SOURCE", "/");
+            pb.redirectErrorStream(false); // Don't merge stderr to stdout
             Process process = pb.start();
 
+            String device = null;
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line = reader.readLine();
-                if (line != null && !line.trim().isEmpty()) {
-                    String device = extractBaseDevice(line.trim());
-                    logger.fine("Detected root device via findmnt: " + device);
-                    return device;
+                if (line != null && !line.trim().isEmpty() && line.trim().startsWith("/dev/")) {
+                    device = extractBaseDevice(line.trim());
                 }
             }
 
             process.waitFor();
+
+            if (device != null) {
+                logger.fine("Detected root device via findmnt: " + device);
+                return device;
+            }
         } catch (Exception e) {
             logger.fine("findmnt detection failed: " + e.getMessage());
         }
@@ -125,11 +159,22 @@ public class DockerIoLimits {
     /**
      * Extract base device from a device path.
      * Removes partition numbers (e.g., /dev/sda1 -> /dev/sda).
+     * For LVM/mapper devices, tries to find the underlying physical device.
      *
      * @param device Device path
      * @return Base device path
      */
     private static String extractBaseDevice(String device) {
+        // Handle LVM and device mapper devices - try to find underlying device
+        if (device.startsWith("/dev/mapper/") || device.startsWith("/dev/dm-")) {
+            String underlying = findUnderlyingDevice(device);
+            if (underlying != null) {
+                return underlying;
+            }
+            // If we can't find underlying device, return as-is
+            return device;
+        }
+
         // Handle /dev/sdXN -> /dev/sdX
         if (device.matches("/dev/sd[a-z]\\d+")) {
             return device.replaceAll("\\d+$", "");
@@ -151,5 +196,42 @@ public class DockerIoLimits {
             return device.replaceAll("p\\d+$", "");
         }
         return device;
+    }
+
+    /**
+     * Find the underlying physical device for LVM/mapper devices.
+     * Uses lsblk -s to traverse the device stack (inverse dependencies).
+     */
+    private static String findUnderlyingDevice(String device) {
+        try {
+            // Use lsblk -s to show the full device stack including parent devices
+            ProcessBuilder pb = new ProcessBuilder("lsblk", "-s", "-n", "-o", "NAME,TYPE", device);
+            pb.redirectErrorStream(false);
+            Process process = pb.start();
+
+            String physicalDevice = null;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    // Remove tree drawing characters only at the start of the line
+                    String cleaned = line.replaceAll("^[\\s│├└`─\\-]+", "").trim();
+                    String[] parts = cleaned.split("\\s+");
+                    if (parts.length >= 2) {
+                        String name = parts[0];
+                        String type = parts[1];
+                        // Look for the physical disk device
+                        if (type.equals("disk")) {
+                            physicalDevice = "/dev/" + name;
+                            break;
+                        }
+                    }
+                }
+            }
+            process.waitFor();
+            return physicalDevice;
+        } catch (Exception e) {
+            // If we can't determine underlying device, return null
+            return null;
+        }
     }
 }
