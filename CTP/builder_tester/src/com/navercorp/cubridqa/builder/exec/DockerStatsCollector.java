@@ -106,9 +106,11 @@ final class DockerStatsCollector {
                     accumulator.add(sample);
                     // Log first sample to confirm collection is working
                     if (accumulator.samples == 1) {
-                        logger.log(Level.INFO, "Started collecting stats for container {0} (CPU: {1}%, Mem: {2} MB)",
+                        logger.log(Level.INFO, "Started collecting stats for container {0} (CPU: {1}%, Mem: {2} MB, I/O Read: {3} MB, Write: {4} MB)",
                             new Object[]{containerName, String.format("%.1f", sample.cpuPercent),
-                                        String.format("%.1f", sample.memUsageMb)});
+                                        String.format("%.1f", sample.memUsageMb),
+                                        String.format("%.1f", sample.blockReadBytes / (1024.0 * 1024.0)),
+                                        String.format("%.1f", sample.blockWriteBytes / (1024.0 * 1024.0))});
                     }
                 }
                 return exitCode == 0;
