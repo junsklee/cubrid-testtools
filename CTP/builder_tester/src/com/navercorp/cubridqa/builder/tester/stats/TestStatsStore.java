@@ -13,9 +13,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.zip.GZIPInputStream;
@@ -552,25 +555,32 @@ public class TestStatsStore {
      *
      * <p>CRITICAL: All steps must execute in this exact order in a single thread.
      * If any step fails, do not cleanup; leave retained list as-is. Next cycle will retry.
+     *
+     * <p>IMPORTANT: Each I/O operation has timeout protection to prevent indefinite hangs.
      */
     private void coordinatedSnapshot() {
         Path snapshotPath = null;
+        long startTime = System.currentTimeMillis();
+
         try {
-            // 1) Write snapshot (fsync file → rename → fsync dir)
-            snapshotPath = writeSnapshotInternal();
+            // 1) Write snapshot (fsync file → rename → fsync dir) with timeout
+            snapshotPath = writeSnapshotWithTimeout(60); // 60 second timeout
             if (snapshotPath == null) {
-                logger.warning("[Coordinator] Snapshot write failed, skipping rotation and manifest update");
+                logger.warning("[Coordinator] Snapshot write failed or timed out, skipping rotation and manifest update");
                 return;
             }
 
-            // 2) Rotate WAL; get closed segment (durable)
+            long snapshotTime = System.currentTimeMillis() - startTime;
+            logger.fine(String.format("[Coordinator] Snapshot write took %dms", snapshotTime));
+
+            // 2) Rotate WAL; get closed segment (durable) with timeout
             String closedSegment = null;
             String newOpenWal = null;
             try {
-                closedSegment = walWriter.rotateNow();
+                closedSegment = rotateWALWithTimeout(30); // 30 second timeout
                 newOpenWal = walWriter.getCurrentSegmentName();
-            } catch (IOException e) {
-                logger.log(Level.WARNING, "[Coordinator] WAL rotation failed, but snapshot was written successfully", e);
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "[Coordinator] WAL rotation failed or timed out, but snapshot was written successfully", e);
                 // Continue to update manifest with current WAL segment if rotation failed
                 newOpenWal = walWriter.getCurrentSegmentName();
                 if (newOpenWal == null || newOpenWal.isEmpty()) {
@@ -579,15 +589,11 @@ public class TestStatsStore {
                 }
             }
 
-            // 3) Update MANIFEST (fsync file → rename → fsync dir)
+            // 3) Update MANIFEST (fsync file → rename → fsync dir) with timeout
             try {
-                manifest.updateAfterSnapshot(
-                        snapshotPath.getFileName().toString(),
-                        closedSegment,
-                        newOpenWal
-                );
+                updateManifestWithTimeout(snapshotPath.getFileName().toString(), closedSegment, newOpenWal, 30);
             } catch (Exception e) {
-                logger.log(Level.WARNING, "[Coordinator] Manifest update failed, but snapshot was written successfully", e);
+                logger.log(Level.WARNING, "[Coordinator] Manifest update failed or timed out, but snapshot was written successfully", e);
                 // Snapshot is already written, so we can continue
             }
 
@@ -627,8 +633,9 @@ public class TestStatsStore {
                 }
             }
 
-            logger.info(String.format("[Coordinator] Snapshot complete: %d tests, closed=%s, new=%s",
-                    statsMap.size(), closedSegment != null ? closedSegment : "none", newOpenWal));
+            long totalTime = System.currentTimeMillis() - startTime;
+            logger.info(String.format("[Coordinator] Snapshot complete: %d tests, closed=%s, new=%s (took %dms)",
+                    statsMap.size(), closedSegment != null ? closedSegment : "none", newOpenWal, totalTime));
 
         } catch (Throwable t) {
             logger.log(Level.SEVERE, "[Coordinator] Snapshot coordination failed", t);
@@ -637,6 +644,58 @@ public class TestStatsStore {
                 logger.info("[Coordinator] Snapshot file was written successfully despite coordination failure");
             }
             // Keep going; we'll try again next tick
+        }
+    }
+
+    /**
+     * Writes snapshot with timeout protection.
+     */
+    private Path writeSnapshotWithTimeout(int timeoutSeconds) {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Path> future = executor.submit(this::writeSnapshotInternal);
+            return future.get(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            logger.warning(String.format("[Coordinator] Snapshot write timed out after %d seconds", timeoutSeconds));
+            return null;
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "[Coordinator] Snapshot write failed", e);
+            return null;
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * Rotates WAL with timeout protection.
+     */
+    private String rotateWALWithTimeout(int timeoutSeconds) throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> future = executor.submit(() -> walWriter.rotateNow());
+            return future.get(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new IOException(String.format("WAL rotation timed out after %d seconds", timeoutSeconds));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * Updates MANIFEST with timeout protection.
+     */
+    private void updateManifestWithTimeout(String snapshotName, String closedSegment, String newOpenWal, int timeoutSeconds) throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Void> future = executor.submit(() -> {
+                manifest.updateAfterSnapshot(snapshotName, closedSegment, newOpenWal);
+                return null;
+            });
+            future.get(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new IOException(String.format("MANIFEST update timed out after %d seconds", timeoutSeconds));
+        } finally {
+            executor.shutdownNow();
         }
     }
 

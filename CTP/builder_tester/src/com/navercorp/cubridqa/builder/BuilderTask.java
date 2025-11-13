@@ -1656,14 +1656,68 @@ public class BuilderTask {
             return result;
                 
         } catch (Exception e) {
-            taskLogger.log(Level.SEVERE, "Failed to test commit " + commit + 
-                      " with test " + testPath + " on " + workerIp, e);
+            // Determine if this is a network/communication failure that should trigger circuit breaker
+            boolean isNetworkFailure = isNetworkError(e);
+
+            if (isNetworkFailure) {
+                // Network failure - mark node as failed for circuit breaker
+                String nodeId = workerIp.contains(":") ? workerIp : workerIp + ":8089";
+                if (workloadDistributor != null) {
+                    workloadDistributor.markNodeFailed(nodeId, e.getClass().getSimpleName() + ": " + e.getMessage());
+                }
+                taskLogger.log(Level.SEVERE, "Network failure testing commit " + commit +
+                          " with test " + testPath + " on " + workerIp + " (node marked as failed)", e);
+            } else {
+                // Other failure (test execution error, not network issue)
+                taskLogger.log(Level.SEVERE, "Failed to test commit " + commit +
+                          " with test " + testPath + " on " + workerIp, e);
+            }
+
             return new JSONObject()
                 .put("commit", commit)
                 .put("test", testPath)
                 .put("status", "error")
                 .put("message", e.getMessage());
         }
+    }
+
+    /**
+     * Determines if an exception indicates a network/communication failure.
+     * Used to trigger circuit breaker for unreachable nodes.
+     */
+    private boolean isNetworkError(Exception e) {
+        if (e == null) return false;
+
+        // Check exception types that indicate network issues
+        if (e instanceof java.net.SocketTimeoutException) return true;
+        if (e instanceof java.net.ConnectException) return true;
+        if (e instanceof java.net.UnknownHostException) return true;
+        if (e instanceof java.net.NoRouteToHostException) return true;
+        if (e instanceof java.net.SocketException) return true;
+        if (e instanceof java.io.IOException) {
+            String msg = e.getMessage();
+            if (msg != null) {
+                msg = msg.toLowerCase();
+                // Check for common network error messages
+                if (msg.contains("connection refused") ||
+                    msg.contains("connection reset") ||
+                    msg.contains("network is unreachable") ||
+                    msg.contains("connection timed out") ||
+                    msg.contains("no route to host") ||
+                    msg.contains("connection aborted") ||
+                    msg.contains("broken pipe")) {
+                    return true;
+                }
+            }
+        }
+
+        // Check cause chain for network errors
+        Throwable cause = e.getCause();
+        if (cause instanceof Exception) {
+            return isNetworkError((Exception) cause);
+        }
+
+        return false;
     }
     
     private boolean isLocalTester(String ip) {

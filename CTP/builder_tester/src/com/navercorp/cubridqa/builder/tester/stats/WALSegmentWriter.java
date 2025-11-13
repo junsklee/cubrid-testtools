@@ -357,7 +357,7 @@ public class WALSegmentWriter {
      *
      * <p>CRITICAL: Flush order must be:
      * 1. writer.flush() - flush buffered data to underlying stream
-     * 2. channel.force(true) - fsync file data and metadata
+     * 2. channel.force(true) - fsync file data and metadata (with timeout protection)
      * 3. close() - close all streams
      */
     private void closeCurrentSegment() throws IOException {
@@ -365,10 +365,41 @@ public class WALSegmentWriter {
             // Step 1: Flush writer buffers
             currentWriter.flush();
 
-            // Step 2: Fsync file data and metadata (ensures durability)
+            // Step 2: Fsync file data and metadata with timeout protection
             if (currentFileStream != null) {
-                try (FileChannel channel = currentFileStream.getChannel()) {
-                    channel.force(true); // fsync data + metadata
+                try {
+                    FileChannel channel = currentFileStream.getChannel();
+
+                    // Wrap fsync in timeout (30 seconds max to prevent indefinite hang)
+                    java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+                    try {
+                        java.util.concurrent.Future<Void> future = executor.submit(() -> {
+                            try {
+                                channel.force(true); // fsync data + metadata
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                            return null;
+                        });
+
+                        // Wait up to 30 seconds for fsync to complete
+                        future.get(30, java.util.concurrent.TimeUnit.SECONDS);
+
+                    } catch (java.util.concurrent.TimeoutException e) {
+                        logger.log(Level.WARNING, "WAL fsync timed out after 30 seconds (possible NFS or slow disk). " +
+                                "Segment may not be durable: " + currentSegmentName, e);
+                        // Continue anyway - don't block forever
+                    } catch (Exception e) {
+                        logger.log(Level.WARNING, "Error during WAL fsync for segment: " + currentSegmentName, e);
+                        // Continue anyway - fsync is best-effort
+                    } finally {
+                        executor.shutdownNow();
+                    }
+
+                    channel.close();
+                } catch (Exception e) {
+                    logger.log(Level.WARNING, "Error closing WAL segment channel: " + currentSegmentName, e);
+                    // Continue with stream close
                 }
             }
 
