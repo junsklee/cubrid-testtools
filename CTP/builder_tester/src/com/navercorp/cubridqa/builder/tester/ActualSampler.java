@@ -7,8 +7,13 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -23,7 +28,7 @@ import java.util.logging.Logger;
  */
 public class ActualSampler {
     private static final Logger logger = Logger.getLogger(ActualSampler.class.getName());
-    private static final String FORMAT = "{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}";
+    private static final String FORMAT = "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}";
     private static final double BYTES_PER_MB = 1024d * 1024d;
     private static final long SAMPLE_TIMEOUT_MS = 2000; // 2 second timeout
 
@@ -34,13 +39,26 @@ public class ActualSampler {
     private long lastWarningTime = 0;
     private static final long WARNING_THROTTLE_MS = 60000; // Warn once per minute
 
+    // Delta tracking state for I/O rate calculation (thread-safe)
+    private final ConcurrentHashMap<String, ContainerSample> previousSamples = new ConcurrentHashMap<>();
+    private final long minIntervalMs;
+    private final long cacheTtlMs;
+    private static final int MAX_CACHED_CONTAINERS = 100;
+
     public ActualSampler(BuilderConfig config) {
         this.config = config;
         // Use reflection to access config properties since BuilderConfig doesn't expose them
         this.enabled = Boolean.parseBoolean(getConfigProperty(config, "actual_sampling_enabled", "true"));
         this.containerPattern = getConfigProperty(config, "test_container_pattern", "cubrid-test-");
-        logger.log(Level.INFO, "ActualSampler initialized: enabled={0}, containerPattern=''{1}''",
-                new Object[]{enabled, containerPattern});
+
+        // Delta tracking configuration
+        this.minIntervalMs = Long.parseLong(getConfigProperty(config, "actual_sampling_min_interval_ms", "500"));
+        long cacheTtlSeconds = Long.parseLong(getConfigProperty(config, "actual_sampling_cache_ttl_seconds", "60"));
+        this.cacheTtlMs = cacheTtlSeconds * 1000L;
+
+        logger.log(Level.INFO,
+                "ActualSampler initialized: enabled={0}, containerPattern=''{1}'', minInterval={2}ms, cacheTTL={3}s",
+                new Object[]{enabled, containerPattern, minIntervalMs, cacheTtlSeconds});
     }
 
     /**
@@ -161,16 +179,19 @@ public class ActualSampler {
 
     /**
      * Aggregates metrics from all running containers.
+     * Uses delta tracking to calculate I/O and network rates.
      */
     private UtilizationSnapshot aggregateContainerMetrics(List<String> containers)
             throws IOException, InterruptedException {
 
         double totalCpuPercent = 0.0;
         long totalMemBytes = 0;
-        long totalNetRxBytes = 0;
-        long totalNetTxBytes = 0;
-        long totalBlockReadBytes = 0;
-        long totalBlockWriteBytes = 0;
+        long totalIoReadBytesPerSec = 0;
+        long totalIoWriteBytesPerSec = 0;
+        long totalNetBytesPerSec = 0;
+
+        // Track active containers for cleanup
+        Set<String> activeContainers = new HashSet<>(containers);
 
         // Sample all containers in a single docker stats call
         List<String> command = new ArrayList<>();
@@ -194,14 +215,26 @@ public class ActualSampler {
                     continue;
                 }
 
-                Sample sample = parseSample(line);
+                // Parse line format: Name|CPU%|MemUsage|NetIO|BlockIO
+                String[] parts = line.split("\\|", 2);
+                if (parts.length < 2) {
+                    continue;
+                }
+
+                String containerName = parts[0].trim();
+                String statsLine = parts[1];
+
+                Sample sample = parseSample(containerName, statsLine);
                 if (sample != null) {
+                    // Aggregate instant metrics
                     totalCpuPercent += sample.cpuPercent;
                     totalMemBytes += sample.memUsageBytes;
-                    totalNetRxBytes += sample.netRxBytes;
-                    totalNetTxBytes += sample.netTxBytes;
-                    totalBlockReadBytes += sample.blockReadBytes;
-                    totalBlockWriteBytes += sample.blockWriteBytes;
+
+                    // Calculate I/O rates using delta tracking
+                    IoRates rates = calculateIoRates(containerName, sample);
+                    totalIoReadBytesPerSec += rates.ioReadBytesPerSec;
+                    totalIoWriteBytesPerSec += rates.ioWriteBytesPerSec;
+                    totalNetBytesPerSec += rates.netBytesPerSec;
                 }
             }
         }
@@ -217,38 +250,155 @@ public class ActualSampler {
             throw new IOException("docker stats failed with exit code: " + exitCode);
         }
 
+        // Cleanup stale cache entries
+        cleanupStaleEntries(activeContainers);
+
         // Convert aggregated values to canonical units
         // CPU: percentage to millicores (assuming percentage is per-core, e.g., 150% = 1.5 cores)
         int cpuMillicores = (int) (totalCpuPercent * 10.0);
 
-        // Network and block I/O are cumulative totals since container start
-        // For rate calculation, we'd need to track deltas over time
-        // For now, return zeros for I/O rates as we don't have delta tracking
-        // TODO: Implement delta tracking for I/O rates between samples
-        long ioReadBytesPerSec = 0;
-        long ioWriteBytesPerSec = 0;
-        long netBytesPerSec = 0;
-        long iops = 0;
+        // IOPS: estimate based on I/O bytes and typical block size (4KB)
+        // This is a rough approximation - more accurate IOPS would require kernel-level metrics
+        long iops = (totalIoReadBytesPerSec + totalIoWriteBytesPerSec) / 4096L;
 
-        logger.log(Level.FINE, "Sampled {0} containers: cpu={1}mCPU, mem={2}B",
-                new Object[]{containers.size(), cpuMillicores, totalMemBytes});
+        logger.log(Level.FINE,
+                "Sampled {0} containers: cpu={1}mCPU, mem={2}B, ioRead={3}B/s, ioWrite={4}B/s, net={5}B/s, iops={6}",
+                new Object[]{containers.size(), cpuMillicores, totalMemBytes,
+                        totalIoReadBytesPerSec, totalIoWriteBytesPerSec, totalNetBytesPerSec, iops});
 
         return UtilizationSnapshot.actual(
                 cpuMillicores,
                 totalMemBytes,
-                0, // Total I/O bytes per sec (not available without delta tracking)
+                totalIoReadBytesPerSec + totalIoWriteBytesPerSec, // Total I/O bytes per sec
                 iops,
-                netBytesPerSec,
-                ioReadBytesPerSec,
-                ioWriteBytesPerSec
+                totalNetBytesPerSec,
+                totalIoReadBytesPerSec,
+                totalIoWriteBytesPerSec
         );
     }
 
     /**
-     * Parses a docker stats output line.
-     * Format: CPU%|MemUsage|NetIO|BlockIO
+     * Calculates I/O rates for a container using delta tracking.
+     *
+     * @param containerName Name of the container
+     * @param current Current sample from docker stats
+     * @return IoRates with calculated bytes/sec, or ZERO if no previous sample exists
      */
-    private Sample parseSample(String line) {
+    private IoRates calculateIoRates(String containerName, Sample current) {
+        long now = System.currentTimeMillis();
+        ContainerSample prev = previousSamples.get(containerName);
+
+        // No baseline yet - store current sample and return zeros
+        if (prev == null) {
+            ContainerSample newSample = new ContainerSample(
+                    containerName, now,
+                    current.blockReadBytes, current.blockWriteBytes,
+                    current.netRxBytes, current.netTxBytes);
+            previousSamples.put(containerName, newSample);
+            logger.log(Level.FINE, "No previous sample for container {0}, storing baseline", containerName);
+            return IoRates.ZERO;
+        }
+
+        long timeDelta = now - prev.timestampMs;
+
+        // Too soon after last sample - wait for more time to elapse
+        if (timeDelta < minIntervalMs) {
+            logger.log(Level.FINE,
+                    "Time delta too small for container {0}: {1}ms < {2}ms",
+                    new Object[]{containerName, timeDelta, minIntervalMs});
+            return IoRates.ZERO;
+        }
+
+        // Detect container restart - counters decreased (Docker stats reset)
+        if (current.blockReadBytes < prev.blockReadBytes ||
+                current.blockWriteBytes < prev.blockWriteBytes ||
+                current.netRxBytes < prev.netRxBytes ||
+                current.netTxBytes < prev.netTxBytes) {
+            logger.log(Level.INFO,
+                    "Container {0} appears to have restarted (counters decreased), resetting baseline",
+                    containerName);
+            ContainerSample newSample = new ContainerSample(
+                    containerName, now,
+                    current.blockReadBytes, current.blockWriteBytes,
+                    current.netRxBytes, current.netTxBytes);
+            previousSamples.put(containerName, newSample);
+            return IoRates.ZERO;
+        }
+
+        // Calculate deltas
+        long readDelta = current.blockReadBytes - prev.blockReadBytes;
+        long writeDelta = current.blockWriteBytes - prev.blockWriteBytes;
+        long netRxDelta = current.netRxBytes - prev.netRxBytes;
+        long netTxDelta = current.netTxBytes - prev.netTxBytes;
+
+        // Calculate rates (bytes per second)
+        double readBps = (readDelta * 1000.0) / timeDelta;
+        double writeBps = (writeDelta * 1000.0) / timeDelta;
+        double netBps = ((netRxDelta + netTxDelta) * 1000.0) / timeDelta;
+
+        // Update baseline with current sample
+        ContainerSample newSample = new ContainerSample(
+                containerName, now,
+                current.blockReadBytes, current.blockWriteBytes,
+                current.netRxBytes, current.netTxBytes);
+        previousSamples.put(containerName, newSample);
+
+        logger.log(Level.FINE,
+                "Container {0}: I/O rates - read={1}B/s, write={2}B/s, net={3}B/s (delta={4}ms)",
+                new Object[]{containerName, Math.round(readBps), Math.round(writeBps),
+                        Math.round(netBps), timeDelta});
+
+        return new IoRates(readBps, writeBps, netBps);
+    }
+
+    /**
+     * Cleans up stale entries from the sample cache.
+     * Removes containers that no longer exist or entries older than TTL.
+     *
+     * @param activeContainers Set of currently running container names
+     */
+    private void cleanupStaleEntries(Set<String> activeContainers) {
+        long now = System.currentTimeMillis();
+        int sizeBefore = previousSamples.size();
+
+        // Remove entries for containers that no longer exist or are too old
+        previousSamples.entrySet().removeIf(entry -> {
+            boolean containerGone = !activeContainers.contains(entry.getKey());
+            boolean tooOld = (now - entry.getValue().timestampMs) > cacheTtlMs;
+            return containerGone || tooOld;
+        });
+
+        // Safety: cap size to prevent unbounded growth
+        if (previousSamples.size() > MAX_CACHED_CONTAINERS) {
+            logger.log(Level.WARNING,
+                    "Sample cache exceeded max size ({0}), removing oldest entries",
+                    MAX_CACHED_CONTAINERS);
+
+            // Remove oldest entries
+            previousSamples.entrySet().stream()
+                    .sorted(Comparator.comparing(e -> e.getValue().timestampMs))
+                    .limit(previousSamples.size() - MAX_CACHED_CONTAINERS)
+                    .map(Map.Entry::getKey)
+                    .forEach(previousSamples::remove);
+        }
+
+        int sizeAfter = previousSamples.size();
+        if (sizeBefore > sizeAfter) {
+            logger.log(Level.FINE, "Cleaned up {0} stale sample entries ({1} -> {2})",
+                    new Object[]{sizeBefore - sizeAfter, sizeBefore, sizeAfter});
+        }
+    }
+
+    /**
+     * Parses a docker stats output line (without container name prefix).
+     * Format: CPU%|MemUsage|NetIO|BlockIO
+     * Note: Container name is passed separately and already extracted from docker stats output.
+     *
+     * @param containerName Name of the container for this sample
+     * @param line Docker stats output line (CPU%|MemUsage|NetIO|BlockIO)
+     * @return Parsed sample or null if parsing fails
+     */
+    private Sample parseSample(String containerName, String line) {
         try {
             String[] parts = line.split("\\|");
             if (parts.length < 4) {
@@ -260,7 +410,7 @@ public class ActualSampler {
             Pair net = parseIoPair(parts[2]);
             Pair block = parseIoPair(parts[3]);
 
-            return new Sample(cpuPercent, memBytes, net.firstBytes, net.secondBytes,
+            return new Sample(containerName, cpuPercent, memBytes, net.firstBytes, net.secondBytes,
                     block.firstBytes, block.secondBytes);
         } catch (Exception e) {
             logger.log(Level.FINE, "Failed to parse docker stats output ''{0}'': {1}",
@@ -358,6 +508,7 @@ public class ActualSampler {
     }
 
     private static final class Sample {
+        final String containerName;
         final double cpuPercent;
         final long memUsageBytes;
         final long netRxBytes;
@@ -365,8 +516,9 @@ public class ActualSampler {
         final long blockReadBytes;
         final long blockWriteBytes;
 
-        Sample(double cpuPercent, long memUsageBytes, long netRxBytes, long netTxBytes,
+        Sample(String containerName, double cpuPercent, long memUsageBytes, long netRxBytes, long netTxBytes,
                long blockReadBytes, long blockWriteBytes) {
+            this.containerName = containerName;
             this.cpuPercent = Math.max(0d, cpuPercent);
             this.memUsageBytes = Math.max(0L, memUsageBytes);
             this.netRxBytes = Math.max(0L, netRxBytes);
@@ -383,6 +535,46 @@ public class ActualSampler {
         Pair(long firstBytes, long secondBytes) {
             this.firstBytes = Math.max(0L, firstBytes);
             this.secondBytes = Math.max(0L, secondBytes);
+        }
+    }
+
+    /**
+     * Stores a previous container sample for delta calculation.
+     */
+    private static final class ContainerSample {
+        final String containerName;
+        final long timestampMs;
+        final long blockReadBytes;
+        final long blockWriteBytes;
+        final long netRxBytes;
+        final long netTxBytes;
+
+        ContainerSample(String containerName, long timestampMs,
+                       long blockReadBytes, long blockWriteBytes,
+                       long netRxBytes, long netTxBytes) {
+            this.containerName = containerName;
+            this.timestampMs = timestampMs;
+            this.blockReadBytes = blockReadBytes;
+            this.blockWriteBytes = blockWriteBytes;
+            this.netRxBytes = netRxBytes;
+            this.netTxBytes = netTxBytes;
+        }
+    }
+
+    /**
+     * Stores calculated I/O rates for a container.
+     */
+    private static final class IoRates {
+        static final IoRates ZERO = new IoRates(0, 0, 0);
+
+        final long ioReadBytesPerSec;
+        final long ioWriteBytesPerSec;
+        final long netBytesPerSec;
+
+        IoRates(double readBps, double writeBps, double netBps) {
+            this.ioReadBytesPerSec = Math.max(0L, Math.round(readBps));
+            this.ioWriteBytesPerSec = Math.max(0L, Math.round(writeBps));
+            this.netBytesPerSec = Math.max(0L, Math.round(netBps));
         }
     }
 }
