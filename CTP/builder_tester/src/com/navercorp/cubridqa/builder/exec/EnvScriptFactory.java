@@ -22,29 +22,24 @@ public class EnvScriptFactory {
         script.append("    source \"$CTP_HOME/shell/init_path/init.sh\"\n");
         script.append("fi\n\n");
 
-        script.append("# Execute test\n");
-        script.append("set +e\n");
-        script.append("set -x\n\n");
-
         if (customShellScript != null && !customShellScript.isEmpty()) {
-            // Custom script mode: comment out original and inject custom script
-            script.append("# Original test execution (commented out - using custom script):\n");
-            script.append("# sh \"").append(testScript).append("\"\n\n");
-
-            script.append("# Executing custom shell script:\n");
-            script.append("bash << 'CUSTOM_SCRIPT_EOF'\n");
+            // Custom script mode: Replace the test file with custom script contents
+            script.append("# Replacing test file with custom script contents\n");
+            script.append("cat > \"").append(testScript).append("\" << 'CUSTOM_SCRIPT_EOF'\n");
             script.append(customShellScript);
             if (!customShellScript.endsWith("\n")) {
                 script.append("\n");
             }
             script.append("CUSTOM_SCRIPT_EOF\n");
-            script.append("TEST_EXIT_CODE=$?\n");
-        } else {
-            // Standard mode: execute test script normally
-            script.append("sh \"").append(testScript).append("\"\n");
-            script.append("TEST_EXIT_CODE=$?\n");
+            script.append("chmod +x \"").append(testScript).append("\"\n\n");
         }
 
+        // Execute test script normally (whether original or custom)
+        script.append("# Execute test\n");
+        script.append("set +e\n");
+        script.append("set -x\n\n");
+        script.append("sh \"").append(testScript).append("\"\n");
+        script.append("TEST_EXIT_CODE=$?\n");
         script.append("set -e\n\n");
 
         script.append("exit $TEST_EXIT_CODE\n");
@@ -465,28 +460,24 @@ public class EnvScriptFactory {
     private static void appendRunAndCopyResult(StringBuilder script, String testScript, String customShellScript) {
         script.append("# Run test\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
-        script.append("set +e\n");
-        script.append("set -x\n\n");
 
         if (customShellScript != null && !customShellScript.isEmpty()) {
-            // Custom script mode: comment out original and inject custom script
-            script.append("# Original test execution (commented out - using custom script):\n");
-            script.append("# sh ").append(testScript).append("\n\n");
-
-            script.append("# Executing custom shell script:\n");
-            script.append("bash << 'CUSTOM_SCRIPT_EOF'\n");
+            // Custom script mode: Replace the test file with custom script contents
+            script.append("# Replacing test file with custom script contents\n");
+            script.append("cat > \"").append(testScript).append("\" << 'CUSTOM_SCRIPT_EOF'\n");
             script.append(customShellScript);
             if (!customShellScript.endsWith("\n")) {
                 script.append("\n");
             }
             script.append("CUSTOM_SCRIPT_EOF\n");
-            script.append("TEST_EXIT=$?\n");
-        } else {
-            // Standard mode: execute test script normally
-            script.append("sh ").append(testScript).append("\n");
-            script.append("TEST_EXIT=$?\n");
+            script.append("chmod +x \"").append(testScript).append("\"\n\n");
         }
 
+        // Execute test script normally (whether original or custom)
+        script.append("set +e\n");
+        script.append("set -x\n\n");
+        script.append("sh ").append(testScript).append("\n");
+        script.append("TEST_EXIT=$?\n");
         script.append("set -e\n\n");
 
         String resultBase = testScript.endsWith(".sh") ?
