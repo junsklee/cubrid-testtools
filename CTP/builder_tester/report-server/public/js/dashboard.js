@@ -303,6 +303,30 @@
                 if (customSection) customSection.style.display = 'block';
             }
 
+            // Enable/disable Test Cases section based on mode
+            const testsInput = document.getElementById('testsInput');
+            const testsInputLabel = document.getElementById('testsInputLabel');
+            if (mode === 'custom') {
+                // Disable Test Cases in Custom Script mode
+                testsInput.disabled = true;
+                testsInput.style.opacity = '0.5';
+                testsInput.style.cursor = 'not-allowed';
+                testsInput.placeholder = 'Test cases are configured in Custom Script section above';
+                testsInput.value = '';
+                if (testsInputLabel) {
+                    testsInputLabel.style.opacity = '0.5';
+                }
+            } else {
+                // Enable Test Cases in other modes
+                testsInput.disabled = false;
+                testsInput.style.opacity = '1';
+                testsInput.style.cursor = 'text';
+                testsInput.placeholder = 'Enter test case paths (one per line)\nExample:\nshell/_05_addition/cubridsus1961/cases/cubridsus1961.sh';
+                if (testsInputLabel) {
+                    testsInputLabel.style.opacity = '1';
+                }
+            }
+
             updateCommitCount();
             const modeLabelMap = {
                 select: 'Browse & Select',
