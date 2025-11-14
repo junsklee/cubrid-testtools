@@ -953,3 +953,78 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* Info Icon Tooltip Styles */
+        .info-icon {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            line-height: 18px;
+            text-align: center;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: bold;
+            cursor: help;
+            margin-left: 6px;
+            position: relative;
+            transition: all 0.2s ease;
+            vertical-align: middle;
+        }
+
+        .info-icon:hover {
+            background: var(--primary);
+            color: var(--text-primary);
+            transform: scale(1.1);
+        }
+
+        .info-icon::after {
+            content: attr(title);
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 8px);
+            transform: translateX(-50%);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: normal;
+            white-space: pre-wrap;
+            max-width: 300px;
+            width: max-content;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s ease;
+            pointer-events: none;
+            z-index: 1000;
+            line-height: 1.4;
+        }
+
+        .info-icon:hover::after {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Tooltip arrow */
+        .info-icon::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 2px);
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: var(--bg-secondary);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s ease;
+            z-index: 1001;
+        }
+
+        .info-icon:hover::before {
+            opacity: 1;
+            visibility: visible;
+        }

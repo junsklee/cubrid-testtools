@@ -190,11 +190,12 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
 
         // Create simplified test script (no CUBRID extraction needed!)
         String dockerScript = EnvScriptFactory.createDockerOptimizedScript(
-            request.getTestScript(), 
-            request.getTestName(), 
+            request.getTestScript(),
+            request.getTestName(),
             request.getExpectedBuildVersion(),
             relativeTestDir,
-            ctpHomeInContainer
+            ctpHomeInContainer,
+            request.getCustomShellScript()
         );
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());

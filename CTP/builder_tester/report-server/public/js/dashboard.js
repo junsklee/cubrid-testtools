@@ -271,43 +271,44 @@
         // Set commit mode (called from HTML onclick)
         function setCommitMode(mode) {
             commitMode = mode;
-            
+
             // Update button states
             document.getElementById('selectModeBtn').classList.remove('active');
             document.getElementById('manualModeBtn').classList.remove('active');
-            
+            const prBtn = document.getElementById('prModeBtn');
+            if (prBtn) prBtn.classList.remove('active');
+            const customBtn = document.getElementById('customScriptModeBtn');
+            if (customBtn) customBtn.classList.remove('active');
+
+            // Hide all sections first
+            document.getElementById('selectCommits').style.display = 'none';
+            document.getElementById('manualCommits').style.display = 'none';
+            const prSection = document.getElementById('prCommits');
+            if (prSection) prSection.style.display = 'none';
+            const customSection = document.getElementById('customScriptCommits');
+            if (customSection) customSection.style.display = 'none';
+
+            // Show selected section and activate button
             if (mode === 'select') {
                 document.getElementById('selectModeBtn').classList.add('active');
                 document.getElementById('selectCommits').style.display = 'block';
-                document.getElementById('manualCommits').style.display = 'none';
-                const prSection = document.getElementById('prCommits');
-                if (prSection) prSection.style.display = 'none';
-                const prBtn = document.getElementById('prModeBtn');
-                if (prBtn) prBtn.classList.remove('active');
-            } else {
-                document.getElementById('selectCommits').style.display = 'none';
-                const prSection = document.getElementById('prCommits');
-                if (mode === 'manual') {
-                    document.getElementById('manualModeBtn').classList.add('active');
-                    document.getElementById('manualCommits').style.display = 'block';
-                    if (prSection) prSection.style.display = 'none';
-                    const prBtn = document.getElementById('prModeBtn');
-                    if (prBtn) prBtn.classList.remove('active');
-                } else if (mode === 'pr') {
-                    const manualBtn = document.getElementById('manualModeBtn');
-                    if (manualBtn) manualBtn.classList.remove('active');
-                    document.getElementById('manualCommits').style.display = 'none';
-                    if (prSection) prSection.style.display = 'block';
-                    const prBtn = document.getElementById('prModeBtn');
-                    if (prBtn) prBtn.classList.add('active');
-                }
+            } else if (mode === 'manual') {
+                document.getElementById('manualModeBtn').classList.add('active');
+                document.getElementById('manualCommits').style.display = 'block';
+            } else if (mode === 'pr') {
+                if (prBtn) prBtn.classList.add('active');
+                if (prSection) prSection.style.display = 'block';
+            } else if (mode === 'custom') {
+                if (customBtn) customBtn.classList.add('active');
+                if (customSection) customSection.style.display = 'block';
             }
-            
+
             updateCommitCount();
             const modeLabelMap = {
                 select: 'Browse & Select',
                 manual: 'Manual Input',
-                pr: 'PR Number'
+                pr: 'PR Number',
+                custom: 'Custom Script'
             };
             showToast(`Switched to ${modeLabelMap[mode] || mode} mode`, 'info');
         }
@@ -316,7 +317,7 @@
         function toggleAdvanced() {
             const panel = document.getElementById('advancedPanel');
             const icon = document.querySelector('.toggle-icon');
-            
+
             if (panel.style.display === 'none' || !panel.style.display) {
                 panel.style.display = 'block';
                 icon.textContent = '▲';
@@ -327,6 +328,7 @@
                 showToast('Advanced configuration collapsed', 'info');
             }
         }
+
 
         // Load sample tests
         function loadSampleTests() {
@@ -464,16 +466,54 @@
                     const prVal = (document.getElementById('prNumberInput').value || '').trim();
                     if (!prVal || !/^\d+$/.test(prVal)) throw new Error('Please enter a valid PR number');
                     prNumberPayload = prVal;
+                } else if (commitMode === 'custom') {
+                    // Custom script mode - handle commit/PR input
+                    const customCommitInput = (document.getElementById('customScriptCommitInput').value || '').trim();
+                    if (customCommitInput) {
+                        // Check if it's a PR reference (e.g., "pr:6402" or just "6402")
+                        const prMatch = customCommitInput.match(/^(?:pr:)?(\d+)$/i);
+                        if (prMatch) {
+                            prNumberPayload = prMatch[1];
+                        } else {
+                            // Treat as commit SHA
+                            payloadCommits = [customCommitInput];
+                        }
+                    } else {
+                        // No commit specified - will use latest from develop
+                        // Need at least one commit, so we'll use a placeholder that builder can resolve
+                        payloadCommits = ['develop'];
+                    }
                 }
-                
+
+                // Check if custom script mode is enabled
+                let customScriptContent = null;
+                let customScriptTestPath = null;
+
                 // Gather tests
                 const testsInput = document.getElementById('testsInput').value;
-                const tests = testsInput.split('\n')
+                let tests = testsInput.split('\n')
                     .map(s => s.trim())
                     .filter(s => s.length > 0);
-                
-                if (tests.length === 0) {
-                    throw new Error('Please enter at least one test case');
+
+                if (commitMode === 'custom') {
+                    customScriptContent = document.getElementById('customScriptContent').value.trim();
+                    customScriptTestPath = document.getElementById('customScriptTestPath').value.trim();
+
+                    if (!customScriptContent) {
+                        throw new Error('Custom script content is required in Custom Script mode');
+                    }
+
+                    // If custom test path is provided, use it; otherwise use placeholder
+                    if (customScriptTestPath) {
+                        tests = [customScriptTestPath];
+                    } else {
+                        // No test path provided - use placeholder for custom script only mode
+                        tests = ['custom_script_test'];
+                    }
+                } else {
+                    if (tests.length === 0) {
+                        throw new Error('Please enter at least one test case');
+                    }
                 }
                 
                 // Validate callback URL
@@ -497,7 +537,15 @@
                 } else {
                     payload.commits = payloadCommits;
                 }
-                
+
+                // Add custom script if in custom mode
+                if (commitMode === 'custom' && customScriptContent) {
+                    payload.customShellScript = customScriptContent;
+                    if (customScriptTestPath) {
+                        payload.customScriptTestPath = customScriptTestPath;
+                    }
+                }
+
                 // Add environment variables if provided
                 const envVars = document.getElementById('envVars').value.trim();
                 if (envVars) {

@@ -137,11 +137,12 @@ public class StandardDockerExecutor implements ExecutorStrategy {
 
         // Create test execution script for Docker (working directly from the overlay checkout)
         String dockerScript = EnvScriptFactory.createDockerScript(
-            request.getTestScript(), 
-            request.getTestName(), 
-            request.getExpectedBuildVersion(), 
+            request.getTestScript(),
+            request.getTestName(),
+            request.getExpectedBuildVersion(),
             relativeTestDir,
-            ctpHomeInContainer
+            ctpHomeInContainer,
+            request.getCustomShellScript()
         );
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());

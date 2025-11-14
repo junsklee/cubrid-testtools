@@ -24,7 +24,8 @@ public class TestRequest {
     private final int attemptNumber;
     private final String buildType;
     private final PredictedDemand predictedDemand;  // Resource predictions for enforcement
-    
+    private final String customShellScript;  // Custom script contents to execute instead of test
+
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
         this.buildPackage = json.getString("buildPackage");
@@ -44,6 +45,7 @@ public class TestRequest {
         this.containerName = json.optString("containerName", null);
         this.attemptNumber = json.optInt("attemptNumber", 1);
         this.buildType = json.optString("buildType", "debug");
+        this.customShellScript = json.optString("customShellScript", null);
 
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
@@ -76,4 +78,6 @@ public class TestRequest {
     public int getAttemptNumber() { return attemptNumber; }
     public String getBuildType() { return buildType; }
     public PredictedDemand getPredictedDemand() { return predictedDemand; }
+    public String getCustomShellScript() { return customShellScript; }
+    public boolean hasCustomShellScript() { return customShellScript != null && !customShellScript.isEmpty(); }
 }

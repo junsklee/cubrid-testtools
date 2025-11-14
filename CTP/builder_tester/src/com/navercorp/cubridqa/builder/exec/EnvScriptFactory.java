@@ -4,7 +4,7 @@ public class EnvScriptFactory {
 
     public static final String TESTCASE_MOUNT = "/workspace/testcases";
 
-    public static String createDirectWrapperScript(String testDir, String testScript, String testName, String ctpHome) {
+    public static String createDirectWrapperScript(String testDir, String testScript, String testName, String ctpHome, String customShellScript) {
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
         script.append("set -e\n\n");
@@ -25,8 +25,26 @@ public class EnvScriptFactory {
         script.append("# Execute test\n");
         script.append("set +e\n");
         script.append("set -x\n\n");
-        script.append("sh \"").append(testScript).append("\"\n");
-        script.append("TEST_EXIT_CODE=$?\n");
+
+        if (customShellScript != null && !customShellScript.isEmpty()) {
+            // Custom script mode: comment out original and inject custom script
+            script.append("# Original test execution (commented out - using custom script):\n");
+            script.append("# sh \"").append(testScript).append("\"\n\n");
+
+            script.append("# Executing custom shell script:\n");
+            script.append("bash << 'CUSTOM_SCRIPT_EOF'\n");
+            script.append(customShellScript);
+            if (!customShellScript.endsWith("\n")) {
+                script.append("\n");
+            }
+            script.append("CUSTOM_SCRIPT_EOF\n");
+            script.append("TEST_EXIT_CODE=$?\n");
+        } else {
+            // Standard mode: execute test script normally
+            script.append("sh \"").append(testScript).append("\"\n");
+            script.append("TEST_EXIT_CODE=$?\n");
+        }
+
         script.append("set -e\n\n");
 
         script.append("exit $TEST_EXIT_CODE\n");
@@ -47,11 +65,11 @@ public class EnvScriptFactory {
         return sanitized.equals(".") ? "" : sanitized;
     }
 
-    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome) {
-        return createDockerScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT);
+    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String customShellScript) {
+        return createDockerScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT, customShellScript);
     }
 
-    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint) {
+    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint, String customShellScript) {
         String normalizedRelativeDir = normalizeRelativeDir(relativeTestDir);
         String initPath = ctpHome + "/shell/init_path";
         String testcaseRoot = (testcaseMountPoint == null || testcaseMountPoint.trim().isEmpty())
@@ -267,15 +285,15 @@ public class EnvScriptFactory {
             script.append("fi\n\n");
         }
 
-        appendRunAndCopyResult(script, testScript);
+        appendRunAndCopyResult(script, testScript, customShellScript);
         return script.toString();
     }
 
-    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome) {
-        return createDockerOptimizedScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT);
+    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String customShellScript) {
+        return createDockerOptimizedScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT, customShellScript);
     }
 
-    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint) {
+    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint, String customShellScript) {
         String normalizedRelativeDir = normalizeRelativeDir(relativeTestDir);
         String initPath = ctpHome + "/shell/init_path";
         String testcaseRoot = (testcaseMountPoint == null || testcaseMountPoint.trim().isEmpty())
@@ -440,17 +458,35 @@ public class EnvScriptFactory {
         script.append("  cp \"$CUBRID/databases/databases.txt.sample\" \"$CUBRID_DATABASES/databases.txt.sample\"\n");
         script.append("fi\n\n");
 
-        appendRunAndCopyResult(script, testScript);
+        appendRunAndCopyResult(script, testScript, customShellScript);
         return script.toString();
     }
 
-    private static void appendRunAndCopyResult(StringBuilder script, String testScript) {
+    private static void appendRunAndCopyResult(StringBuilder script, String testScript, String customShellScript) {
         script.append("# Run test\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
         script.append("set +e\n");
         script.append("set -x\n\n");
-        script.append("sh ").append(testScript).append("\n");
-        script.append("TEST_EXIT=$?\n");
+
+        if (customShellScript != null && !customShellScript.isEmpty()) {
+            // Custom script mode: comment out original and inject custom script
+            script.append("# Original test execution (commented out - using custom script):\n");
+            script.append("# sh ").append(testScript).append("\n\n");
+
+            script.append("# Executing custom shell script:\n");
+            script.append("bash << 'CUSTOM_SCRIPT_EOF'\n");
+            script.append(customShellScript);
+            if (!customShellScript.endsWith("\n")) {
+                script.append("\n");
+            }
+            script.append("CUSTOM_SCRIPT_EOF\n");
+            script.append("TEST_EXIT=$?\n");
+        } else {
+            // Standard mode: execute test script normally
+            script.append("sh ").append(testScript).append("\n");
+            script.append("TEST_EXIT=$?\n");
+        }
+
         script.append("set -e\n\n");
 
         String resultBase = testScript.endsWith(".sh") ?

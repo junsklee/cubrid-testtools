@@ -491,8 +491,25 @@ public class Builder {
         if (!hasCommits && !hasPrNumber) {
             throw new IllegalArgumentException("Request must contain non-empty 'commits' array or a valid 'prNumber'");
         }
-        if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
-            throw new IllegalArgumentException("Request must contain non-empty 'tests' array");
+
+        // Check for custom shell script - if provided, tests can be empty
+        boolean hasCustomScript = request.has("customShellScript") &&
+                                  !request.getString("customShellScript").trim().isEmpty();
+
+        if (!hasCustomScript) {
+            // Standard mode - tests array is required
+            if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
+                throw new IllegalArgumentException("Request must contain non-empty 'tests' array");
+            }
+        } else {
+            // Custom script mode - tests can be empty or missing
+            if (!request.has("tests")) {
+                // Create placeholder test if tests array is missing
+                request.put("tests", new JSONArray().put("custom_script_test"));
+            } else if (request.getJSONArray("tests").length() == 0) {
+                // Create placeholder test if tests array is empty
+                request.put("tests", new JSONArray().put("custom_script_test"));
+            }
         }
         
         // Support both workerIp (singular) and workerIps (array) for backward compatibility

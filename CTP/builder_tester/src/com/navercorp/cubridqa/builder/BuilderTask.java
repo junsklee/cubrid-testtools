@@ -1244,11 +1244,32 @@ public class BuilderTask {
                 }
             }
             
+            // Extract custom script from build request if present
+            String customShellScript = request.optString("customShellScript", null);
+            String customScriptTestPath = request.optString("customScriptTestPath", null);
+
             // Prepare test request
-            String testDir = config.getShellTcDir() + "/" + 
-                           testPath.substring(0, testPath.lastIndexOf("/"));
-            String testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
-            String testName = testScript.replace(".sh", "");
+            String testDir, testScript, testName;
+
+            // Check if this is a custom script placeholder
+            if (testPath.equals("custom_script_test")) {
+                // Custom script without test path - use temporary directory
+                testDir = "/tmp/custom_test_execution";
+                testScript = "custom_script.sh";
+                testName = "custom_script_" + System.currentTimeMillis();
+            } else if (customShellScript != null && customScriptTestPath != null && !customScriptTestPath.isEmpty()) {
+                // Custom script with test path provided - use that for environment setup
+                testDir = config.getShellTcDir() + "/" +
+                         customScriptTestPath.substring(0, customScriptTestPath.lastIndexOf("/"));
+                testScript = customScriptTestPath.substring(customScriptTestPath.lastIndexOf("/") + 1);
+                testName = testScript.replace(".sh", "");
+            } else {
+                // Standard mode - extract from testPath
+                testDir = config.getShellTcDir() + "/" +
+                         testPath.substring(0, testPath.lastIndexOf("/"));
+                testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
+                testName = testScript.replace(".sh", "");
+            }
             
             // Determine if this is a local or remote tester
             String buildPackageRef;
@@ -1329,7 +1350,12 @@ public class BuilderTask {
             if (requestId != null) {
                 testRequest.put("requestId", requestId);
             }
-            
+
+            // Add custom shell script if provided
+            if (customShellScript != null && !customShellScript.isEmpty()) {
+                testRequest.put("customShellScript", customShellScript);
+            }
+
             // Persist test request for diagnostics
             try {
                 if (requestId != null && config.isRequestGroupingEnabled()) {

@@ -53,6 +53,9 @@
                     <button id="prModeBtn" class="mode-btn" onclick="setCommitMode('pr')">
                         PR Number
                     </button>
+                    <button id="customScriptModeBtn" class="mode-btn" onclick="setCommitMode('custom')">
+                        Custom Script
+                    </button>
                 </div>
 
                 <div id="selectCommits" class="commit-section">
@@ -70,13 +73,44 @@
                 </div>
 
                 <div id="manualCommits" class="commit-section" style="display: none;">
-                    <textarea class="form-textarea" id="manualCommitInput" 
+                    <textarea class="form-textarea" id="manualCommitInput"
                         placeholder="Enter commit SHAs (one per line or comma-separated)&#10;Example:&#10;568fbb5370f4f1b6149218221d7fe4f9daa59168&#10;b534d0a4f28921c8e590f68f606049e1b643e252"></textarea>
                 </div>
 
                 <div id="prCommits" class="commit-section" style="display: none;">
                     <input type="number" class="form-input" id="prNumberInput" min="1" placeholder="Enter PR number (e.g., 6402)">
                     <p class="help-text" style="margin-top: 0.5rem; color: var(--text-secondary);">Build the PR head commit resolved against develop baseline.</p>
+                </div>
+
+                <div id="customScriptCommits" class="commit-section" style="display: none;">
+                    <div style="margin-bottom: 1rem;">
+                        <label class="form-label">
+                            Commit SHA or PR Number <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
+                            <span class="info-icon" title="If empty, uses the latest commit from the 'develop' branch.">ⓘ</span>
+                        </label>
+                        <input type="text" class="form-input" id="customScriptCommitInput"
+                            placeholder="Enter commit SHA or PR number (e.g., 6ea587e or pr:6402)">
+                    </div>
+
+                    <div style="margin-bottom: 1rem;">
+                        <label class="form-label">
+                                Test Case Path <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
+                                <span class="info-icon" title="If provided: Sets up the test environment (CUBRID, test directory, databases) from this test case, then executes your custom script instead of the test's .sh file.&#10;&#10; Fill out this section if your custom script requires on other files (e.g, .answer, .sql, etc.) within the test case directory.">ⓘ</span>
+                        </label>
+                        <input type="text" class="form-input" id="customScriptTestPath"
+                            placeholder="shell/_36_damson/cbrd_22637/cases/cbrd_22637.sh">
+                    </div>
+
+                    <div>
+                        <label class="form-label">
+                            Custom Shell Script Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
+                            <span class="info-icon" title="This script will be executed instead of a standard test. Environment variables (CUBRID, CTP_HOME, PATH, LD_LIBRARY_PATH) will be set up automatically.">ⓘ</span>
+                        </label>
+                        <textarea class="form-textarea" id="customScriptContent"
+                            rows="20"
+                            style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
+                            placeholder="#!/bin/sh&#10;. $init_path/init.sh&#10;init test&#10;&#10;dbname=cbrd_XXXXX&#10;&#10;cubrid_createdb $dbname&#10;# &lt;Test contents here&gt;&#10;&#10;# Check the result&#10;if [condition]&#10;then&#10;       write_ok&#10;else&#10;       write_nok&#10;fi&#10;&#10;cubrid server stop $dbname&#10; cubrid deletedb $dbname&#10;&#10;finish"></textarea>
+                    </div>
                 </div>
 
                 <div class="baseline-info" id="baselineInfo">
@@ -88,7 +122,7 @@
             <!-- Test Cases Section -->
             <div class="form-group">
                 <label class="form-label" for="testsInput">Test Cases</label>
-                <textarea class="form-textarea" id="testsInput" 
+                <textarea class="form-textarea" id="testsInput"
                     placeholder="Enter test case paths (one per line)&#10;Example:&#10;shell/_05_addition/cubridsus1961/cases/cubridsus1961.sh"></textarea>
             </div>
 

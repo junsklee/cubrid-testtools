@@ -140,7 +140,7 @@ public class DirectExecutor implements ExecutorStrategy {
         
         // Create wrapper script
         String wrapperScript = EnvScriptFactory.createDirectWrapperScript(
-            sourceTestDir.toString(), request.getTestScript(), request.getTestName(), ctpHome);
+            sourceTestDir.toString(), request.getTestScript(), request.getTestName(), ctpHome, request.getCustomShellScript());
         File wrapperFile = new File(workDir.toFile(), "test_wrapper.sh");
         Files.write(wrapperFile.toPath(), wrapperScript.getBytes());
         wrapperFile.setExecutable(true);
