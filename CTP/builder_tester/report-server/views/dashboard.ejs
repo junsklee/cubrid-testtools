@@ -95,7 +95,7 @@
                     <div style="margin-bottom: 1rem;">
                         <label class="form-label">
                                 Test Case Path <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
-                                <span class="info-icon" title="If provided: Sets up the test environment (CUBRID, test directory, databases) from this test case, then executes your custom script instead of the test's .sh file.&#10;&#10; Fill out this section if your custom script requires on other files (e.g, .answer, .sql, etc.) within the test case directory.">ⓘ</span>
+                                <span class="info-icon" title="If provided: Changes to the directory containing the test script, then replaces the script’s contents with your custom script before execution.&#10;&#10; Complete this section if your custom script depends on additional files (e.g., .answer, .sql) located in the test case directory.">ⓘ</span>
                         </label>
                         <input type="text" class="form-input" id="customScriptTestPath"
                             placeholder="Enter test case path (e.g., shell/_36_damson/cbrd_22637/cases/cbrd_22637.sh)">
