@@ -6,11 +6,16 @@ import java.util.PriorityQueue;
 import java.util.Set;
 
 /**
- * Two-tier ready queue for test scheduling.
+ * Two-tier ready queue for test scheduling with makespan optimization.
  *
  * <p>Separates tests into "mice" (short tests) and "elephants" (long tests)
  * based on predicted duration threshold. Mice are prioritized using a min-heap
- * by predicted duration with aging boost. Elephants are scored on-demand.</p>
+ * by predicted duration with aging boost (shortest first). Elephants are prioritized
+ * using a max-heap by predicted duration (longest first) to minimize overall makespan.</p>
+ *
+ * <p><b>Key Optimization:</b> Elephants use longest-job-first (LJF) scheduling to ensure
+ * the critical path (longest tests) starts early in parallel execution, minimizing the
+ * time for all tests to complete.</p>
  *
  * <p>Thread-safety: Caller must synchronize access.</p>
  */
@@ -23,8 +28,8 @@ public class ReadyQueue {
     // Mice: Priority queue sorted by (predicted_duration - age_boost)
     private final PriorityQueue<TestInstance> miceQueue;
 
-    // Elephants: Unordered set, scored at assignment time
-    private final Set<TestInstance> elephantsSet;
+    // Elephants: Priority queue sorted by predicted duration (descending - longest first)
+    private final PriorityQueue<TestInstance> elephantsQueue;
 
     public ReadyQueue() {
         this(DEFAULT_MICE_THRESHOLD_MS);
@@ -36,7 +41,10 @@ public class ReadyQueue {
         // Mice comparator: sort by effective duration (predicted - age boost)
         this.miceQueue = new PriorityQueue<>(Comparator.comparingLong(this::effectiveDuration));
 
-        this.elephantsSet = new HashSet<>();
+        // Elephants comparator: sort by predicted duration (descending - longest first)
+        this.elephantsQueue = new PriorityQueue<>(
+            Comparator.comparingLong(TestInstance::getPredictedDurationMs).reversed()
+        );
     }
 
     /**
@@ -46,7 +54,7 @@ public class ReadyQueue {
         if (test.getPredictedDurationMs() <= miceThresholdMs) {
             miceQueue.offer(test);
         } else {
-            elephantsSet.add(test);
+            elephantsQueue.offer(test);
         }
     }
 
@@ -59,31 +67,43 @@ public class ReadyQueue {
     }
 
     /**
-     * Returns all elephant tests for scoring by the scheduler.
+     * Returns the next elephant test (longest predicted duration),
+     * or null if elephants queue is empty.
      */
+    public TestInstance pollElephant() {
+        return elephantsQueue.poll();
+    }
+
+    /**
+     * Returns all elephant tests for scoring by the scheduler.
+     * @deprecated Use pollElephant() for efficient longest-first scheduling
+     */
+    @Deprecated
     public Set<TestInstance> getElephants() {
-        return new HashSet<>(elephantsSet);
+        return new HashSet<>(elephantsQueue);
     }
 
     /**
      * Removes an elephant test after it's been assigned.
+     * @deprecated Use pollElephant() instead
      */
+    @Deprecated
     public boolean removeElephant(TestInstance test) {
-        return elephantsSet.remove(test);
+        return elephantsQueue.remove(test);
     }
 
     /**
      * Returns true if both queues are empty.
      */
     public boolean isEmpty() {
-        return miceQueue.isEmpty() && elephantsSet.isEmpty();
+        return miceQueue.isEmpty() && elephantsQueue.isEmpty();
     }
 
     /**
      * Returns the total number of pending tests.
      */
     public int size() {
-        return miceQueue.size() + elephantsSet.size();
+        return miceQueue.size() + elephantsQueue.size();
     }
 
     /**
@@ -97,7 +117,7 @@ public class ReadyQueue {
      * Returns the number of elephant tests.
      */
     public int getElephantsCount() {
-        return elephantsSet.size();
+        return elephantsQueue.size();
     }
 
     /**
@@ -116,6 +136,6 @@ public class ReadyQueue {
 
     @Override
     public String toString() {
-        return "ReadyQueue{mice=" + miceQueue.size() + ", elephants=" + elephantsSet.size() + "}";
+        return "ReadyQueue{mice=" + miceQueue.size() + ", elephants=" + elephantsQueue.size() + "}";
     }
 }

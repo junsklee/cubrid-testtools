@@ -5,11 +5,16 @@ import java.util.Optional;
 import java.util.logging.Logger;
 
 /**
- * Main scheduler service for intelligent test placement.
+ * Main scheduler service for intelligent test placement with makespan optimization.
  *
  * <p>Implements a multi-resource, cache-aware scheduler that separates tests
  * into "mice" (short) and "elephants" (long), applies bin-packing scoring,
  * and accounts for queue aging and cache locality.</p>
+ *
+ * <p><b>Makespan Optimization:</b> Schedules elephants (longest tests) before mice to
+ * minimize total parallel execution time. The critical path (longest test) determines
+ * the overall completion time, so starting long tests early prevents them from becoming
+ * bottlenecks at the end of execution.</p>
  *
  * <p>Usage:
  * <pre>
@@ -68,38 +73,44 @@ public class SchedulerService {
     /**
      * Assigns the next test to the best available node.
      *
-     * <p>Algorithm:
+     * <p>Algorithm (makespan-optimized):
      * <ol>
-     *   <li>If mice queue non-empty, pop next mouse and score against eligible nodes</li>
-     *   <li>Else if elephants non-empty, score all elephants against all eligible nodes</li>
+     *   <li>If elephants queue non-empty, pop longest elephant and score against eligible nodes</li>
+     *   <li>Else if mice queue non-empty, pop next mouse and score against eligible nodes</li>
      *   <li>Return Assignment with best (test, node, score) triple, or empty if no eligible nodes</li>
      * </ol>
      * </p>
      *
+     * <p><b>Makespan Optimization:</b> By scheduling elephants (longest tests) first, we ensure
+     * the critical path starts immediately in parallel execution, minimizing total completion time.</p>
+     *
      * @return Assignment if successful, empty if no eligible nodes
      */
     public synchronized Optional<Assignment> assignNext() {
-        // Try mice first (greedy shortest-job-first with aging)
-        TestInstance mouse = readyQueue.pollMouse();
-        if (mouse != null) {
-            Optional<Assignment> assignment = assignTest(mouse);
+        // Try elephants first (longest-job-first for makespan optimization)
+        TestInstance elephant = readyQueue.pollElephant();
+        if (elephant != null) {
+            Optional<Assignment> assignment = assignTest(elephant);
             if (assignment.isPresent()) {
-                logger.info("Assigned mouse: " + assignment.get());
+                logger.info("Assigned elephant (LJF): " + assignment.get());
                 return assignment;
             } else {
-                // No eligible nodes, re-offer mouse and return empty
-                readyQueue.offer(mouse);
+                // No eligible nodes, re-offer elephant and return empty
+                readyQueue.offer(elephant);
                 return Optional.empty();
             }
         }
 
-        // Try elephants (score all, pick best)
-        if (readyQueue.getElephantsCount() > 0) {
-            Optional<Assignment> assignment = assignBestElephant();
+        // Try mice (greedy shortest-job-first with aging)
+        TestInstance mouse = readyQueue.pollMouse();
+        if (mouse != null) {
+            Optional<Assignment> assignment = assignTest(mouse);
             if (assignment.isPresent()) {
-                logger.info("Assigned elephant: " + assignment.get());
+                logger.info("Assigned mouse (SJF): " + assignment.get());
                 return assignment;
             } else {
+                // No eligible nodes, re-offer mouse and return empty
+                readyQueue.offer(mouse);
                 return Optional.empty();
             }
         }
@@ -137,7 +148,9 @@ public class SchedulerService {
 
     /**
      * Scores all elephants against all eligible nodes, returns best assignment.
+     * @deprecated No longer used. New algorithm uses pollElephant() for longest-first scheduling.
      */
+    @Deprecated
     private Optional<Assignment> assignBestElephant() {
         List<NodeSnapshot> eligibleNodes = nodeDirectory.getHealthyNodes();
         if (eligibleNodes.isEmpty()) {
