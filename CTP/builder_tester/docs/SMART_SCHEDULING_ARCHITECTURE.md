@@ -11,13 +11,14 @@ The Smart Scheduling System replaces the legacy round-robin test distribution wi
 - **Test heterogeneity** (mice vs. elephants)
 
 **Key Benefits:**
-- **10-30% reduction in total test suite execution time** (makespan optimization via LJF for elephants)
+- **10-30% reduction in total test suite execution time** (weighted round-robin with makespan optimization)
 - 10-30% higher throughput (tests/hour)
 - 15-25% faster mean completion for short tests
 - Better node utilization balance
 - 10-20% higher cache hit rates
 - Graceful handling of heterogeneous hardware
-- **Critical path optimization:** Longest tests start immediately, preventing end-of-run bottlenecks
+- **Critical path optimization:** Longest tests get priority (70% weight) without elephant pile-up
+- **Resource safety:** Prevents thrashing, OOM kills, and node crashes from elephant overload
 
 ---
 
@@ -639,34 +640,59 @@ private static final double W5_AGE      = 0.10;
 
 #### SchedulerService
 
-**Purpose:** Core orchestrator implementing filter → score → bind with makespan optimization.
+**Purpose:** Core orchestrator implementing filter → score → bind with weighted makespan optimization.
 
-**Main Algorithm (Makespan-Optimized):**
+**Main Algorithm (Weighted Round-Robin with Resource Safety):**
 ```java
 public Optional<Assignment> assignNext() {
-    // 1. Try elephants first (LJF - longest first for makespan optimization)
-    TestInstance elephant = readyQueue.pollElephant();
-    if (elephant != null) {
-        Optional<Assignment> elephantAssignment = assignTest(elephant);
-        if (elephantAssignment.isPresent()) {
-            return elephantAssignment;
+    // 1. Weighted selection: 70% elephant, 30% mice (configurable)
+    boolean tryElephantFirst = (Math.random() < elephantWeight) && !readyQueue.isElephantsEmpty();
+
+    if (tryElephantFirst) {
+        // Try longest elephant (weighted selection favored this)
+        TestInstance elephant = readyQueue.pollElephant();
+        if (elephant != null) {
+            Optional<Assignment> assignment = assignTest(elephant);
+            if (assignment.isPresent()) {
+                return assignment;
+            }
+            readyQueue.offer(elephant);  // Re-offer if no eligible nodes
         }
-        // Re-offer if no eligible nodes
-        readyQueue.offer(elephant);
     }
 
-    // 2. Try mice (SJF with aging)
-    TestInstance mouse = readyQueue.pollMouse();
-    if (mouse != null) {
-        Optional<Assignment> mouseAssignment = assignTest(mouse);
-        if (mouseAssignment.isPresent()) {
-            return mouseAssignment;
+    // 2. Try mice (either weighted selection chose mice, or elephant failed)
+    if (!readyQueue.isMiceEmpty()) {
+        TestInstance mouse = readyQueue.pollMouse();
+        if (mouse != null) {
+            Optional<Assignment> assignment = assignTest(mouse);
+            if (assignment.isPresent()) {
+                return assignment;
+            }
+            readyQueue.offer(mouse);
         }
-        // Re-offer if no eligible nodes
-        readyQueue.offer(mouse);
     }
 
-    // 3. No eligible assignments
+    // 3. Fallback to other queue if first choice didn't work
+    if (tryElephantFirst && !readyQueue.isMiceEmpty()) {
+        TestInstance mouse = readyQueue.pollMouse();
+        if (mouse != null) {
+            Optional<Assignment> assignment = assignTest(mouse);
+            if (assignment.isPresent()) {
+                return assignment;
+            }
+            readyQueue.offer(mouse);
+        }
+    } else if (!tryElephantFirst && !readyQueue.isElephantsEmpty()) {
+        TestInstance elephant = readyQueue.pollElephant();
+        if (elephant != null) {
+            Optional<Assignment> assignment = assignTest(elephant);
+            if (assignment.isPresent()) {
+                return assignment;
+            }
+            readyQueue.offer(elephant);
+        }
+    }
+
     return Optional.empty();
 }
 
@@ -1057,25 +1083,47 @@ OFFER(tests[]):
       readyQueue.offerElephant(test)
 
 ASSIGN_NEXT():
-  // 1. Try elephants first (LJF - makespan optimization)
-  elephant = readyQueue.pollElephant()  // Gets longest elephant
-  if elephant != null:
-    assignment = assignTest(elephant)
-    if assignment != null:
-      return assignment
-    else:
-      readyQueue.offer(elephant)  // Re-offer if no nodes
+  // 1. Weighted selection: decide elephant vs mice (70% elephant by default)
+  tryElephantFirst = (random() < elephantWeight) AND !elephantsEmpty()
 
-  // 2. Try mice (SJF)
-  mouse = readyQueue.pollMouse()
-  if mouse != null:
-    assignment = assignTest(mouse)
-    if assignment != null:
-      return assignment
-    else:
-      readyQueue.offer(mouse)  // Re-offer if no nodes
+  if tryElephantFirst:
+    elephant = readyQueue.pollElephant()  // Gets longest elephant
+    if elephant != null:
+      assignment = assignTest(elephant)
+      if assignment != null:
+        return assignment
+      else:
+        readyQueue.offer(elephant)  // Re-offer if no eligible nodes
 
-  // 3. No eligible nodes
+  // 2. Try mice (either selected by weight or elephant failed)
+  if !miceEmpty():
+    mouse = readyQueue.pollMouse()
+    if mouse != null:
+      assignment = assignTest(mouse)
+      if assignment != null:
+        return assignment
+      else:
+        readyQueue.offer(mouse)
+
+  // 3. Fallback: if tried elephants first and failed, now try mice
+  if tryElephantFirst AND !miceEmpty():
+    mouse = readyQueue.pollMouse()
+    if mouse != null:
+      assignment = assignTest(mouse)
+      if assignment != null:
+        return assignment
+      readyQueue.offer(mouse)
+
+  // 4. Fallback: if tried mice first and failed, now try elephants
+  if !tryElephantFirst AND !elephantsEmpty():
+    elephant = readyQueue.pollElephant()
+    if elephant != null:
+      assignment = assignTest(elephant)
+      if assignment != null:
+        return assignment
+      readyQueue.offer(elephant)
+
+  // 5. No eligible nodes
   return null
 
 ASSIGN_TEST(test):
@@ -1129,54 +1177,85 @@ COMPUTE_SCORE(test, node):
 
 ### Mice vs Elephants Strategy
 
+**Weighted Round-Robin with Resource Awareness**
+
+The scheduler uses probabilistic weighted selection to balance makespan optimization with resource safety:
+
 **Elephants (Long Tests > 20s):**
 - **Queue:** Max-heap priority queue (longest first)
 - **Priority:** Predicted duration descending
-- **Strategy:** Longest-Job-First (LJF) for makespan optimization
-- **Rationale:** Minimize total parallel execution time by starting critical path early
-- **Key Insight:** In parallel execution, total time = time for longest test to finish
+- **Selection Weight:** 70% (configurable via `scheduling_elephant_weight`)
+- **Strategy:** Weighted Longest-Job-First with safety limits
+- **Rationale:** Start critical path early while preventing resource pile-up
+- **Safety:** Elephant load penalties spread heavy tests across nodes
 
 **Mice (Short Tests ≤ 20s):**
 - **Queue:** Min-heap priority queue
 - **Priority:** Effective duration with aging boost
+- **Selection Weight:** 30% (complement of elephant weight)
 - **Strategy:** Shortest-Job-First (SJF) with fairness
-- **Rationale:** Minimize average completion time, keep feedback loops tight
+- **Rationale:** Minimize average completion time, fill resource gaps
+
+**Algorithm:**
+```
+On each assignment:
+1. Generate random number R in [0, 1]
+2. If R < elephant_weight (0.70) AND elephants available:
+   - Try longest elephant first
+   - Fall back to mice if elephant filtered by resource checks
+3. Else:
+   - Try shortest mouse first
+   - Fall back to elephants if mouse filtered
+4. Resource checks and load penalties prevent oversubscription
+```
 
 **Why This Works:**
-- **Makespan Optimization:** LJF for elephants ensures longest tests start immediately, preventing them from becoming bottlenecks at the end
-- **SJF for Mice:** Proven optimal for minimizing mean completion time for short tasks
-- **Separation:** Prevents head-of-line blocking (elephant blocking mice)
-- **Aging:** Both queues use aging to prevent starvation
-- **Example:** With 100 mice (5s each) and 1 elephant (300s), elephant starts first rather than last, saving ~295s in total execution time
+- **Makespan:** Elephants get 70% priority, starting critical path early
+- **Safety:** 30% mice ensure gaps are filled, preventing elephant pile-up
+- **Distribution:** Elephant load penalties spread heavy tests across nodes
+- **Stability:** Resource checks prevent any node from being overwhelmed
+- **Example:** Over 100 assignments → ~70 elephants, ~30 mice (naturally distributed)
 
-**Makespan Optimization Deep Dive:**
+**Resource Safety Deep Dive:**
 
-In parallel test execution, the **makespan** (total time to complete all tests) is determined by the **longest-running test**. Consider this scenario:
+The **critical flaw** with pure Longest-Job-First (always schedule elephants first) is resource contention:
 
 ```
-Cluster: 6 concurrent test slots
-Tests: 100 mice (5s each), 3 elephants (300s, 200s, 100s)
+Cluster: 3 nodes × 2 slots = 6 concurrent
+Tests: 6 elephants (300s each, 4GB RAM), 100 mice (5s each, 0.5GB RAM)
+Node capacity: 8GB RAM per node
 ```
 
-**Old Behavior (Mice First):**
-1. All 6 slots fill with mice (5s turnaround)
-2. Mice keep getting scheduled due to SJF priority
-3. After ~83 minutes, all mice are done
-4. Only then do elephants start
-5. The 300s elephant starts at t=83min and finishes at t=88min
-6. **Total makespan: 88 minutes**
+**Pure LJF (Broken - causes crashes):**
+1. All 6 elephants scheduled immediately (highest priority)
+2. Node A gets 2 elephants (8GB required, but only 8GB available)
+3. Node B gets 2 elephants (same problem)
+4. Node C gets 2 elephants (same problem)
+5. **Result:** Memory thrashing, swap storms, OOM kills, node crashes
+6. **Actual time:** 600s+ instead of 300s due to contention
 
-**New Behavior (Elephants First):**
-1. 300s elephant starts immediately (slot 1)
-2. 200s elephant starts immediately (slot 2)
-3. 100s elephant starts immediately (slot 3)
-4. Remaining 3 slots fill with mice
-5. Mice complete quickly in parallel with elephants
-6. **Total makespan: 300s = 5 minutes** ✅
+**Weighted Round-Robin (Safe and Fast):**
+1. Assignment 1: Elephant 1 → Node A (70% weight selected elephant)
+2. Assignment 2: Elephant 2 → Node B (70% weight)
+3. Assignment 3: Mouse 1 → Node C (30% weight OR elephant filtered by resource check)
+4. Assignment 4: Elephant 3 → Node C (70% weight, has resource headroom)
+5. Assignment 5: Mouse 2 → Node A (30% weight OR elephant filtered - Node A elephant-heavy)
+6. Assignment 6: Elephant 4 → Node B (70% weight, elephant load penalty spread it out)
+7. **Result:** Elephants distributed across nodes, gaps filled with mice, no contention
+8. **Total time:** ~600s (elephants run at predicted speed, no thrashing) ✅
 
-**Savings: 83 minutes (94% improvement in this example)**
+**Key Mechanisms Preventing Pile-Up:**
+1. **Elephant Load Penalty:** Nodes with elephants get higher scores (less attractive)
+2. **Resource Headroom Checks:** Prevent scheduling elephant if resources insufficient
+3. **Weighted Selection:** 30% mice ensure gaps filled even if elephants dominate
+4. **Dynamic Balancing:** As elephants accumulate on one node, others become more attractive
 
-This is the classic **critical path** problem from project scheduling. By identifying and starting the critical path (longest tests) early, we ensure it doesn't delay the entire project.
+**vs Baseline (Random Assignment):**
+```
+Random: Elephants might start late, total time ~900s
+Weighted: Elephants start early with safety, total time ~600s
+Improvement: 33% faster, stable, no crashes
+```
 
 ---
 

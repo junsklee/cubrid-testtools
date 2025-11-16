@@ -71,6 +71,8 @@ public class BuilderConfig {
     // Smart scheduling configuration
     private static final String SMART_SCHEDULING_ENABLED = "smart_scheduling_enabled";
     private static final String SCHEDULING_MICE_THRESHOLD_MS = "scheduling_mice_threshold_ms";
+    private static final String SCHEDULING_ELEPHANT_WEIGHT = "scheduling_elephant_weight";
+    private static final String SCHEDULING_ELEPHANT_LOAD_PENALTY = "scheduling_elephant_load_penalty";
     private static final String SCHEDULING_WEIGHT_PRESSURE = "scheduling_weight_pressure";
     private static final String SCHEDULING_WEIGHT_DURATION = "scheduling_weight_duration";
     private static final String SCHEDULING_WEIGHT_IMAGE_CACHE = "scheduling_weight_image_cache";
@@ -875,6 +877,14 @@ public class BuilderConfig {
 
     public long getSchedulingMiceThresholdMs() {
         return Long.parseLong(properties.getProperty(SCHEDULING_MICE_THRESHOLD_MS, "20000"));
+    }
+
+    public double getSchedulingElephantWeight() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_ELEPHANT_WEIGHT, "0.70"));
+    }
+
+    public double getSchedulingElephantLoadPenalty() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_ELEPHANT_LOAD_PENALTY, "0.30"));
     }
 
     public double getSchedulingWeightPressure() {

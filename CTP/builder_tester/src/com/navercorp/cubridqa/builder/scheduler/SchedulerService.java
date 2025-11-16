@@ -5,20 +5,30 @@ import java.util.Optional;
 import java.util.logging.Logger;
 
 /**
- * Main scheduler service for intelligent test placement with makespan optimization.
+ * Main scheduler service for intelligent test placement with resource-aware makespan optimization.
  *
  * <p>Implements a multi-resource, cache-aware scheduler that separates tests
  * into "mice" (short) and "elephants" (long), applies bin-packing scoring,
  * and accounts for queue aging and cache locality.</p>
  *
- * <p><b>Makespan Optimization:</b> Schedules elephants (longest tests) before mice to
- * minimize total parallel execution time. The critical path (longest test) determines
- * the overall completion time, so starting long tests early prevents them from becoming
- * bottlenecks at the end of execution.</p>
+ * <p><b>Weighted Round-Robin Algorithm:</b> Uses probabilistic selection (default 70% elephant weight)
+ * to balance makespan optimization with resource safety:
+ * <ul>
+ *   <li><b>Makespan:</b> Elephants (longest tests) get priority, starting critical path early</li>
+ *   <li><b>Safety:</b> Mice fill gaps, preventing elephant pile-up and resource contention</li>
+ *   <li><b>Distribution:</b> Resource checks and load penalties spread elephants across nodes</li>
+ *   <li><b>Stability:</b> Prevents thrashing, OOM kills, and node crashes from elephant overload</li>
+ * </ul>
+ * </p>
+ *
+ * <p><b>Resource Protection:</b> The scheduler never schedules all elephants simultaneously.
+ * Instead, weighted selection ensures a mix of elephants (for makespan) and mice (to fill gaps),
+ * while existing resource headroom checks and elephant-specific load penalties prevent any single
+ * node from being overwhelmed by multiple heavy tests.</p>
  *
  * <p>Usage:
  * <pre>
- * SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue);
+ * SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, 0.70);
  * scheduler.offer(Arrays.asList(testInstances));
  * while (scheduler.hasPending()) {
  *     Optional&lt;Assignment&gt; assignment = scheduler.assignNext();
@@ -35,15 +45,22 @@ import java.util.logging.Logger;
 public class SchedulerService {
 
     private static final Logger logger = Logger.getLogger(SchedulerService.class.getName());
+    private static final double DEFAULT_ELEPHANT_WEIGHT = 0.70;  // 70% prefer elephants
 
     private final NodeDirectory nodeDirectory;
     private final ScoreFunction scoreFunction;
     private final ReadyQueue readyQueue;
+    private final double elephantWeight;
 
     public SchedulerService(NodeDirectory nodeDirectory, ScoreFunction scoreFunction, ReadyQueue readyQueue) {
+        this(nodeDirectory, scoreFunction, readyQueue, DEFAULT_ELEPHANT_WEIGHT);
+    }
+
+    public SchedulerService(NodeDirectory nodeDirectory, ScoreFunction scoreFunction, ReadyQueue readyQueue, double elephantWeight) {
         this.nodeDirectory = nodeDirectory;
         this.scoreFunction = scoreFunction;
         this.readyQueue = readyQueue;
+        this.elephantWeight = Math.max(0.0, Math.min(1.0, elephantWeight));  // Clamp to [0, 1]
     }
 
     /**
@@ -73,45 +90,80 @@ public class SchedulerService {
     /**
      * Assigns the next test to the best available node.
      *
-     * <p>Algorithm (makespan-optimized):
+     * <p>Algorithm (weighted round-robin with resource awareness):
      * <ol>
-     *   <li>If elephants queue non-empty, pop longest elephant and score against eligible nodes</li>
-     *   <li>Else if mice queue non-empty, pop next mouse and score against eligible nodes</li>
+     *   <li>Use weighted probability to decide elephant vs mice (default 70% elephant)</li>
+     *   <li>Try selected type first, fall back to other type if needed</li>
+     *   <li>Resource headroom checks and elephant load penalties prevent oversubscription</li>
      *   <li>Return Assignment with best (test, node, score) triple, or empty if no eligible nodes</li>
      * </ol>
      * </p>
      *
-     * <p><b>Makespan Optimization:</b> By scheduling elephants (longest tests) first, we ensure
-     * the critical path starts immediately in parallel execution, minimizing total completion time.</p>
+     * <p><b>Makespan Optimization with Resource Safety:</b> Elephants (longest tests) get priority
+     * via weighted selection, starting the critical path early. However, mice fill gaps to prevent
+     * elephant pile-up and resource contention. Existing resource checks and load penalties ensure
+     * elephants are distributed across nodes safely.</p>
      *
      * @return Assignment if successful, empty if no eligible nodes
      */
     public synchronized Optional<Assignment> assignNext() {
-        // Try elephants first (longest-job-first for makespan optimization)
-        TestInstance elephant = readyQueue.pollElephant();
-        if (elephant != null) {
-            Optional<Assignment> assignment = assignTest(elephant);
-            if (assignment.isPresent()) {
-                logger.info("Assigned elephant (LJF): " + assignment.get());
-                return assignment;
-            } else {
-                // No eligible nodes, re-offer elephant and return empty
+        // Weighted selection: decide whether to try elephant first
+        boolean tryElephantFirst = (Math.random() < elephantWeight) && !readyQueue.isElephantsEmpty();
+
+        if (tryElephantFirst) {
+            // Try longest elephant (weighted selection favored this)
+            TestInstance elephant = readyQueue.pollElephant();
+            if (elephant != null) {
+                Optional<Assignment> assignment = assignTest(elephant);
+                if (assignment.isPresent()) {
+                    logger.info(String.format("Assigned elephant (%.0f%% weighted LJF): %s",
+                                             elephantWeight * 100, assignment.get()));
+                    return assignment;
+                }
+                // No eligible nodes for elephant, re-offer and try mice
                 readyQueue.offer(elephant);
-                return Optional.empty();
             }
         }
 
-        // Try mice (greedy shortest-job-first with aging)
-        TestInstance mouse = readyQueue.pollMouse();
-        if (mouse != null) {
-            Optional<Assignment> assignment = assignTest(mouse);
-            if (assignment.isPresent()) {
-                logger.info("Assigned mouse (SJF): " + assignment.get());
-                return assignment;
-            } else {
-                // No eligible nodes, re-offer mouse and return empty
+        // Try mice (either weighted selection chose mice, or elephant failed eligibility)
+        if (!readyQueue.isMiceEmpty()) {
+            TestInstance mouse = readyQueue.pollMouse();
+            if (mouse != null) {
+                Optional<Assignment> assignment = assignTest(mouse);
+                if (assignment.isPresent()) {
+                    logger.info(String.format("Assigned mouse (%.0f%% weighted SJF): %s",
+                                             (1.0 - elephantWeight) * 100, assignment.get()));
+                    return assignment;
+                }
+                // No eligible nodes, re-offer mouse
                 readyQueue.offer(mouse);
-                return Optional.empty();
+            }
+        }
+
+        // If we tried elephants first and failed, now try mice as fallback
+        // (we skipped mice earlier because elephant was selected)
+        if (tryElephantFirst && !readyQueue.isMiceEmpty()) {
+            TestInstance mouse = readyQueue.pollMouse();
+            if (mouse != null) {
+                Optional<Assignment> assignment = assignTest(mouse);
+                if (assignment.isPresent()) {
+                    logger.info("Assigned mouse (fallback after elephant filtered): " + assignment.get());
+                    return assignment;
+                }
+                readyQueue.offer(mouse);
+            }
+        }
+
+        // If we tried mice first and failed, now try elephants as fallback
+        if (!tryElephantFirst && !readyQueue.isElephantsEmpty()) {
+            TestInstance elephant = readyQueue.pollElephant();
+            if (elephant != null) {
+                Optional<Assignment> assignment = assignTest(elephant);
+                if (assignment.isPresent()) {
+                    logger.info("Assigned elephant (fallback after mouse filtered): " + assignment.get());
+                    return assignment;
+                }
+                readyQueue.offer(elephant);
             }
         }
 

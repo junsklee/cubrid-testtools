@@ -2325,20 +2325,33 @@ public class BuilderTask {
         // Initialize scheduler components
         List<String> schedulerNodes = normalizeTesterNodes(workerIps);
         Map<String, AtomicInteger> nodeInflight = new ConcurrentHashMap<>();
+        Map<String, AtomicInteger> nodeInflightElephants = new ConcurrentHashMap<>();
+        final long miceThreshold = config.getSchedulingMiceThresholdMs();
 
         ScoreFunction.NodeLoadProvider loadProvider = nodeId -> {
             String workerKey = extractWorkerKey(nodeId);
-            AtomicInteger current = nodeInflight.get(workerKey);
-            if (current == null) {
+            AtomicInteger currentTotal = nodeInflight.get(workerKey);
+            if (currentTotal == null) {
                 return 0.0;
             }
             int capacity = workerCapacities.getOrDefault(workerKey, config.getMaxConcurrentTests());
             if (capacity <= 0) {
                 capacity = 1;
             }
-            double ratio = current.get() / (double) capacity;
+
+            // Base load penalty
+            double ratio = currentTotal.get() / (double) capacity;
             double loadWeight = 0.2; // favor spreading assignments when nodes are busy
-            return loadWeight * ratio;
+            double basePenalty = loadWeight * ratio;
+
+            // Additional penalty for elephant-heavy nodes (prevents pile-up)
+            AtomicInteger currentElephants = nodeInflightElephants.get(workerKey);
+            int elephantCount = (currentElephants != null) ? currentElephants.get() : 0;
+            double elephantRatio = elephantCount / (double) capacity;
+            double elephantPenaltyWeight = config.getSchedulingElephantLoadPenalty();
+            double elephantPenalty = elephantPenaltyWeight * elephantRatio;
+
+            return basePenalty + elephantPenalty;
         };
 
         NodeDirectory nodeDirectory = new NodeDirectory(
@@ -2363,7 +2376,7 @@ public class BuilderTask {
         );
 
         ReadyQueue readyQueue = new ReadyQueue(config.getSchedulingMiceThresholdMs());
-        SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue);
+        SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, config.getSchedulingElephantWeight());
 
         // Build test instances
         List<TestInstance> testInstances = new ArrayList<>();
@@ -2449,6 +2462,15 @@ public class BuilderTask {
                 AtomicInteger inflightCounter = nodeInflight.computeIfAbsent(workerIp, k -> new AtomicInteger());
                 inflightCounter.incrementAndGet();
 
+                // Track elephant separately for load balancing
+                boolean isElephant = a.getTest().getPredictedDurationMs() > miceThreshold;
+                AtomicInteger elephantCounter = null;
+                if (isElephant) {
+                    elephantCounter = nodeInflightElephants.computeIfAbsent(workerIp, k -> new AtomicInteger());
+                    elephantCounter.incrementAndGet();
+                }
+
+                final AtomicInteger finalElephantCounter = elephantCounter;
                 Future<?> future = testExecutor.submit(() -> {
                     try {
                         if (testRequestId != null) {
@@ -2469,6 +2491,9 @@ public class BuilderTask {
                     } finally {
                         RequestContext.clear();
                         inflightCounter.decrementAndGet();
+                        if (finalElephantCounter != null) {
+                            finalElephantCounter.decrementAndGet();
+                        }
                         capacitySemaphore.release();
                     }
                 });

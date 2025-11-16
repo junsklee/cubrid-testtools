@@ -100,6 +100,20 @@ public class ReadyQueue {
     }
 
     /**
+     * Returns true if the mice queue is empty.
+     */
+    public boolean isMiceEmpty() {
+        return miceQueue.isEmpty();
+    }
+
+    /**
+     * Returns true if the elephants queue is empty.
+     */
+    public boolean isElephantsEmpty() {
+        return elephantsQueue.isEmpty();
+    }
+
+    /**
      * Returns the total number of pending tests.
      */
     public int size() {
