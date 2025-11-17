@@ -36,7 +36,7 @@ public class SchedulerServiceTest {
         directory.updateSnapshot("node-a", healthySnapshot("node-a"));
 
         ReadyQueue queue = new ReadyQueue(20_000);
-        SchedulerService scheduler = new SchedulerService(directory, new ScoreFunction(), queue);
+        SchedulerService scheduler = new SchedulerService(directory, new ScoreFunction(), queue, 0.0);
 
         TestInstance mouse = baseTest("shell/sql/mouse.sh")
             .predictedDurationMs(8_000)
@@ -99,7 +99,7 @@ public class SchedulerServiceTest {
 
         NodeSnapshot constrained = healthySnapshotBuilder("node-tight")
             .cpuPct(400.0)
-            .usedCpuPct(360.0)  // free 40
+            .usedCpuPct(300.0)  // free 100 (fails CPU margin)
             .build();
 
         NodeSnapshot roomy = healthySnapshotBuilder("node-roomy")
@@ -115,7 +115,7 @@ public class SchedulerServiceTest {
 
         TestInstance elephant = baseTest("shell/sql/heavy.sh")
             .predictedDurationMs(60_000)
-            .predictedCpuPct(250.0)
+            .predictedCpuPct(150.0)
             .predictedMemMb(2048.0)
             .build();
 
@@ -161,7 +161,11 @@ public class SchedulerServiceTest {
             .memMb(32_768.0)
             .usedMemMb(8_000.0)
             .ioMbPerSec(600.0)
+            .ioReadMbPerSec(300.0)
+            .ioWriteMbPerSec(300.0)
             .usedIoMbPerSec(100.0)
+            .usedIoReadMbPerSec(50.0)
+            .usedIoWriteMbPerSec(50.0)
             .iops(20_000.0)
             .usedIops(2_000.0)
             .netMbPerSec(125.0)
