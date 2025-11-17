@@ -48,7 +48,7 @@ public class SchedulerService {
     private static final Logger logger = Logger.getLogger(SchedulerService.class.getName());
     private static final double DEFAULT_ELEPHANT_WEIGHT = 0.70;  // 70% prefer elephants
 
-    private static final int RAMP_UP_MIN_RUNNING_FRACTION_DENOM = 3; // Allow heavy long jobs after ~n/3 running
+    private static final int RAMP_UP_MIN_RUNNING_FRACTION_DENOM = 2; // Allow heavy long jobs after ~n/2 running
     private static final long RAMP_UP_LONG_THRESHOLD_MS = 60_000; // Treat >=60s as long for ramp bias
     private static final double RAMP_UP_IO_HEAVY_MBPS = 60.0;     // Sum of read+write regarded as IO-heavy during ramp
 
