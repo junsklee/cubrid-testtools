@@ -104,9 +104,12 @@ public class NodeDirectoryIoTest {
     private static void testSafetyHeadroomEnforced() {
         System.out.println("Test 2: Safety headroom enforced for I/O");
 
-        // Create config with 15% safety headroom
+        // Create config with 15% safety headroom and zero additional IO margins to isolate the keep-free check
         Properties props = new Properties();
         props.setProperty("io_safety_headroom_ratio", "0.15");
+        props.setProperty("scheduling_margin_io_read_base", "0.0");
+        props.setProperty("scheduling_margin_io_write_base", "0.0");
+        props.setProperty("scheduling_margin_confidence_factor", "0.0");
         BuilderConfig config = createConfigFromProperties(props);
 
         NodeDirectory directory = new NodeDirectory(Collections.emptyList(), 5, 60, config);
@@ -261,7 +264,13 @@ public class NodeDirectoryIoTest {
     private static void testReadWriteAsymmetricDemands() {
         System.out.println("Test 4: Asymmetric read/write demands handled correctly");
 
-        NodeDirectory directory = new NodeDirectory(Collections.emptyList(), 5, 60);
+        Properties props = new Properties();
+        props.setProperty("scheduling_margin_io_read_base", "0.0");
+        props.setProperty("scheduling_margin_io_write_base", "0.0");
+        props.setProperty("scheduling_margin_confidence_factor", "0.0");
+        BuilderConfig config = createConfigFromProperties(props);
+
+        NodeDirectory directory = new NodeDirectory(Collections.emptyList(), 5, 60, config);
 
         // Node with asymmetric capacity: 200 MB/s read, 100 MB/s write
         NodeSnapshot node = NodeSnapshot.builder()
@@ -413,4 +422,3 @@ public class NodeDirectoryIoTest {
         }
     }
 }
-

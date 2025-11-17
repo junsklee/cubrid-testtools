@@ -37,7 +37,7 @@ public class RunningTestTrackerIoTest {
             .put("netBytesPerSec", 5 * 1024 * 1024)
             .put("confidence", 0.8);
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
 
         tracker.admit("test-1", "shell/sql/test1.sh", demand);
         tracker.startRunning("test-1");
@@ -93,7 +93,7 @@ public class RunningTestTrackerIoTest {
 
         json.put("phases", new org.json.JSONArray().put(phase1).put(phase2));
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
 
         tracker.admit("test-1", "shell/sql/test1.sh", demand);
         tracker.startRunning("test-1");
@@ -131,7 +131,7 @@ public class RunningTestTrackerIoTest {
             .put("netBytesPerSec", 5 * 1024 * 1024)
             .put("confidence", 0.8);
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
 
         tracker.admit("test-1", "shell/sql/test1.sh", demand);
         tracker.startRunning("test-1");
@@ -176,8 +176,8 @@ public class RunningTestTrackerIoTest {
             .put("netBytesPerSec", 3 * 1024 * 1024)
             .put("confidence", 0.7);
 
-        PredictedDemand demand1 = PredictedDemand.fromRequest(json1, null);
-        PredictedDemand demand2 = PredictedDemand.fromRequest(json2, null);
+        PredictedDemand demand1 = PredictedDemand.fromRequest(wrap(json1), null);
+        PredictedDemand demand2 = PredictedDemand.fromRequest(wrap(json2), null);
 
         tracker.admit("test-1", "shell/sql/test1.sh", demand1);
         tracker.startRunning("test-1");
@@ -216,7 +216,7 @@ public class RunningTestTrackerIoTest {
                 .put("netBytesPerSec", 5 * 1024 * 1024)
                 .put("confidence", 0.8);
 
-            PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+            PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
             tracker.admit("test-" + i, "shell/sql/test" + i + ".sh", demand);
             tracker.startRunning("test-" + i);
         }
@@ -248,10 +248,11 @@ public class RunningTestTrackerIoTest {
         System.out.println("  ✓ Multiple tests aggregate and release correctly");
         System.out.println();
     }
+
+    private static JSONObject wrap(JSONObject predicted) {
+        return new JSONObject().put("predicted", predicted);
+    }
 }
-
-
-
 
 
 

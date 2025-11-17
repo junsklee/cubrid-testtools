@@ -36,7 +36,7 @@ public class PredictedDemandIoTest {
             .put("netBytesPerSec", 5 * 1024 * 1024)
             .put("confidence", 0.8);
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
 
         assert demand.getIoReadBytesPerSec() == 20 * 1024 * 1024 :
             "Read IO should be 20 MB/s, got " + (demand.getIoReadBytesPerSec() / (1024 * 1024)) + " MB/s";
@@ -62,7 +62,7 @@ public class PredictedDemandIoTest {
             .put("netBytesPerSec", 5 * 1024 * 1024)
             .put("confidence", 0.7);
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
 
         long expectedRead = 20 * 1024 * 1024;  // 50% of 40 MB/s
         long expectedWrite = 20 * 1024 * 1024; // 50% of 40 MB/s
@@ -94,7 +94,7 @@ public class PredictedDemandIoTest {
             .put("netBytesPerSec", 5 * 1024 * 1024)
             .put("confidence", 0.9);
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
 
         assert demand.getIoReadBytesPerSec() == 10 * 1024 * 1024 :
             "Read IO should be 10 MB/s (explicit), got " + (demand.getIoReadBytesPerSec() / (1024 * 1024)) + " MB/s";
@@ -164,7 +164,7 @@ public class PredictedDemandIoTest {
 
         json.put("phases", new org.json.JSONArray().put(phase1).put(phase2));
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
 
         assert demand.getPhases().size() == 2 : "Should have 2 phases";
         assert demand.getPhases().get(0).ioReadBytesPerSec == 5 * 1024 * 1024 :
@@ -193,7 +193,7 @@ public class PredictedDemandIoTest {
             .put("netBytesPerSec", 5 * 1024 * 1024)
             .put("confidence", 0.85);
 
-        PredictedDemand demand = PredictedDemand.fromRequest(json, null);
+        PredictedDemand demand = PredictedDemand.fromRequest(wrap(json), null);
         JSONObject output = demand.toJson();
 
         assert output.has("ioReadBytesPerSec") : "Output should include ioReadBytesPerSec";
@@ -206,10 +206,11 @@ public class PredictedDemandIoTest {
         System.out.println("  ✓ JSON serialization includes read/write fields");
         System.out.println();
     }
+
+    private static JSONObject wrap(JSONObject predicted) {
+        return new JSONObject().put("predicted", predicted);
+    }
 }
-
-
-
 
 
 
