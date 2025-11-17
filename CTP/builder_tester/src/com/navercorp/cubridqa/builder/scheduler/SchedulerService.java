@@ -48,6 +48,10 @@ public class SchedulerService {
     private static final Logger logger = Logger.getLogger(SchedulerService.class.getName());
     private static final double DEFAULT_ELEPHANT_WEIGHT = 0.70;  // 70% prefer elephants
 
+    private static final int RAMP_UP_MAX_RUNNING = 8;            // Allow heavy long jobs only after this many are running
+    private static final long RAMP_UP_LONG_THRESHOLD_MS = 60_000; // Treat >=60s as long for ramp bias
+    private static final double RAMP_UP_IO_HEAVY_MBPS = 60.0;     // Sum of read+write regarded as IO-heavy during ramp
+
     private final NodeDirectory nodeDirectory;
     private final ScoreFunction scoreFunction;
     private final ReadyQueue readyQueue;
@@ -215,6 +219,16 @@ public class SchedulerService {
             return Optional.empty();
         }
 
+        // During ramp-up, defer long + IO-heavy tests until nodes have a steady number of running tests.
+        if (isRampDeferred(test)) {
+            eligibleNodes = eligibleNodes.stream()
+                    .filter(n -> n.getRunningTests() >= RAMP_UP_MAX_RUNNING)
+                    .collect(java.util.stream.Collectors.toList());
+            if (eligibleNodes.isEmpty()) {
+                return Optional.empty();
+            }
+        }
+
         // Score all eligible nodes, pick minimum
         NodeSnapshot bestNode = null;
         double bestScore = Double.MAX_VALUE;
@@ -232,6 +246,11 @@ public class SchedulerService {
         }
 
         return Optional.of(new Assignment(test, bestNode.getNodeId(), bestScore));
+    }
+
+    private boolean isRampDeferred(TestInstance test) {
+        double totalIo = Math.max(0.0, test.getPredictedIoReadMbPerSec()) + Math.max(0.0, test.getPredictedIoWriteMbPerSec());
+        return test.getPredictedDurationMs() >= RAMP_UP_LONG_THRESHOLD_MS && totalIo >= RAMP_UP_IO_HEAVY_MBPS;
     }
 
     private double ageNudge(TestInstance test) {
