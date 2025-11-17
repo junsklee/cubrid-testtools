@@ -497,10 +497,21 @@ public class EnvScriptFactory {
     private static void appendPreinstalledCubridEnv(StringBuilder script, String initPath, String ctpHome) {
         script.append("CUBRID_INSTALL_ROOT=\"/opt/cubrid\"\n");
         script.append("CUBRID_HOME=\"$HOME/CUBRID\"\n");
+        // Make sure /root/CUBRID is a real directory so the bind mount succeeds
+        script.append("if [ -L \"$CUBRID_HOME\" ]; then rm -f \"$CUBRID_HOME\"; fi\n");
         script.append("mkdir -p \"$CUBRID_HOME\"\n");
         script.append("# Prefer bind-mount to preserve /root/CUBRID as a real path (not a symlink)\n");
-        script.append("if ! grep -qs \" $CUBRID_HOME \" /proc/mounts; then\n");
-        script.append("  mount --bind \"$CUBRID_INSTALL_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || ln -s \"$CUBRID_INSTALL_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || true\n");
+        script.append("if grep -qs \" $CUBRID_HOME \" /proc/mounts; then\n");
+        script.append("  BIND_OK=1\n");
+        script.append("else\n");
+        script.append("  if mount --bind \"$CUBRID_INSTALL_ROOT\" \"$CUBRID_HOME\" 2>/dev/null; then\n");
+        script.append("    BIND_OK=1\n");
+        script.append("  else\n");
+        script.append("    echo \"WARNING: bind /opt/cubrid -> /root/CUBRID failed; using symlink fallback\" >&2\n");
+        script.append("    rmdir \"$CUBRID_HOME\" 2>/dev/null || true\n");
+        script.append("    ln -s \"$CUBRID_INSTALL_ROOT\" \"$CUBRID_HOME\" 2>/dev/null || true\n");
+        script.append("    BIND_OK=0\n");
+        script.append("  fi\n");
         script.append("fi\n");
         script.append("export CUBRID=\"$CUBRID_HOME\"\n");
         script.append("export SHELL=/bin/bash\n");
