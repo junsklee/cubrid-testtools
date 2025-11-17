@@ -142,7 +142,7 @@ public class NodeDirectory {
      * @param test the test instance with predicted resource demands
      * @return true if node has enough free resources
      */
-    private boolean hasResourceHeadroom(NodeSnapshot node, TestInstance test) {
+    boolean hasResourceHeadroom(NodeSnapshot node, TestInstance test) {
         // Use config if available, otherwise fall back to hardcoded production-safe defaults
         final double baseCpu = config != null ? config.getSchedulingMarginCpuBase() : 0.10;
         final double baseMem = config != null ? config.getSchedulingMarginMemBase() : 0.20;

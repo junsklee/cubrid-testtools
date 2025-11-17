@@ -173,6 +173,10 @@ public class BuilderTask {
             // Track which testers received tests for this requestId
             Set<String> testersUsed = ConcurrentHashMap.newKeySet();
 
+            if (config.isPullSchedulingEnabled()) {
+                taskLogger.info("Pull-based scheduling flag enabled - builder will respond to tester pull when wired; legacy push flow remains active.");
+            }
+
             // Choose distribution strategy
             if (config.isSmartSchedulingEnabled()) {
                 taskLogger.info("Using SMART SCHEDULING for test distribution");

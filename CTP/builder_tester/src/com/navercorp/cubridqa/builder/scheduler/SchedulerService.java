@@ -1,5 +1,6 @@
 package com.navercorp.cubridqa.builder.scheduler;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.logging.Logger;
@@ -71,6 +72,41 @@ public class SchedulerService {
             readyQueue.offer(test);
         }
         logger.info("Offered " + tests.size() + " tests to scheduler. Queue: " + readyQueue);
+    }
+
+    /**
+     * Pull-based assignment: choose the best test for the requesting node using its live metrics.
+     * Legacy push-based assignNext() remains unchanged; this method simply consumes from the same
+     * queue with a Tetris-style alignment score.
+     */
+    public synchronized Optional<Assignment> assignForNode(String nodeId, NodeMetrics metrics) {
+        NodeSnapshot baseSnapshot = nodeDirectory.getSnapshot(nodeId);
+        if (baseSnapshot == null) {
+            return Optional.empty();
+        }
+
+        NodeSnapshot nodeView = mergeSnapshot(baseSnapshot, metrics);
+        TestInstance bestTest = null;
+        double bestPriority = Double.NEGATIVE_INFINITY;
+
+        for (TestInstance candidate : readyQueue.snapshot()) {
+            if (!nodeDirectory.hasResourceHeadroom(nodeView, candidate)) {
+                continue;
+            }
+
+            double priority = scoreFunction.alignment(candidate, nodeView) + ageNudge(candidate);
+            if (priority > bestPriority) {
+                bestPriority = priority;
+                bestTest = candidate;
+            }
+        }
+
+        if (bestTest == null) {
+            return Optional.empty();
+        }
+
+        readyQueue.remove(bestTest);
+        return Optional.of(new Assignment(bestTest, nodeView.getNodeId(), bestPriority));
     }
 
     /**
@@ -198,44 +234,45 @@ public class SchedulerService {
         return Optional.of(new Assignment(test, bestNode.getNodeId(), bestScore));
     }
 
-    /**
-     * Scores all elephants against all eligible nodes, returns best assignment.
-     * @deprecated No longer used. New algorithm uses pollElephant() for longest-first scheduling.
-     */
-    @Deprecated
-    private Optional<Assignment> assignBestElephant() {
-        List<NodeSnapshot> eligibleNodes = nodeDirectory.getHealthyNodes();
-        if (eligibleNodes.isEmpty()) {
-            return Optional.empty();
+    private double ageNudge(TestInstance test) {
+        double waitSeconds = test.getWaitTimeSeconds();
+        double ageCap = 300.0; // 5 minutes
+        return Math.min(1.0, waitSeconds / ageCap);
+    }
+
+    private NodeSnapshot mergeSnapshot(NodeSnapshot base, NodeMetrics metrics) {
+        if (metrics == null) {
+            return base;
         }
 
-        TestInstance bestTest = null;
-        NodeSnapshot bestNode = null;
-        double bestScore = Double.MAX_VALUE;
+        NodeSnapshot.Builder builder = NodeSnapshot.builder()
+                .nodeId(base.getNodeId())
+                .timestamp(Instant.now())
+                .status(base.getStatus())
+                .maxConcurrentTests(base.getMaxConcurrentTests())
+                .runningTests(metrics.getRunningTests())
+                .queuedTests(metrics.getQueuedTests())
+                .cpuPct(base.getCpuPct())
+                .memMb(base.getMemMb())
+                .ioMbPerSec(base.getIoMbPerSec())
+                .ioReadMbPerSec(base.getIoReadMbPerSec())
+                .ioWriteMbPerSec(base.getIoWriteMbPerSec())
+                .iops(base.getIops())
+                .netMbPerSec(base.getNetMbPerSec())
+                .usedCpuPct(metrics.getCpuUsedPct())
+                .usedMemMb(metrics.getMemUsedMb())
+                .usedIoMbPerSec(metrics.getIoReadUsedMbPerSec() + metrics.getIoWriteUsedMbPerSec())
+                .usedIoReadMbPerSec(metrics.getIoReadUsedMbPerSec())
+                .usedIoWriteMbPerSec(metrics.getIoWriteUsedMbPerSec())
+                .usedIops(metrics.getIopsUsed())
+                .usedNetMbPerSec(metrics.getNetUsedMbPerSec())
+                .degraded(base.isDegraded())
+                .diskPressure(base.isDiskPressure());
 
-        for (TestInstance elephant : readyQueue.getElephants()) {
-            for (NodeSnapshot node : eligibleNodes) {
-                if (node.getAvailableConcurrency() <= 0) {
-                    continue;  // Skip nodes with no headroom
-                }
+        base.getCachedImages().forEach(builder::addCachedImage);
+        base.getCachedPackages().forEach(builder::addCachedPackage);
 
-                double score = scoreFunction.score(elephant, node);
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestTest = elephant;
-                    bestNode = node;
-                }
-            }
-        }
-
-        if (bestTest == null || bestNode == null) {
-            return Optional.empty();
-        }
-
-        // Remove assigned elephant from set
-        readyQueue.removeElephant(bestTest);
-
-        return Optional.of(new Assignment(bestTest, bestNode.getNodeId(), bestScore));
+        return builder.build();
     }
 
     /**

@@ -80,6 +80,12 @@ public class BuilderConfig {
     private static final String SCHEDULING_WEIGHT_AGE_BOOST = "scheduling_weight_age_boost";
     private static final String SCHEDULING_NODE_POLL_INTERVAL_SECONDS = "scheduling_node_poll_interval_seconds";
     private static final String SCHEDULING_NODE_STALE_THRESHOLD_SECONDS = "scheduling_node_stale_threshold_seconds";
+    private static final String SCHEDULING_IO_LIGHT_THRESHOLD = "scheduling_io_light_threshold";
+    private static final String SCHEDULING_IO_HEAVY_THRESHOLD = "scheduling_io_heavy_threshold";
+    private static final String SCHEDULING_MIX_LONG_FRACTION = "scheduling_mix_long_fraction";
+    private static final String SCHEDULING_MIX_MEDIUM_FRACTION = "scheduling_mix_medium_fraction";
+    private static final String SCHEDULING_MIX_SHORT_FRACTION = "scheduling_mix_short_fraction";
+    private static final String PULL_SCHEDULING_ENABLED = "pull_scheduling_enabled";
 
     // Dimension-specific safety margins for resource headroom checks
     private static final String SCHEDULING_MARGIN_CPU_BASE = "scheduling_margin_cpu_base";
@@ -875,6 +881,10 @@ public class BuilderConfig {
         return Boolean.parseBoolean(properties.getProperty(SMART_SCHEDULING_ENABLED, "false"));
     }
 
+    public boolean isPullSchedulingEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(PULL_SCHEDULING_ENABLED, "false"));
+    }
+
     public long getSchedulingMiceThresholdMs() {
         return Long.parseLong(properties.getProperty(SCHEDULING_MICE_THRESHOLD_MS, "20000"));
     }
@@ -913,6 +923,26 @@ public class BuilderConfig {
 
     public long getSchedulingNodeStaleThresholdSeconds() {
         return Long.parseLong(properties.getProperty(SCHEDULING_NODE_STALE_THRESHOLD_SECONDS, "30"));
+    }
+
+    public double getSchedulingIoLightThreshold() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_LIGHT_THRESHOLD, "0.30"));
+    }
+
+    public double getSchedulingIoHeavyThreshold() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_HEAVY_THRESHOLD, "0.60"));
+    }
+
+    public double getSchedulingMixLongFraction() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MIX_LONG_FRACTION, "0.40"));
+    }
+
+    public double getSchedulingMixMediumFraction() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MIX_MEDIUM_FRACTION, "0.30"));
+    }
+
+    public double getSchedulingMixShortFraction() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_MIX_SHORT_FRACTION, "0.30"));
     }
 
     // Dimension-specific margin configuration getters

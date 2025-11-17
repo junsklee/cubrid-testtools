@@ -75,21 +75,19 @@ public class ReadyQueue {
     }
 
     /**
-     * Returns all elephant tests for scoring by the scheduler.
-     * @deprecated Use pollElephant() for efficient longest-first scheduling
+     * Removes the given test from either queue.
      */
-    @Deprecated
-    public Set<TestInstance> getElephants() {
-        return new HashSet<>(elephantsQueue);
+    public boolean remove(TestInstance test) {
+        return miceQueue.remove(test) || elephantsQueue.remove(test);
     }
 
     /**
-     * Removes an elephant test after it's been assigned.
-     * @deprecated Use pollElephant() instead
+     * Returns a snapshot view of all pending tests (across mice and elephants).
      */
-    @Deprecated
-    public boolean removeElephant(TestInstance test) {
-        return elephantsQueue.remove(test);
+    public Set<TestInstance> snapshot() {
+        Set<TestInstance> all = new HashSet<>(miceQueue);
+        all.addAll(elephantsQueue);
+        return all;
     }
 
     /**

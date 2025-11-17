@@ -108,6 +108,25 @@ public class ScoreFunction {
     }
 
     /**
+     * Computes a Tetris-style alignment score between a test's demand vector and a node's headroom.
+     * Higher is better; it increases when the test consumes resources the node has plenty of and
+     * avoids resources that are tight.
+     */
+    public double alignment(TestInstance test, NodeSnapshot node) {
+        double cpuDemand = safeRatio(test.getPredictedCpuPct(), node.getCpuPct());
+        double memDemand = safeRatio(test.getPredictedMemMb(), node.getMemMb());
+        double ioDemand = safeRatio(Math.max(test.getPredictedIoReadMbPerSec(), test.getPredictedIoWriteMbPerSec()),
+                                    node.getIoMbPerSec());
+
+        double cpuHeadroom = safeRatio(node.getFreeCpuPct(), node.getCpuPct());
+        double memHeadroom = safeRatio(node.getFreeMemMb(), node.getMemMb());
+        double ioHeadroom = safeRatio(Math.min(node.getFreeIoReadMbPerSec(), node.getFreeIoWriteMbPerSec()),
+                                      Math.max(node.getIoReadMbPerSec(), node.getIoWriteMbPerSec()));
+
+        return (cpuHeadroom * cpuDemand) + (memHeadroom * memDemand) + (ioHeadroom * ioDemand);
+    }
+
+    /**
      * Computes resource pressure using dominant resource fairness with IO-first weighting.
      * Returns max(w_d × (q_d / f_d)) across all resource dimensions, with IO weighted heavily.
      */
@@ -189,5 +208,9 @@ public class ScoreFunction {
     public interface NodeLoadProvider {
         NodeLoadProvider NOOP = nodeId -> 0.0;
         double getLoadPenalty(String nodeId);
+    }
+
+    private double safeRatio(double numerator, double denominator) {
+        return Math.max(0.0, numerator) / Math.max(EPSILON, denominator);
     }
 }

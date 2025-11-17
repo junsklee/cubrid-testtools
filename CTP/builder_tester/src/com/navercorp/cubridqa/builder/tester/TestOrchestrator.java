@@ -12,6 +12,7 @@ import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
 import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
 import com.navercorp.cubridqa.builder.tester.demand.RunningTestTracker;
 import com.navercorp.cubridqa.builder.tester.demand.UtilizationSnapshot;
+import com.navercorp.cubridqa.builder.scheduler.NodeMetrics;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -26,6 +27,8 @@ import java.util.logging.Logger;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class TestOrchestrator {
+    private static final double BYTES_PER_MB = 1024.0 * 1024.0;
+
     private final Config config;
     private final DirectExecutor directExecutor;
     private final StandardDockerExecutor standardDockerExecutor;
@@ -579,6 +582,24 @@ public class TestOrchestrator {
      */
     public UtilizationSnapshot getCurrentUtilization() {
         return runningTestTracker.getCurrentUtilization();
+    }
+
+    /**
+     * Snapshots reserved utilization into a NodeMetrics payload for optional pull-based scheduling.
+     * This is purely observational and does not alter the existing push-based flow.
+     */
+    public NodeMetrics snapshotNodeMetrics() {
+        UtilizationSnapshot reserved = runningTestTracker.getCurrentUtilization();
+        return NodeMetrics.builder()
+                .cpuUsedPct(reserved.getTotalCpuMillicores() / 10.0) // mCPU → %
+                .memUsedMb(reserved.getTotalMemBytes() / BYTES_PER_MB)
+                .ioReadUsedMbPerSec(reserved.getTotalIoReadBytesPerSec() / BYTES_PER_MB)
+                .ioWriteUsedMbPerSec(reserved.getTotalIoWriteBytesPerSec() / BYTES_PER_MB)
+                .iopsUsed(reserved.getTotalIops())
+                .netUsedMbPerSec(reserved.getTotalNetBytesPerSec() / BYTES_PER_MB)
+                .runningTests(runningTestCount.get())
+                .queuedTests(0)
+                .build();
     }
 
     /**
