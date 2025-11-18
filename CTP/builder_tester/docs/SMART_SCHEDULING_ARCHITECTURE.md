@@ -2317,3 +2317,17 @@ This enables precise reservation timing (reserve only when container actually st
   - [SMART_SCHEDULING_CONFIG.md](SMART_SCHEDULING_CONFIG.md)
   - [DOCKER_OPTIMIZATION.md](DOCKER_OPTIMIZATION.md)
   - [ARCHITECTURE_INDEX.md](architecture/ARCHITECTURE_INDEX.md)
+
+---
+
+## Implementation Snapshot: IO-Aware Tetris + Backfill (Late-Binding Ready)
+
+The codebase now contains the core pieces for the IO-aware, multi-resource “Tetris + backfill” design with an optional late-binding path:
+
+- **Test classification**: Duration (short/medium/long) and IO (light/medium/heavy) buckets via `TestClassifier`, enabling per-class caps and mix targets.
+- **Cluster mix tracking**: `ClusterMixTracker` tracks running short/medium/long counts to bias toward healthy mixes (avoids “all long at tail” or “all short first”).
+- **Node metrics for pull**: `NodeMetrics` plus `SchedulerService.assignForNode(...)` accept live CPU/MEM/IO state from testers for Sparrow-style late binding when enabled.
+- **Tetris alignment scoring**: `ScoreFunction.alignment()` uses headroom · normalized demand to pick the test that best fits current node slack, reducing IO/CPU/MEM fragmentation.
+- **Ramp-up guard for heavy longs**: Long + IO-heavy jobs are admitted after roughly max_concurrent_tests/2 are already running on a node, preventing early IO storms while still starting heavies early enough to shrink the tail.
+
+Operational guidance: Pair the ramp-up guard with per-class caps (e.g., max 1 long+IO-heavy per node) and, when available, enable the pull-based endpoint so admission decisions can use live headroom instead of stale polls.
