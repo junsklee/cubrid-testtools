@@ -12,7 +12,7 @@ import java.util.logging.Logger;
  * into "mice" (short) and "elephants" (long), applies bin-packing scoring,
  * and accounts for queue aging and cache locality.</p>
  *
- * <p><b>Weighted Round-Robin Algorithm:</b> Uses probabilistic selection (default 70% elephant weight)
+ * <p><b>Weighted Round-Robin Algorithm:</b> Uses probabilistic selection (default 80% elephant weight)
  * to balance makespan optimization with resource safety:
  * <ul>
  *   <li><b>Makespan:</b> Elephants (longest tests) get priority, starting critical path early</li>
@@ -29,7 +29,7 @@ import java.util.logging.Logger;
  *
  * <p>Usage:
  * <pre>
- * SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, 0.70);
+ * SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, 0.80);
  * scheduler.offer(Arrays.asList(testInstances));
  * while (scheduler.hasPending()) {
  *     Optional&lt;Assignment&gt; assignment = scheduler.assignNext();
@@ -46,7 +46,7 @@ import java.util.logging.Logger;
 public class SchedulerService {
 
     private static final Logger logger = Logger.getLogger(SchedulerService.class.getName());
-    private static final double DEFAULT_ELEPHANT_WEIGHT = 0.70;  // 70% prefer elephants
+    private static final double DEFAULT_ELEPHANT_WEIGHT = 0.80;  // 80% prefer elephants
 
     private static final int RAMP_UP_MIN_RUNNING_FRACTION_DENOM = 2; // Allow heavy long jobs after ~n/2 running
     private static final long RAMP_UP_LONG_THRESHOLD_MS = 60_000; // Treat >=60s as long for ramp bias
@@ -132,7 +132,7 @@ public class SchedulerService {
      *
      * <p>Algorithm (weighted round-robin with resource awareness):
      * <ol>
-     *   <li>Use weighted probability to decide elephant vs mice (default 70% elephant)</li>
+     *   <li>Use weighted probability to decide elephant vs mice (default 80% elephant)</li>
      *   <li>Try selected type first, fall back to other type if needed</li>
      *   <li>Resource headroom checks and elephant load penalties prevent oversubscription</li>
      *   <li>Return Assignment with best (test, node, score) triple, or empty if no eligible nodes</li>
