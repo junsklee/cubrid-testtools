@@ -891,7 +891,7 @@ public class BuilderConfig {
     }
 
     public double getSchedulingElephantWeight() {
-        return Double.parseDouble(properties.getProperty(SCHEDULING_ELEPHANT_WEIGHT, "0.70"));
+        return Double.parseDouble(properties.getProperty(SCHEDULING_ELEPHANT_WEIGHT, "0.80"));
     }
 
     public double getSchedulingElephantLoadPenalty() {

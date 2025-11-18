@@ -17,7 +17,7 @@ The Smart Scheduling System replaces the legacy round-robin test distribution wi
 - Better node utilization balance
 - 10-20% higher cache hit rates
 - Graceful handling of heterogeneous hardware
-- **Critical path optimization:** Longest tests get priority (70% weight) without elephant pile-up
+- **Critical path optimization:** Longest tests get priority (80% weight) without elephant pile-up
 - **Resource safety:** Prevents thrashing, OOM kills, and node crashes from elephant overload
 
 ---
@@ -645,7 +645,7 @@ private static final double W5_AGE      = 0.10;
 **Main Algorithm (Weighted Round-Robin with Resource Safety):**
 ```java
 public Optional<Assignment> assignNext() {
-    // 1. Weighted selection: 70% elephant, 30% mice (configurable)
+    // 1. Weighted selection: 80% elephant, 20% mice (configurable)
     boolean tryElephantFirst = (Math.random() < elephantWeight) && !readyQueue.isElephantsEmpty();
 
     if (tryElephantFirst) {
@@ -1083,7 +1083,7 @@ OFFER(tests[]):
       readyQueue.offerElephant(test)
 
 ASSIGN_NEXT():
-  // 1. Weighted selection: decide elephant vs mice (70% elephant by default)
+  // 1. Weighted selection: decide elephant vs mice (80% elephant by default)
   tryElephantFirst = (random() < elephantWeight) AND !elephantsEmpty()
 
   if tryElephantFirst:
@@ -1184,7 +1184,7 @@ The scheduler uses probabilistic weighted selection to balance makespan optimiza
 **Elephants (Long Tests > 20s):**
 - **Queue:** Max-heap priority queue (longest first)
 - **Priority:** Predicted duration descending
-- **Selection Weight:** 70% (configurable via `scheduling_elephant_weight`)
+- **Selection Weight:** 80% (configurable via `scheduling_elephant_weight`)
 - **Strategy:** Weighted Longest-Job-First with safety limits
 - **Rationale:** Start critical path early while preventing resource pile-up
 - **Safety:** Elephant load penalties spread heavy tests across nodes
@@ -1192,7 +1192,7 @@ The scheduler uses probabilistic weighted selection to balance makespan optimiza
 **Mice (Short Tests ≤ 20s):**
 - **Queue:** Min-heap priority queue
 - **Priority:** Effective duration with aging boost
-- **Selection Weight:** 30% (complement of elephant weight)
+- **Selection Weight:** 20% (complement of elephant weight)
 - **Strategy:** Shortest-Job-First (SJF) with fairness
 - **Rationale:** Minimize average completion time, fill resource gaps
 
@@ -1200,7 +1200,7 @@ The scheduler uses probabilistic weighted selection to balance makespan optimiza
 ```
 On each assignment:
 1. Generate random number R in [0, 1]
-2. If R < elephant_weight (0.70) AND elephants available:
+2. If R < elephant_weight (0.80) AND elephants available:
    - Try longest elephant first
    - Fall back to mice if elephant filtered by resource checks
 3. Else:
@@ -1210,11 +1210,11 @@ On each assignment:
 ```
 
 **Why This Works:**
-- **Makespan:** Elephants get 70% priority, starting critical path early
-- **Safety:** 30% mice ensure gaps are filled, preventing elephant pile-up
+- **Makespan:** Elephants get 80% priority, starting critical path early
+- **Safety:** 20% mice ensure gaps are filled, preventing elephant pile-up
 - **Distribution:** Elephant load penalties spread heavy tests across nodes
 - **Stability:** Resource checks prevent any node from being overwhelmed
-- **Example:** Over 100 assignments → ~70 elephants, ~30 mice (naturally distributed)
+- **Example:** Over 100 assignments → ~80 elephants, ~20 mice (naturally distributed)
 
 **Resource Safety Deep Dive:**
 
@@ -1235,19 +1235,19 @@ Node capacity: 8GB RAM per node
 6. **Actual time:** 600s+ instead of 300s due to contention
 
 **Weighted Round-Robin (Safe and Fast):**
-1. Assignment 1: Elephant 1 → Node A (70% weight selected elephant)
-2. Assignment 2: Elephant 2 → Node B (70% weight)
-3. Assignment 3: Mouse 1 → Node C (30% weight OR elephant filtered by resource check)
-4. Assignment 4: Elephant 3 → Node C (70% weight, has resource headroom)
-5. Assignment 5: Mouse 2 → Node A (30% weight OR elephant filtered - Node A elephant-heavy)
-6. Assignment 6: Elephant 4 → Node B (70% weight, elephant load penalty spread it out)
+1. Assignment 1: Elephant 1 → Node A (80% weight selected elephant)
+2. Assignment 2: Elephant 2 → Node B (80% weight)
+3. Assignment 3: Mouse 1 → Node C (20% weight OR elephant filtered by resource check)
+4. Assignment 4: Elephant 3 → Node C (80% weight, has resource headroom)
+5. Assignment 5: Mouse 2 → Node A (20% weight OR elephant filtered - Node A elephant-heavy)
+6. Assignment 6: Elephant 4 → Node B (80% weight, elephant load penalty spread it out)
 7. **Result:** Elephants distributed across nodes, gaps filled with mice, no contention
 8. **Total time:** ~600s (elephants run at predicted speed, no thrashing) ✅
 
 **Key Mechanisms Preventing Pile-Up:**
 1. **Elephant Load Penalty:** Nodes with elephants get higher scores (less attractive)
 2. **Resource Headroom Checks:** Prevent scheduling elephant if resources insufficient
-3. **Weighted Selection:** 30% mice ensure gaps filled even if elephants dominate
+3. **Weighted Selection:** 20% mice ensure gaps filled even if elephants dominate
 4. **Dynamic Balancing:** As elephants accumulate on one node, others become more attractive
 
 **vs Baseline (Random Assignment):**
