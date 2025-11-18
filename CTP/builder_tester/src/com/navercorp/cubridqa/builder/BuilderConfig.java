@@ -94,6 +94,7 @@ public class BuilderConfig {
     private static final String SCHEDULING_MARGIN_NET_BASE = "scheduling_margin_net_base";
     private static final String SCHEDULING_MARGIN_IOPS_BASE = "scheduling_margin_iops_base";
     private static final String SCHEDULING_MARGIN_CONFIDENCE_FACTOR = "scheduling_margin_confidence_factor";
+    private static final String USE_IOPS_PREDICTIONS = "use_iops_predictions";
 
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
@@ -969,6 +970,10 @@ public class BuilderConfig {
 
     public double getSchedulingMarginConfidenceFactor() {
         return Double.parseDouble(properties.getProperty(SCHEDULING_MARGIN_CONFIDENCE_FACTOR, "0.50"));
+    }
+
+    public boolean useIopsPredictions() {
+        return Boolean.parseBoolean(properties.getProperty(USE_IOPS_PREDICTIONS, "false"));
     }
 
     // IO-first scheduling weights

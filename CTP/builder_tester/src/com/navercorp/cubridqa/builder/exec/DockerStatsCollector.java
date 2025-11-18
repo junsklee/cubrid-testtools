@@ -14,6 +14,7 @@ final class DockerStatsCollector {
     private static final String FORMAT = "{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}";
     private static final long DEFAULT_INTERVAL_MS = 600L;
     private static final double BYTES_PER_MB = 1024d * 1024d;
+    private static final long AVERAGE_BLOCK_SIZE_BYTES = 4096L; // 4KB average block size for IOPS estimation
 
     private final String containerName;
     private final Logger logger;
@@ -300,12 +301,18 @@ final class DockerStatsCollector {
             long readMb = Math.round(blockReadDeltaBytes / BYTES_PER_MB);
             long writeMb = Math.round(blockWriteDeltaBytes / BYTES_PER_MB);
 
+            // Calculate IOPS: estimate based on total block I/O bytes per second divided by average block size
+            long totalBlockBytes = blockReadDeltaBytes + blockWriteDeltaBytes;
+            double blockBytesPerSecond = totalBlockBytes / Math.max(durationSeconds, 0.001d);
+            double iopsMean = blockBytesPerSecond / AVERAGE_BLOCK_SIZE_BYTES;
+
             metricsBuilder.cpuPctMean(cpuMean)
                 .cpuPctPeak(cpuMax)
                 .memMbMean(memMean)
                 .memMbPeak(memMaxMb)
                 .netMbPerSecMean(netThroughputMb / Math.max(durationSeconds, 0.001d))
                 .ioMbPerSecMean(ioMb / Math.max(durationSeconds, 0.001d))
+                .iopsMean(iopsMean)
                 .bytesReadMb(readMb)
                 .bytesWriteMb(writeMb)
                 .metricsComplete(true);

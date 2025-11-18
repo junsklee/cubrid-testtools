@@ -183,12 +183,14 @@ public class NodeDirectory {
 
         // Check headroom across all dimensions
         // I/O-first: Enforce per-direction headroom; also honor global IO keep-free
+        // TEMPORARY: Skip IOPS check entirely until predictions are calibrated (node capacity too low)
+        // Skip network checks if node reports 0 capacity (not yet implemented/measured)
         boolean hasHeadroom = node.getFreeCpuPct() >= requiredCpu
                 && node.getFreeMemMb() >= requiredMem
                 && (requiredIoRead <= 0 || (freeIoRead - keepFreeRead >= requiredIoRead))
                 && (requiredIoWrite <= 0 || (freeIoWrite - keepFreeWrite >= requiredIoWrite))
-                && node.getFreeIops() >= requiredIops
-                && node.getFreeNetMbPerSec() >= requiredNet;
+                && (node.getIops() <= 0 || node.getFreeIops() >= requiredIops)
+                && (node.getNetMbPerSec() <= 0 || node.getFreeNetMbPerSec() >= requiredNet);
 
         if (!hasHeadroom) {
             logger.fine(String.format(

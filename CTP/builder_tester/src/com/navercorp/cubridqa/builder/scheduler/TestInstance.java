@@ -147,7 +147,7 @@ public class TestInstance {
         private double predictedIoMbPerSec = 10.0;
         private double predictedIoReadMbPerSec = 5.0;  // Default: split evenly
         private double predictedIoWriteMbPerSec = 5.0;
-        private double predictedIops = 200.0;
+        private double predictedIops = 0.0;
         private double predictedNetMbPerSec = 5.0;
         private double confidence = 0.0;
 

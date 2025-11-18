@@ -2382,6 +2382,14 @@ public class BuilderTask {
         ReadyQueue readyQueue = new ReadyQueue(config.getSchedulingMiceThresholdMs());
         SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, config.getSchedulingElephantWeight());
 
+        // Normalize tests once for scoring and instance creation
+        List<String> normalizedTests = new ArrayList<>();
+        for (int i = 0; i < tests.length(); i++) {
+            String raw = tests.getString(i);
+            String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+            normalizedTests.add(testPath);
+        }
+
         // Build test instances
         List<TestInstance> testInstances = new ArrayList<>();
         for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
@@ -2399,17 +2407,50 @@ public class BuilderTask {
                 continue;
             }
 
-            for (int i = 0; i < tests.length(); i++) {
-                String raw = tests.getString(i);
-                String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+            Map<String, ScorePrediction> scorePredictions = Collections.emptyMap();
+            if (!schedulerNodes.isEmpty()) {
+                String scorerNode = schedulerNodes.get(0);
+                scorePredictions = fetchScorePredictions(scorerNode, commit,
+                    baselineCommit != null ? baselineCommit : "unknown", normalizedTests);
+            }
+
+            for (String testPath : normalizedTests) {
+                ScorePrediction pred = scorePredictions.get(testPath);
 
                 // Create test instance with default predictions (actual prediction would query /score endpoint)
-                TestInstance instance = TestInstance.builder()
+                TestInstance.Builder tib = TestInstance.builder()
                     .testKey(testPath)
                     .commit(commit)
                     .baseline(this.baselineCommit != null ? this.baselineCommit : "unknown")
-                    .buildPackage(buildPackage)
-                    .build();
+                    .buildPackage(buildPackage);
+
+                if (pred != null) {
+                    if (pred.tpredMs > 0) {
+                        tib.predictedDurationMs(pred.tpredMs);
+                    }
+                    if (pred.cpuPct >= 0) {
+                        tib.predictedCpuPct(pred.cpuPct);
+                    }
+                    if (pred.memMb >= 0) {
+                        tib.predictedMemMb(pred.memMb);
+                    }
+                    if (pred.ioMbPerSec >= 0) {
+                        tib.predictedIoMbPerSec(pred.ioMbPerSec);
+                    }
+                    // IOPS predictions can be disabled via config (use_iops_predictions=false)
+                    // Disabled by default until node capacity is increased or predictions are calibrated
+                    if (config.useIopsPredictions() && pred.iops > 0) {
+                        tib.predictedIops(pred.iops);
+                    }
+                    if (pred.netMbPerSec >= 0) {
+                        tib.predictedNetMbPerSec(pred.netMbPerSec);
+                    }
+                    if (pred.confidence >= 0) {
+                        tib.confidence(pred.confidence);
+                    }
+                }
+
+                TestInstance instance = tib.build();
                 testInstances.add(instance);
             }
         }
@@ -2547,5 +2588,84 @@ public class BuilderTask {
         }
         int idx = nodeId.indexOf(':');
         return idx >= 0 ? nodeId.substring(0, idx) : nodeId;
+    }
+
+    /**
+     * Calls tester /score endpoint to fetch predictions, including IOPS, for the given tests.
+     * Returns an empty map on failure to keep scheduling resilient.
+     */
+    private Map<String, ScorePrediction> fetchScorePredictions(String scorerNode, String commit,
+                                                               String baseline, List<String> tests) {
+        Map<String, ScorePrediction> out = new HashMap<>();
+        if (scorerNode == null || scorerNode.isEmpty() || tests == null || tests.isEmpty()) {
+            return out;
+        }
+        try {
+            URL url = new URL("http://" + scorerNode + "/score");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setDoOutput(true);
+
+            JSONObject req = new JSONObject();
+            req.put("commit", commit);
+            req.put("baseline", baseline);
+            JSONArray arr = new JSONArray();
+            for (String t : tests) {
+                arr.put(t);
+            }
+            req.put("tests", arr);
+
+            byte[] payload = req.toString().getBytes("UTF-8");
+            conn.getOutputStream().write(payload);
+            conn.getOutputStream().flush();
+
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                taskLogger.fine("[Smart Scheduling] /score returned non-200 (" + code + ") from " + scorerNode);
+                return out;
+            }
+
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream(), "UTF-8"))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line);
+                }
+            }
+            JSONObject resp = new JSONObject(sb.toString());
+            if (!resp.has("predictions")) {
+                return out;
+            }
+            JSONObject preds = resp.getJSONObject("predictions");
+            for (String key : preds.keySet()) {
+                JSONObject p = preds.getJSONObject(key);
+                ScorePrediction sp = new ScorePrediction();
+                sp.tpredMs = (long) p.optDouble("tpred_ms", -1.0);
+                sp.cpuPct = p.optDouble("cpu_pct", -1.0);
+                sp.memMb = p.optDouble("mem_mb", -1.0);
+                sp.ioMbPerSec = p.optDouble("io_mb_s", -1.0);
+                sp.iops = p.optDouble("iops", -1.0);
+                sp.netMbPerSec = p.optDouble("net_mb_s", -1.0);
+                sp.confidence = p.optDouble("confidence", -1.0);
+                out.put(key, sp);
+            }
+        } catch (Exception e) {
+            taskLogger.fine("[Smart Scheduling] Failed to fetch /score predictions from " + scorerNode + ": " + e.getMessage());
+        }
+        return out;
+    }
+
+    private static final class ScorePrediction {
+        long tpredMs;
+        double cpuPct;
+        double memMb;
+        double ioMbPerSec;
+        double iops;
+        double netMbPerSec;
+        double confidence;
     }
 }
