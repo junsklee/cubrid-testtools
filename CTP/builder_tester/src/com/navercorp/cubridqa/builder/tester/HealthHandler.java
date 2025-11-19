@@ -68,11 +68,19 @@ public class HealthHandler implements HttpHandler {
         // Concurrency
         int runningTests = testOrchestrator != null ? testOrchestrator.getRunningTestCount() : 0;
         JSONObject concurrency = new JSONObject();
-        concurrency.put("max", Math.max(1, config.getMaxConcurrentTests()));
-        concurrency.put("maxWhileHeavy", Math.max(1, config.getMaxConcurrentTestsWhileHeavy()));
-        concurrency.put("maxAfterHeavy", Math.max(1, config.getMaxConcurrentTestsAfterHeavy()));
+        int peakLimit = Math.max(1, config.getMaxConcurrentTests());
+        int heavyLimit = Math.max(1, config.getMaxConcurrentTestsWhileHeavy());
+        int postHeavyLimit = Math.max(heavyLimit, config.getMaxConcurrentTestsAfterHeavy());
+        int activeLimit = testOrchestrator != null
+                ? Math.max(1, testOrchestrator.getActiveConcurrencyLimit())
+                : heavyLimit;
+
+        concurrency.put("max", activeLimit); // Advertise current usable capacity
+        concurrency.put("maxWhileHeavy", heavyLimit);
+        concurrency.put("maxAfterHeavy", postHeavyLimit);
+        concurrency.put("maxPeak", peakLimit);
         if (testOrchestrator != null) {
-            concurrency.put("activeLimit", testOrchestrator.getActiveConcurrencyLimit());
+            concurrency.put("activeLimit", activeLimit);
             concurrency.put("heavyRunning", Math.max(0, testOrchestrator.getHeavyInFlightCount()));
         }
         concurrency.put("running", runningTests);
