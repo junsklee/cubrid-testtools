@@ -10,6 +10,7 @@ import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
+import com.navercorp.cubridqa.builder.docker.SecureDockerEnv;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -225,11 +226,17 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                     .message("GITHUB_TOKEN environment variable not configured"),
                 metricsBuilder, startNs, dockerImage, dockerImageCached, null);
         }
-        
-        // Run Docker container with optimized flags
-        List<String> dockerCommand = new ArrayList<>();
-        dockerCommand.add("docker");
-        dockerCommand.add("run");
+
+        // Create secure environment file for sensitive variables (GITHUB_TOKEN)
+        // This prevents the token from appearing in ps -ef output
+        try (SecureDockerEnv secureEnv = new SecureDockerEnv(dockerWorkDir)) {
+            secureEnv.add("GITHUB_TOKEN", githubToken);
+            String envFilePath = secureEnv.getFilePath();
+
+            // Run Docker container with optimized flags
+            List<String> dockerCommand = new ArrayList<>();
+            dockerCommand.add("docker");
+            dockerCommand.add("run");
 
         // Runtime limits from predicted demand or configured values (enforce admission control)
         com.navercorp.cubridqa.builder.tester.demand.PredictedDemand pd = request.getPredictedDemand();
@@ -363,15 +370,17 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
         dockerCommand.add("-v");
         dockerCommand.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
-        
+
         // Environment variables
-        dockerCommand.add("-e");
-        dockerCommand.add("GITHUB_TOKEN=" + githubToken);
         dockerCommand.add("-e");
         dockerCommand.add("CTP_HOME=" + ctpHomeInContainer);
         dockerCommand.add("-e");
         dockerCommand.add("init_path=" + ctpHomeInContainer + "/shell/init_path");
-        
+
+        // Add secure environment file containing GITHUB_TOKEN
+        dockerCommand.add("--env-file");
+        dockerCommand.add(envFilePath);
+
         // Working directory
         dockerCommand.add("-w");
         dockerCommand.add("/workspace");
@@ -555,6 +564,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         }
 
         return finalizeResult(resultBuilder, metricsBuilder, startNs, dockerImage, dockerImageCached, statsSummary);
+        } // SecureDockerEnv auto-closes here, removing the env file
     }
     
     private String computeRelativeTestDir(Path repoRoot, Path testDir, Logger logger) {

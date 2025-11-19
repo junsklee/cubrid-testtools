@@ -9,6 +9,7 @@ import java.util.*;
 import java.util.logging.*;
 import com.navercorp.cubridqa.builder.logging.*;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
+import com.navercorp.cubridqa.builder.docker.SecureDockerEnv;
 
 /**
  * DockerBuildManager - Manages CUBRID builds within Docker containers
@@ -141,8 +142,6 @@ public class DockerBuildManager {
         baseDockerCmd.add("BUILD_TYPE=" + buildType);
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BASELINE_COMMIT=" + baselineCommit);
-        baseDockerCmd.add("-e");
-        baseDockerCmd.add("GITHUB_TOKEN=" + githubToken);
         
         // Add ccache environment variables if enabled
         if (config.isCcacheEnabled()) {
@@ -214,14 +213,26 @@ public class DockerBuildManager {
             logger.warning("Failed to create build log directory: " + e.getMessage());
             perBuildLog = Paths.get(workDir.getAbsolutePath(), "build_" + commitShort + ".log");
         }
-        while (attempts < 2) { // first attempt + 1 retry
-            attempts++;
-            List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
-            logger.info("Running Docker build [" + commitShort + "] (attempt " + attempts + "): " + String.join(" ", dockerCommand));
 
-            ProcessBuilder pb = new ProcessBuilder(dockerCommand);
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
+        // Create secure environment file for sensitive variables (GITHUB_TOKEN)
+        // This prevents the token from appearing in ps -ef output
+        try (SecureDockerEnv secureEnv = new SecureDockerEnv(workDir.toPath())) {
+            secureEnv.add("GITHUB_TOKEN", githubToken);
+            String envFilePath = secureEnv.getFilePath();
+
+            // Add env file to base command
+            baseDockerCmd.add("--env-file");
+            baseDockerCmd.add(envFilePath);
+
+            while (attempts < 2) { // first attempt + 1 retry
+                attempts++;
+                List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
+                logger.info("Running Docker build [" + commitShort + "] (attempt " + attempts + ")");
+                // Don't log the full command to avoid exposing the env file path in logs
+
+                ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+                pb.redirectErrorStream(true);
+                Process process = pb.start();
             
             // Capture output
             StringBuilder output = new StringBuilder();
@@ -248,14 +259,15 @@ public class DockerBuildManager {
             logger.warning("Docker build [" + commitShort + "] attempt " + attempts + " failed (exit=" + exitCode + ")." +
                            (attempts < 2 ? " Retrying..." : " No more retries."));
             try { Thread.sleep(5000); } catch (InterruptedException ignore) { }
-        }
-        if (lastError != null) {
-            throw lastError;
-        }
-        
-        // Return path to built package
-        String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
-        return new File(workDir, packageName).getAbsolutePath();
+            }
+            if (lastError != null) {
+                throw lastError;
+            }
+
+            // Return path to built package
+            String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
+            return new File(workDir, packageName).getAbsolutePath();
+        } // SecureDockerEnv auto-closes here, removing the env file
     }
 
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
@@ -321,8 +333,6 @@ public class DockerBuildManager {
         baseDockerCmd.add("BUILD_TYPE=" + buildType);
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BASELINE_COMMIT=" + baselineCommit);
-        baseDockerCmd.add("-e");
-        baseDockerCmd.add("GITHUB_TOKEN=" + githubToken);
 
         if (config.isCcacheEnabled()) {
             baseDockerCmd.add("-e");
@@ -386,14 +396,26 @@ public class DockerBuildManager {
             logger.warning("Failed to create build log directory: " + e.getMessage());
             perBuildLog = Paths.get(workDir.getAbsolutePath(), "build_" + commitShort + ".log");
         }
-        while (attempts < 2) {
-            attempts++;
-            List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
-            logger.info("Running Docker PR build [" + commitShort + "] (attempt " + attempts + "): " + String.join(" ", dockerCommand));
 
-            ProcessBuilder pb = new ProcessBuilder(dockerCommand);
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
+        // Create secure environment file for sensitive variables (GITHUB_TOKEN)
+        // This prevents the token from appearing in ps -ef output
+        try (SecureDockerEnv secureEnv = new SecureDockerEnv(workDir.toPath())) {
+            secureEnv.add("GITHUB_TOKEN", githubToken);
+            String envFilePath = secureEnv.getFilePath();
+
+            // Add env file to base command
+            baseDockerCmd.add("--env-file");
+            baseDockerCmd.add(envFilePath);
+
+            while (attempts < 2) {
+                attempts++;
+                List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
+                logger.info("Running Docker PR build [" + commitShort + "] (attempt " + attempts + ")");
+                // Don't log the full command to avoid exposing the env file path in logs
+
+                ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+                pb.redirectErrorStream(true);
+                Process process = pb.start();
 
             StringBuilder output = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
@@ -419,13 +441,14 @@ public class DockerBuildManager {
             logger.warning("Docker PR build [" + commitShort + "] attempt " + attempts + " failed (exit=" + exitCode + ")." +
                            (attempts < 2 ? " Retrying..." : " No more retries."));
             try { Thread.sleep(5000); } catch (InterruptedException ignore) { }
-        }
-        if (lastError != null) {
-            throw lastError;
-        }
+            }
+            if (lastError != null) {
+                throw lastError;
+            }
 
-        String packageName = "cubrid_" + headSha.substring(0, 7) + ".tar.gz";
-        return new File(workDir, packageName).getAbsolutePath();
+            String packageName = "cubrid_" + headSha.substring(0, 7) + ".tar.gz";
+            return new File(workDir, packageName).getAbsolutePath();
+        } // SecureDockerEnv auto-closes here, removing the env file
     }
 
     private File createDockerPrBuildScript(String prBranch, String headSha, String buildType, String baselineCommit, File workDir)
