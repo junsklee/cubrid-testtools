@@ -40,7 +40,6 @@ keep_failed_containers=false
 max_request_logs=5
 enable_request_grouping=true
 retry_count=0
-test_read_timeout_minutes=60
 EOF
 done
 

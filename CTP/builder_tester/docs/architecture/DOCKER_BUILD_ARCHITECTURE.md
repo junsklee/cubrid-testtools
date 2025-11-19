@@ -690,6 +690,7 @@ cubrid_src_dir=~/cubrid
 shell_tc_dir=~/cubrid-testcases-private-ex
 work_dir=~/tmp/builder_work
 tester_port=8090
+test_read_timeout_minutes=60
 use_docker=true
 docker_build_image=cubridci/cubridci:develop
 ccache_enabled=true
@@ -708,7 +709,6 @@ use_docker_tester=true
 docker_test_image=cubridci/cubridci:test_shell
 optimized_docker_enabled=true
 build_cache_size=10
-test_read_timeout_minutes=60
 ```
 
 ---

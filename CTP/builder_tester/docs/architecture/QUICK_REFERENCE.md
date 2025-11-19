@@ -79,6 +79,7 @@ Docker management:
 ### builder.conf
 - `listen_port=8089`
 - `max_concurrent_builds=4`
+- `test_read_timeout_minutes=60`
 - `use_docker=true`
 - `ccache_enabled=true`
 - `parallel_jobs=0` (auto-detect)
@@ -88,7 +89,6 @@ Docker management:
 - `max_concurrent_tests=6`
 - `use_docker_tester=true`
 - `optimized_docker_enabled=true`
-- `test_read_timeout_minutes=60`
 
 ## Request/Response Flow
 
