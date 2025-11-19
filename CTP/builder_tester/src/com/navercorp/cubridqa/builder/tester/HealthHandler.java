@@ -87,6 +87,9 @@ public class HealthHandler implements HttpHandler {
         concurrency.put("queued", 0); // Not implemented yet
         response.put("concurrency", concurrency);
 
+        // Back-compat: expose current limit at top level for legacy builders
+        response.put("maxConcurrentTests", activeLimit);
+
         // Capacity (canonical units)
         JSONObject capacity = new JSONObject();
         // NodeCapacity.getCpuPct() is cores×100, so divide by 100 to get cores, then multiply by 1000 for millicores
