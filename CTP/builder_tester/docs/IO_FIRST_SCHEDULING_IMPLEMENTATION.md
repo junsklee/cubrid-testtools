@@ -277,6 +277,9 @@ scheduling_margin_io_write_base=0.35   # 35% base margin for WRITE
 
 # Global I/O safety headroom
 io_safety_headroom_ratio=0.15      # Keep 15% capacity free
+
+# Weighted queue mix (elephant vs mice selection)
+scheduling_elephant_weight=0.80     # 80% elephants, 20% mice
 ```
 
 **`conf/tester.conf`:**
@@ -628,7 +631,6 @@ The I/O-first scheduling implementation is **complete and production-ready**. Al
 **Implementation Status**: ✅ Complete  
 **Test Coverage**: ✅ Comprehensive  
 **Documentation**: ✅ Complete
-
 
 
 

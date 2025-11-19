@@ -817,7 +817,8 @@ private void distributeTestsWithSmartScheduling(
     );
 
     ReadyQueue readyQueue = new ReadyQueue(
-        config.getSchedulingMiceThresholdMs()
+        config.getSchedulingMiceThresholdMs(),
+        config.getSchedulingIoHeavyThreshold()
     );
 
     SchedulerService scheduler = new SchedulerService(

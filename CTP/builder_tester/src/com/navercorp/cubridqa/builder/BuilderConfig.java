@@ -29,6 +29,8 @@ public class BuilderConfig {
     private static final String TESTER_PORT = "tester_port";
     private static final String MAX_CONCURRENT_BUILDS = "max_concurrent_builds";
     private static final String MAX_CONCURRENT_TESTS = "max_concurrent_tests"; // Only valid in tester.conf
+    private static final String MAX_CONCURRENT_TESTS_HEAVY_QUEUE = "max_concurrent_tests_heavy_queue";
+    private static final String MAX_CONCURRENT_TESTS_POST_HEAVY = "max_concurrent_tests_post_heavy";
     private static final String USE_DOCKER = "use_docker";
     private static final String USE_PREBUILT_DOCKER_IMAGES = "use_prebuilt_docker_images";
     private static final String DOCKER_BUILD_IMAGE = "docker_build_image";
@@ -486,8 +488,34 @@ public class BuilderConfig {
     }
 
     public int getMaxConcurrentTests() {
-        // Note: Only tester.conf should define this. If absent (e.g., when using builder.conf), this value is unused.
-        return Integer.parseInt(properties.getProperty(MAX_CONCURRENT_TESTS, "4"));
+        // Represents the peak concurrency (post-heavy). Falls back to heavy-mode limit if not specified.
+        return Math.max(getMaxConcurrentTestsWhileHeavy(), getMaxConcurrentTestsAfterHeavy());
+    }
+
+    public int getMaxConcurrentTestsWhileHeavy() {
+        String raw = properties.getProperty(MAX_CONCURRENT_TESTS_HEAVY_QUEUE);
+        if (raw != null && !raw.trim().isEmpty()) {
+            try {
+                return Math.max(1, Integer.parseInt(raw.trim()));
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid integer for " + MAX_CONCURRENT_TESTS_HEAVY_QUEUE + ": " + raw
+                        + ". Falling back to legacy max_concurrent_tests.");
+            }
+        }
+        return Math.max(1, Integer.parseInt(properties.getProperty(MAX_CONCURRENT_TESTS, "4")));
+    }
+
+    public int getMaxConcurrentTestsAfterHeavy() {
+        String raw = properties.getProperty(MAX_CONCURRENT_TESTS_POST_HEAVY);
+        if (raw != null && !raw.trim().isEmpty()) {
+            try {
+                return Math.max(1, Integer.parseInt(raw.trim()));
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid integer for " + MAX_CONCURRENT_TESTS_POST_HEAVY + ": " + raw
+                        + ". Falling back to heavy-queue limit.");
+            }
+        }
+        return getMaxConcurrentTestsWhileHeavy();
     }
     
     public boolean useDocker() {
@@ -931,7 +959,7 @@ public class BuilderConfig {
     }
 
     public double getSchedulingIoHeavyThreshold() {
-        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_HEAVY_THRESHOLD, "0.60"));
+        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_HEAVY_THRESHOLD, "60.0"));
     }
 
     public double getSchedulingMixLongFraction() {

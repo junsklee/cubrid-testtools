@@ -73,6 +73,31 @@ scheduling_mice_threshold_ms=10000
 - Higher threshold → More tests get SJF benefit → Lower mean completion time
 - Lower threshold → More tests scored globally → Better bin-packing for diverse workloads
 
+#### `scheduling_elephant_weight`
+
+**Type:** Double (0.0 - 1.0)
+**Default:** `0.80`
+
+**Description:**
+Probability that the scheduler attempts to place an elephant (long test) before a mouse (short test) on each scheduling cycle. The remaining probability (e.g., `0.20` when set to `0.80`) is automatically assigned to mice. Higher values aggressively prioritize long tests to reduce makespan, while lower values favor quick turnaround for short tests.
+
+**Example:**
+```properties
+# Balanced mix (70% elephants, 30% mice)
+scheduling_elephant_weight=0.70
+
+# Aggressive elephant priority (90% elephants)
+scheduling_elephant_weight=0.90
+```
+
+**Tuning Guidelines:**
+- **Increase** if critical-path tests (long runs) should start as early as possible.
+- **Decrease** if short tests queue up or SLA for small tests is more important.
+- Combine with `scheduling_mice_threshold_ms` adjustments for finer grained control.
+
+**Notes:**
+- Values outside `[0.0, 1.0]` are clamped automatically.
+
 ---
 
 ### Scoring Weights
@@ -620,6 +645,44 @@ A test requiring 50 MB/s read on a node with 100 MB/s capacity and 15% headroom:
 
 Configuration file: `conf/tester.conf`
 
+### Adaptive Concurrency Controls
+
+#### `max_concurrent_tests_heavy_queue`
+
+**Type:** Integer (tests)
+**Default:** Falls back to `max_concurrent_tests` (legacy)
+
+**Description:**
+Hard cap on the number of concurrent tests a tester runs while any heavy test is still in flight. Heavy tests are defined using the same thresholds as the scheduler: predicted duration ≥ `scheduling_mice_threshold_ms` **and** total predicted I/O ≥ `scheduling_io_heavy_threshold` MB/s. As long as a heavy test is running locally, new requests beyond this limit are rejected with `409 Conflict` so the builder can route them elsewhere.
+
+**Guidelines:**
+- Set to the number of tests your node can safely run when heavy jobs are present.
+- Keep equal to the old `max_concurrent_tests` value for backward-compatible behavior.
+- Lower values reduce risk of I/O collapse during the heaviest parts of a run.
+
+#### `max_concurrent_tests_post_heavy`
+
+**Type:** Integer (tests)
+**Default:** Falls back to `max_concurrent_tests_heavy_queue`
+
+**Description:**
+Upper bound once all heavy tests finish. After the heavy backlog clears, the tester allows up to this many concurrent executions. This lets you reclaim throughput for the tail of the run without overloading disks during the ramp-up.
+
+**Guidelines:**
+- Choose a value that reflects the node’s comfortable peak concurrency.
+- Can be the same as the heavy-queue limit if you do not need adaptive behavior.
+- HTTP server threads and `/health` reporting use this value so the builder sees peak capacity.
+
+#### `max_concurrent_tests` (legacy fallback)
+
+**Type:** Integer (tests)
+**Default:** `4`
+
+**Description:**
+Original single-limit knob. When the dual-mode parameters are omitted, both heavy and post-heavy limits fall back to this value. Keep it around for older automation or as a sane default, but prefer the dedicated knobs above for new deployments.
+
+---
+
 ### Docker Runtime Limits (v2)
 
 #### `docker_enforce_memory_limits`
@@ -1132,7 +1195,8 @@ stats_enabled=true
 stats_snapshot_interval_seconds=180             # Frequent snapshots (tester restarts common)
 heartbeat_interval_seconds=3
 score_endpoint_enabled=true
-max_concurrent_tests=8                          # Higher concurrency
+max_concurrent_tests_heavy_queue=8              # Conservative cap while heavy jobs run
+max_concurrent_tests_post_heavy=12              # Relax once heavy backlog drains
 optimized_docker_enabled=true
 build_cache_size=30                             # Larger cache
 ```
@@ -1159,7 +1223,8 @@ scheduling_weight_duration=0.40                 # Prioritize short tests
 
 # Tester
 stats_enabled=true                              # Still useful for predictions
-max_concurrent_tests=4                          # Laptop-appropriate
+max_concurrent_tests_heavy_queue=3              # Keep heavy tests from starving laptop
+max_concurrent_tests_post_heavy=4               # Allow one extra slot once heavy tests finish
 ```
 
 **Notes:**
@@ -1187,7 +1252,8 @@ scheduling_stale_threshold_ms=30000
 
 # Tester
 stats_enabled=true
-max_concurrent_tests=6
+max_concurrent_tests_heavy_queue=6
+max_concurrent_tests_post_heavy=6
 optimized_docker_enabled=true                   # Reduce overhead
 ```
 
@@ -1525,7 +1591,9 @@ All legacy configuration options remain supported. Smart scheduling is fully opt
 **Legacy options (still valid):**
 ```properties
 # These continue to work and are used by legacy distribution
-max_concurrent_tests=6
+max_concurrent_tests_heavy_queue=6
+max_concurrent_tests_post_heavy=6
+max_concurrent_tests=6                      # Legacy single limit fallback
 work_dir=~/tmp/tester_work
 use_docker_tester=true
 optimized_docker_enabled=true

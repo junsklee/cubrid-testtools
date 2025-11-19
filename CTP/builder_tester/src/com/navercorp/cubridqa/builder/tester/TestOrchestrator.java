@@ -39,6 +39,9 @@ public class TestOrchestrator {
     private final TestObservationWriter observationWriter;
     private final TestStatsStore testStatsStore;
     private final AtomicInteger runningTestCount = new AtomicInteger(0);
+    private final AtomicInteger heavyInFlight = new AtomicInteger(0);
+    private final int maxConcurrencyHeavy;
+    private final int maxConcurrencyPostHeavy;
     private final RunningTestTracker runningTestTracker = new RunningTestTracker();
 
     public TestOrchestrator(Config config, DirectExecutor directExecutor,
@@ -55,6 +58,8 @@ public class TestOrchestrator {
         this.dockerUtils = dockerUtils;
         this.observationWriter = observationWriter;
         this.testStatsStore = testStatsStore;
+        this.maxConcurrencyHeavy = Math.max(1, config.getMaxConcurrentTestsWhileHeavy());
+        this.maxConcurrencyPostHeavy = Math.max(this.maxConcurrencyHeavy, config.getMaxConcurrentTestsAfterHeavy());
     }
 
     /**
@@ -82,7 +87,6 @@ public class TestOrchestrator {
 
         // Admit test to tracker (reserves capacity)
         runningTestTracker.admit(testId, testKey, demand);
-        runningTestCount.incrementAndGet();
         try {
             // Unified execution semantics (v2): minRuns, maxRuns, optional timeBudgetMs
             String runMode = request.optString("runMode", "until-pass").toLowerCase();
@@ -272,7 +276,6 @@ public class TestOrchestrator {
         } finally {
             // Unregister test from tracker (releases reserved capacity)
             runningTestTracker.unregister(testId);
-            runningTestCount.decrementAndGet();
         }
     }
     
@@ -572,6 +575,49 @@ public class TestOrchestrator {
      */
     public int getRunningTestCount() {
         return runningTestCount.get();
+    }
+
+    /**
+     * Attempts to acquire a concurrency slot. Returns false if the adaptive
+     * limit would be exceeded (callers should respond with 409 so the builder
+     * can retry on another node).
+     */
+    public boolean tryAcquireSlot(boolean heavyTest) {
+        while (true) {
+            int current = runningTestCount.get();
+            int limit = determineActiveLimit(heavyTest);
+            if (current >= limit) {
+                return false;
+            }
+            if (runningTestCount.compareAndSet(current, current + 1)) {
+                if (heavyTest) {
+                    heavyInFlight.incrementAndGet();
+                }
+                return true;
+            }
+        }
+    }
+
+    public void releaseSlot(boolean heavyTest) {
+        runningTestCount.decrementAndGet();
+        if (heavyTest) {
+            heavyInFlight.updateAndGet(val -> Math.max(0, val - 1));
+        }
+    }
+
+    public int getHeavyInFlightCount() {
+        return heavyInFlight.get();
+    }
+
+    public int getActiveConcurrencyLimit() {
+        return heavyInFlight.get() > 0 ? maxConcurrencyHeavy : maxConcurrencyPostHeavy;
+    }
+
+    private int determineActiveLimit(boolean incomingHeavy) {
+        if (heavyInFlight.get() > 0 || incomingHeavy) {
+            return maxConcurrencyHeavy;
+        }
+        return maxConcurrencyPostHeavy;
     }
 
     /**

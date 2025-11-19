@@ -51,6 +51,8 @@ public class TestHandler implements HttpHandler {
         JSONObject responsePayload = null;
         List<Path> logFilesToSend = new ArrayList<>();
         int httpStatus = 200;
+        boolean releaseSlotNeeded = false;
+        boolean heavySlot = false;
 
         try {
             String requestBody = HttpUtils.readRequestBody(exchange);
@@ -67,6 +69,19 @@ public class TestHandler implements HttpHandler {
                         .put("error", "No capacity - node oversubscribed"));
                 return;
             }
+
+            boolean heavyTest = isHeavyTest(pd);
+            if (!orchestrator.tryAcquireSlot(heavyTest)) {
+                logger.warning(String.format(
+                        "Rejecting test due to concurrency cap (heavy=%s, running=%d, limit=%d)",
+                        heavyTest, orchestrator.getRunningTestCount(), orchestrator.getActiveConcurrencyLimit()));
+                responseWriter.sendJson(exchange, 409, new JSONObject()
+                        .put("status", "rejected")
+                        .put("error", "No capacity - concurrency cap reached"));
+                return;
+            }
+            releaseSlotNeeded = true;
+            heavySlot = heavyTest;
 
             // Extract request ID if provided
             String requestId = request.optString("requestId", null);
@@ -109,7 +124,9 @@ public class TestHandler implements HttpHandler {
                 .put("message", e.getMessage());
             httpStatus = 500;
         } finally {
-            // Nothing here yet; we still need to attempt to send the response below
+            if (releaseSlotNeeded) {
+                orchestrator.releaseSlot(heavySlot);
+            }
         }
 
         // Try to send the response once. If client disconnected (broken pipe), just log and do not overwrite result.
@@ -225,5 +242,18 @@ public class TestHandler implements HttpHandler {
         }
 
         return hasHeadroom;
+    }
+
+    private boolean isHeavyTest(PredictedDemand pd) {
+        if (pd == null) {
+            return false;
+        }
+        long durationMs = pd.getDurationMs();
+        if (durationMs < config.getSchedulingMiceThresholdMs()) {
+            return false;
+        }
+        double totalIoMb = (Math.max(0, pd.getIoReadBytesPerSec()) + Math.max(0, pd.getIoWriteBytesPerSec()))
+                / (1024.0 * 1024.0);
+        return totalIoMb >= config.getSchedulingIoHeavyThreshold();
     }
 }

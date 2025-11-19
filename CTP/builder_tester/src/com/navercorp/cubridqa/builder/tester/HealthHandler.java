@@ -69,6 +69,12 @@ public class HealthHandler implements HttpHandler {
         int runningTests = testOrchestrator != null ? testOrchestrator.getRunningTestCount() : 0;
         JSONObject concurrency = new JSONObject();
         concurrency.put("max", Math.max(1, config.getMaxConcurrentTests()));
+        concurrency.put("maxWhileHeavy", Math.max(1, config.getMaxConcurrentTestsWhileHeavy()));
+        concurrency.put("maxAfterHeavy", Math.max(1, config.getMaxConcurrentTestsAfterHeavy()));
+        if (testOrchestrator != null) {
+            concurrency.put("activeLimit", testOrchestrator.getActiveConcurrencyLimit());
+            concurrency.put("heavyRunning", Math.max(0, testOrchestrator.getHeavyInFlightCount()));
+        }
         concurrency.put("running", runningTests);
         concurrency.put("queued", 0); // Not implemented yet
         response.put("concurrency", concurrency);
