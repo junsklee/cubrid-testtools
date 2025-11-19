@@ -48,7 +48,6 @@ public class SchedulerService {
     private static final Logger logger = Logger.getLogger(SchedulerService.class.getName());
     private static final double DEFAULT_ELEPHANT_WEIGHT = 0.80;  // 80% prefer elephants
 
-    private static final int RAMP_UP_MIN_RUNNING_FRACTION_DENOM = 2; // Allow heavy long jobs after ~n/2 running
     private static final long RAMP_UP_LONG_THRESHOLD_MS = 60_000; // Treat >=60s as long for ramp bias
     private static final double RAMP_UP_IO_HEAVY_MBPS = 60.0;     // Sum of read+write regarded as IO-heavy during ramp
 
@@ -225,14 +224,19 @@ public class SchedulerService {
             return Optional.empty();
         }
 
-        // During ramp-up, defer long + IO-heavy tests until nodes have a steady number of running tests.
+        // During ramp-up, defer long + IO-heavy tests based on actual I/O utilization.
         // Only apply if use_ramp_up_deferral is enabled in config
         boolean rampUpEnabled = config != null && config.useRampUpDeferral();
         if (rampUpEnabled && isRampDeferred(test)) {
+            int eligibleBeforeRampUp = eligibleNodes.size();
             eligibleNodes = eligibleNodes.stream()
-                    .filter(n -> n.getRunningTests() >= rampUpMinRunning(n))
+                    .filter(n -> hasIoHeadroomForHeavyTest(n, test))
                     .collect(java.util.stream.Collectors.toList());
             if (eligibleNodes.isEmpty()) {
+                logger.info(String.format(
+                    "[Ramp-Up Deferral] Test '%s' deferred - no nodes with sufficient I/O headroom " +
+                    "(%d node%s filtered out due to I/O capacity limits)",
+                    test.getTestKey(), eligibleBeforeRampUp, eligibleBeforeRampUp == 1 ? "" : "s"));
                 return Optional.empty();
             }
         }
@@ -261,9 +265,78 @@ public class SchedulerService {
         return test.getPredictedDurationMs() >= RAMP_UP_LONG_THRESHOLD_MS && totalIo >= RAMP_UP_IO_HEAVY_MBPS;
     }
 
-    private int rampUpMinRunning(NodeSnapshot node) {
-        int max = Math.max(1, node.getMaxConcurrentTests());
-        return Math.max(1, max / RAMP_UP_MIN_RUNNING_FRACTION_DENOM);
+    /**
+     * Checks if node has sufficient I/O headroom for a heavy test.
+     * Uses actual I/O utilization instead of running test count.
+     *
+     * @param node the node to check
+     * @param test the heavy test to potentially add
+     * @return true if node has I/O headroom
+     */
+    private boolean hasIoHeadroomForHeavyTest(NodeSnapshot node, TestInstance test) {
+        // Get current I/O utilization
+        double usedIoRead = node.getUsedIoReadMbPerSec();
+        double usedIoWrite = node.getUsedIoWriteMbPerSec();
+        double totalUsedIo = usedIoRead + usedIoWrite;
+
+        // Get I/O capacity
+        double capacityRead = node.getIoReadCapacityBytesPerSec() / (1024.0 * 1024.0);
+        double capacityWrite = node.getIoWriteCapacityBytesPerSec() / (1024.0 * 1024.0);
+        double totalCapacity = capacityRead + capacityWrite;
+
+        // Graceful degradation: if capacity is zero or negative, bypass check
+        if (totalCapacity <= 0) {
+            logger.fine(String.format(
+                "Node %s reports zero I/O capacity, bypassing ramp-up deferral for test %s",
+                node.getNodeId(), test.getTestKey()));
+            return true;
+        }
+
+        // Calculate current utilization
+        double currentUtilization = totalUsedIo / totalCapacity;
+
+        // Get config thresholds
+        double utilizationThreshold = (config != null) ?
+            config.getRampUpIoUtilizationThreshold() : 0.40;
+        double minHeadroomMbps = (config != null) ?
+            config.getRampUpMinIoHeadroomMbps() : 80.0;
+
+        // Check 1: Current utilization must be below threshold
+        if (currentUtilization >= utilizationThreshold) {
+            logger.info(String.format(
+                "[Ramp-Up] Node %s I/O utilization %.1f%% >= threshold %.1f%%, deferring test '%s'",
+                node.getNodeId(), currentUtilization * 100, utilizationThreshold * 100,
+                test.getTestKey()));
+            return false;
+        }
+
+        // Check 2: Projected utilization after adding test
+        double testIo = test.getPredictedIoReadMbPerSec() + test.getPredictedIoWriteMbPerSec();
+        double projectedUsedIo = totalUsedIo + testIo;
+        double projectedUtilization = projectedUsedIo / totalCapacity;
+
+        if (projectedUtilization >= utilizationThreshold) {
+            logger.info(String.format(
+                "[Ramp-Up] Node %s projected I/O utilization %.1f%% >= threshold %.1f%%, deferring test '%s' " +
+                "(test needs %.1f MB/s, current usage %.1f MB/s)",
+                node.getNodeId(), projectedUtilization * 100, utilizationThreshold * 100,
+                test.getTestKey(), testIo, totalUsedIo));
+            return false;
+        }
+
+        // Check 3: Minimum absolute headroom
+        double freeIo = totalCapacity - totalUsedIo;
+        if (freeIo < minHeadroomMbps) {
+            logger.info(String.format(
+                "[Ramp-Up] Node %s free I/O %.1f MB/s < minimum %.1f MB/s, deferring test '%s'",
+                node.getNodeId(), freeIo, minHeadroomMbps, test.getTestKey()));
+            return false;
+        }
+
+        logger.fine(String.format(
+            "Node %s has I/O headroom: util=%.1f%%, free=%.1f MB/s, accepting heavy test %s",
+            node.getNodeId(), currentUtilization * 100, freeIo, test.getTestKey()));
+        return true;
     }
 
     private double ageNudge(TestInstance test) {
