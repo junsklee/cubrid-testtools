@@ -56,16 +56,22 @@ public class SchedulerService {
     private final ScoreFunction scoreFunction;
     private final ReadyQueue readyQueue;
     private final double elephantWeight;
+    private final com.navercorp.cubridqa.builder.BuilderConfig config;
 
     public SchedulerService(NodeDirectory nodeDirectory, ScoreFunction scoreFunction, ReadyQueue readyQueue) {
-        this(nodeDirectory, scoreFunction, readyQueue, DEFAULT_ELEPHANT_WEIGHT);
+        this(nodeDirectory, scoreFunction, readyQueue, DEFAULT_ELEPHANT_WEIGHT, null);
     }
 
     public SchedulerService(NodeDirectory nodeDirectory, ScoreFunction scoreFunction, ReadyQueue readyQueue, double elephantWeight) {
+        this(nodeDirectory, scoreFunction, readyQueue, elephantWeight, null);
+    }
+
+    public SchedulerService(NodeDirectory nodeDirectory, ScoreFunction scoreFunction, ReadyQueue readyQueue, double elephantWeight, com.navercorp.cubridqa.builder.BuilderConfig config) {
         this.nodeDirectory = nodeDirectory;
         this.scoreFunction = scoreFunction;
         this.readyQueue = readyQueue;
         this.elephantWeight = Math.max(0.0, Math.min(1.0, elephantWeight));  // Clamp to [0, 1]
+        this.config = config;
     }
 
     /**
@@ -220,7 +226,9 @@ public class SchedulerService {
         }
 
         // During ramp-up, defer long + IO-heavy tests until nodes have a steady number of running tests.
-        if (isRampDeferred(test)) {
+        // Only apply if use_ramp_up_deferral is enabled in config
+        boolean rampUpEnabled = config != null && config.useRampUpDeferral();
+        if (rampUpEnabled && isRampDeferred(test)) {
             eligibleNodes = eligibleNodes.stream()
                     .filter(n -> n.getRunningTests() >= rampUpMinRunning(n))
                     .collect(java.util.stream.Collectors.toList());

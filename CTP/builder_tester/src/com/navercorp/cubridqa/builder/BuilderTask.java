@@ -2380,7 +2380,7 @@ public class BuilderTask {
         );
 
         ReadyQueue readyQueue = new ReadyQueue(config.getSchedulingMiceThresholdMs());
-        SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, config.getSchedulingElephantWeight());
+        SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, config.getSchedulingElephantWeight(), config);
 
         // Normalize tests once for scoring and instance creation
         List<String> normalizedTests = new ArrayList<>();
