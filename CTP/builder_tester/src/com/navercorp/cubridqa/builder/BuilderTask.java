@@ -2434,9 +2434,18 @@ public class BuilderTask {
                     if (pred.memMb >= 0) {
                         tib.predictedMemMb(pred.memMb);
                     }
-                    if (pred.ioMbPerSec >= 0) {
+
+                    // Prefer separate I/O read/write values if available (from score endpoint)
+                    // Fall back to combined ioMbPerSec if separate values not available
+                    boolean hasSeparateIoValues = pred.ioReadMbPerSec >= 0 && pred.ioWriteMbPerSec >= 0;
+                    if (hasSeparateIoValues) {
+                        tib.predictedIoReadMbPerSec(pred.ioReadMbPerSec);
+                        tib.predictedIoWriteMbPerSec(pred.ioWriteMbPerSec);
+                    } else if (pred.ioMbPerSec >= 0) {
+                        // Fallback: use combined value (Builder will auto-split 50/50)
                         tib.predictedIoMbPerSec(pred.ioMbPerSec);
                     }
+
                     // IOPS predictions can be disabled via config (use_iops_predictions=false)
                     // Disabled by default until node capacity is increased or predictions are calibrated
                     if (config.useIopsPredictions() && pred.iops > 0) {
@@ -2648,6 +2657,20 @@ public class BuilderTask {
                 sp.cpuPct = p.optDouble("cpu_pct", -1.0);
                 sp.memMb = p.optDouble("mem_mb", -1.0);
                 sp.ioMbPerSec = p.optDouble("io_mb_s", -1.0);
+
+                // Parse separate I/O read/write values from score endpoint (in bytes/sec)
+                // Convert from bytes/sec to MB/s for consistency with other metrics
+                if (p.has("ioReadBytesPerSec")) {
+                    sp.ioReadMbPerSec = p.getDouble("ioReadBytesPerSec") / (1024.0 * 1024.0);
+                } else {
+                    sp.ioReadMbPerSec = -1.0;
+                }
+                if (p.has("ioWriteBytesPerSec")) {
+                    sp.ioWriteMbPerSec = p.getDouble("ioWriteBytesPerSec") / (1024.0 * 1024.0);
+                } else {
+                    sp.ioWriteMbPerSec = -1.0;
+                }
+
                 sp.iops = p.optDouble("iops", -1.0);
                 sp.netMbPerSec = p.optDouble("net_mb_s", -1.0);
                 sp.confidence = p.optDouble("confidence", -1.0);
@@ -2664,6 +2687,8 @@ public class BuilderTask {
         double cpuPct;
         double memMb;
         double ioMbPerSec;
+        double ioReadMbPerSec;
+        double ioWriteMbPerSec;
         double iops;
         double netMbPerSec;
         double confidence;

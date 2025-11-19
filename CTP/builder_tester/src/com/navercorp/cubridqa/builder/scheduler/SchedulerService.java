@@ -71,6 +71,14 @@ public class SchedulerService {
         this.readyQueue = readyQueue;
         this.elephantWeight = Math.max(0.0, Math.min(1.0, elephantWeight));  // Clamp to [0, 1]
         this.config = config;
+
+        // Log ramp-up deferral configuration at initialization
+        if (config != null && config.useRampUpDeferral()) {
+            logger.info(String.format(
+                "[Ramp-Up Deferral] Enabled with thresholds: I/O utilization=%.1f%%, min headroom=%.1f MB/s",
+                config.getRampUpIoUtilizationThreshold() * 100,
+                config.getRampUpMinIoHeadroomMbps()));
+        }
     }
 
     /**
@@ -232,12 +240,22 @@ public class SchedulerService {
             eligibleNodes = eligibleNodes.stream()
                     .filter(n -> hasIoHeadroomForHeavyTest(n, test))
                     .collect(java.util.stream.Collectors.toList());
-            if (eligibleNodes.isEmpty()) {
+
+            int eligibleAfterRampUp = eligibleNodes.size();
+            int filteredCount = eligibleBeforeRampUp - eligibleAfterRampUp;
+
+            if (eligibleAfterRampUp == 0) {
+                // All nodes filtered - defer test
                 logger.info(String.format(
                     "[Ramp-Up Deferral] Test '%s' deferred - no nodes with sufficient I/O headroom " +
                     "(%d node%s filtered out due to I/O capacity limits)",
                     test.getTestKey(), eligibleBeforeRampUp, eligibleBeforeRampUp == 1 ? "" : "s"));
                 return Optional.empty();
+            } else if (filteredCount > 0) {
+                // Some nodes filtered but at least one passed
+                logger.fine(String.format(
+                    "[Ramp-Up Deferral] Test '%s' passed I/O headroom check on %d/%d eligible nodes (%d filtered out)",
+                    test.getTestKey(), eligibleAfterRampUp, eligibleBeforeRampUp, filteredCount));
             }
         }
 
@@ -261,8 +279,23 @@ public class SchedulerService {
     }
 
     private boolean isRampDeferred(TestInstance test) {
-        double totalIo = Math.max(0.0, test.getPredictedIoReadMbPerSec()) + Math.max(0.0, test.getPredictedIoWriteMbPerSec());
-        return test.getPredictedDurationMs() >= RAMP_UP_LONG_THRESHOLD_MS && totalIo >= RAMP_UP_IO_HEAVY_MBPS;
+        double ioRead = Math.max(0.0, test.getPredictedIoReadMbPerSec());
+        double ioWrite = Math.max(0.0, test.getPredictedIoWriteMbPerSec());
+        double totalIo = ioRead + ioWrite;
+        double durationSec = test.getPredictedDurationMs() / 1000.0;
+
+        boolean isLong = test.getPredictedDurationMs() >= RAMP_UP_LONG_THRESHOLD_MS;
+        boolean isIoHeavy = totalIo >= RAMP_UP_IO_HEAVY_MBPS;
+        boolean deferred = isLong && isIoHeavy;
+
+        if (deferred) {
+            logger.fine(String.format(
+                "[Ramp-Up] Test '%s' qualifies for deferral: duration=%.1fs (>=%.1fs), I/O=%.1f MB/s (read=%.1f, write=%.1f, threshold=>=%.1f MB/s)",
+                test.getTestKey(), durationSec, RAMP_UP_LONG_THRESHOLD_MS / 1000.0,
+                totalIo, ioRead, ioWrite, RAMP_UP_IO_HEAVY_MBPS));
+        }
+
+        return deferred;
     }
 
     /**
