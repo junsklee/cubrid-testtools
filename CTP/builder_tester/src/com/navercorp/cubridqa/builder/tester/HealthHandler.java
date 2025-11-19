@@ -75,7 +75,7 @@ public class HealthHandler implements HttpHandler {
                 ? Math.max(1, testOrchestrator.getActiveConcurrencyLimit())
                 : heavyLimit;
 
-        concurrency.put("max", activeLimit); // Advertise current usable capacity
+        concurrency.put("max", heavyLimit); // Advertised cap (legacy builders expect this field)
         concurrency.put("maxWhileHeavy", heavyLimit);
         concurrency.put("maxAfterHeavy", postHeavyLimit);
         concurrency.put("maxPeak", peakLimit);
@@ -87,8 +87,8 @@ public class HealthHandler implements HttpHandler {
         concurrency.put("queued", 0); // Not implemented yet
         response.put("concurrency", concurrency);
 
-        // Back-compat: expose current limit at top level for legacy builders
-        response.put("maxConcurrentTests", activeLimit);
+        // Back-compat: expose advertised heavy limit at top level for legacy builders
+        response.put("maxConcurrentTests", heavyLimit);
 
         // Capacity (canonical units)
         JSONObject capacity = new JSONObject();
