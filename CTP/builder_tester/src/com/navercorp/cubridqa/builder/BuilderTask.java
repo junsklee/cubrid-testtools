@@ -747,8 +747,23 @@ public class BuilderTask {
 
                 if (json.has("concurrency")) {
                     JSONObject concurrency = json.getJSONObject("concurrency");
+
+                    // Prefer adaptive limit if reported
+                    if (concurrency.has("activeLimit")) {
+                        return concurrency.optInt("activeLimit", 0);
+                    }
+
+                    // Otherwise, read heavy/preferred cap first to avoid over-enqueueing during ramp-up
+                    if (concurrency.has("maxWhileHeavy")) {
+                        int heavyLimit = concurrency.optInt("maxWhileHeavy", 0);
+                        if (heavyLimit > 0) {
+                            return heavyLimit;
+                        }
+                    }
+
+                    // Finally fall back to legacy max field
                     if (concurrency.has("max")) {
-                        return concurrency.getInt("max");
+                        return concurrency.optInt("max", 4);
                     }
                 }
             } else {
