@@ -168,6 +168,92 @@ public class NodeCapacity {
         return builder.build();
     }
 
+    /**
+     * Measures current node capacity with config support for overrides.
+     * @param workDir working directory path
+     * @param config builder configuration (can be null for defaults)
+     * @return measured node capacity
+     */
+    public static NodeCapacity measure(String workDir, com.navercorp.cubridqa.builder.BuilderConfig config) {
+        Builder builder = new Builder();
+
+        // Measure CPU cores
+        int cores = Runtime.getRuntime().availableProcessors();
+        builder.cpuPct(cores * 100.0);
+        logger.info("NodeCapacity: Detected " + cores + " CPU cores (" + builder.cpuPct + "%)");
+
+        // Measure memory
+        try {
+            OperatingSystemMXBean osBean = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
+            long totalMemBytes = osBean.getTotalPhysicalMemorySize();
+            builder.memMb(totalMemBytes / (1024.0 * 1024.0));
+            logger.info("NodeCapacity: Total memory: " + String.format("%.0f", builder.memMb) + " MB");
+        } catch (Exception e) {
+            logger.warning("Could not determine total memory: " + e.getMessage());
+            builder.memMb(8192.0); // Default 8GB
+        }
+
+        // Measure disk space
+        try {
+            File workDirFile = new File(workDir);
+            long freeSpace = workDirFile.getFreeSpace();
+            long totalSpace = workDirFile.getTotalSpace();
+            builder.diskFreeMb(freeSpace / (1024 * 1024));
+            builder.diskTotalMb(totalSpace / (1024 * 1024));
+            logger.info("NodeCapacity: Disk: " + builder.diskFreeMb + " MB free / " + builder.diskTotalMb + " MB total");
+        } catch (Exception e) {
+            logger.warning("Could not determine disk space: " + e.getMessage());
+            builder.diskFreeMb(50000); // Default 50GB free
+            builder.diskTotalMb(100000); // Default 100GB total
+        }
+
+        // Estimate I/O capacity (conservative defaults for now)
+        // Future: Could run fio or dd benchmark at startup
+        // For read/write, split total capacity 50/50 by default (can be overridden via config)
+        double totalIoMbPerSec = 500.0; // Conservative HDD/SSD baseline
+        builder.ioMbPerSec(totalIoMbPerSec);
+        builder.ioReadMbPerSec(totalIoMbPerSec / 2.0);  // Split evenly
+        builder.ioWriteMbPerSec(totalIoMbPerSec / 2.0);
+
+        // IOPS capacity - configurable via tester.conf
+        double iopsCapacity = 25000.0; // Default: moderate baseline for SATA SSD
+        if (config != null) {
+            String iopsStr = getConfigProperty(config, "node_iops_capacity", "25000");
+            try {
+                iopsCapacity = Double.parseDouble(iopsStr);
+            } catch (NumberFormatException e) {
+                logger.warning("Invalid node_iops_capacity value: " + iopsStr + ", using default 25000");
+            }
+        }
+        builder.iops(iopsCapacity);
+        logger.info("NodeCapacity: I/O estimates: " + builder.ioMbPerSec + " MB/s total (read: " + builder.ioReadMbPerSec + ", write: " + builder.ioWriteMbPerSec + "), " + builder.iops + " IOPS");
+
+        // Estimate network capacity (conservative defaults)
+        // Future: Could run iperf benchmark at startup
+        builder.netMbPerSec(1000.0); // 1 Gbps baseline
+        logger.info("NodeCapacity: Network estimate: " + builder.netMbPerSec + " MB/s");
+
+        return builder.build();
+    }
+
+    /**
+     * Helper method to read config property using reflection.
+     * Based on pattern from ActualSampler.java.
+     */
+    private static String getConfigProperty(com.navercorp.cubridqa.builder.BuilderConfig config, String key, String defaultValue) {
+        try {
+            java.lang.reflect.Field propsField = config.getClass().getDeclaredField("properties");
+            propsField.setAccessible(true);
+            java.util.Properties props = (java.util.Properties) propsField.get(config);
+            String value = props.getProperty(key, defaultValue);
+            logger.fine("Config property '" + key + "' = '" + value + "' (default: '" + defaultValue + "')");
+            return value;
+        } catch (Exception e) {
+            logger.fine("Could not read config property '" + key + "', using default: " + defaultValue);
+            return defaultValue;
+        }
+    }
+
     private static class Builder {
         private double cpuPct = 0.0;
         private double memMb = 0.0;

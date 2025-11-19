@@ -52,7 +52,7 @@ public class TesterService {
         this.apiServer.registerHandler("/test", new PlaceholderTestHandler());
         // NOTE: TesterService is legacy - HealthHandler requires NodeCapacity and TestOrchestrator
         // For now, provide dummy values. Use Tester.java instead for full functionality.
-        NodeCapacity dummyCapacity = NodeCapacity.measure(config.getWorkDir());
+        NodeCapacity dummyCapacity = NodeCapacity.measure(config.getWorkDir(), config);
         TestOrchestrator dummyOrchestrator = null; // TesterService doesn't have orchestrator
         ActualSampler actualSampler = new ActualSampler(config);
         this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator, actualSampler));

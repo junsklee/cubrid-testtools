@@ -162,8 +162,8 @@ public class Tester {
             testStatsStore
         );
 
-        // Measure node capacity for health endpoint
-        NodeCapacity nodeCapacity = NodeCapacity.measure(config.getWorkDir());
+        // Measure node capacity for health endpoint (with config for customizable IOPS)
+        NodeCapacity nodeCapacity = NodeCapacity.measure(config.getWorkDir(), config);
 
         // Set node hardware for latest.json.gz export
         testStatsStore.setNodeHardwareJson(nodeCapacity.toJSON());

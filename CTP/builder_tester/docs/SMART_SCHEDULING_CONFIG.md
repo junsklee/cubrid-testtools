@@ -461,9 +461,82 @@ Base safety margin for network bandwidth headroom checks.
 
 **Type:** Double (0.0 to 1.0)
 **Default:** `0.25` (25% base margin)
+**Since:** v2 Production Hardening (November 2025)
 
 **Description:**
-Base safety margin for IOPS headroom checks.
+Base safety margin for IOPS headroom checks. Only used when `use_iops_predictions=true`.
+
+**Example:**
+```properties
+# Conservative IOPS margins
+scheduling_margin_iops_base=0.15
+
+# Aggressive IOPS margins (requires adequate node capacity)
+scheduling_margin_iops_base=0.05
+```
+
+**Note:** See `use_iops_predictions` below for enabling/disabling IOPS-based scheduling.
+
+#### `use_iops_predictions`
+
+**Type:** Boolean (true/false)
+**Default:** `false` (disabled)
+**Since:** November 2025
+
+**Description:**
+Master switch for IOPS predictions in smart scheduling. When enabled, the scheduler fetches IOPS predictions from the tester's `/score` endpoint and enforces IOPS capacity limits when assigning tests. When disabled, IOPS predictions are ignored and tests use default `predictedIops=0`, allowing all tests to be scheduled regardless of IOPS capacity.
+
+**Default is `false`** until node IOPS capacity is properly calibrated (see `node_iops_capacity` in tester.conf).
+
+**Example:**
+```properties
+# Disable IOPS predictions (default - safe for initial deployment)
+use_iops_predictions=false
+
+# Enable IOPS predictions (requires node_iops_capacity >= 25000)
+use_iops_predictions=true
+```
+
+**Behavior When Disabled (use_iops_predictions=false):**
+- IOPS predictions from `/score` endpoint are **ignored**
+- Tests use default `predictedIops=0.0` from TestInstance
+- IOPS headroom check: `node.getIops() <= 0 || node.getFreeIops() >= 0` → **PASSES**
+- All tests can be scheduled regardless of node's IOPS capacity
+- **Recommended for initial deployment**
+
+**Behavior When Enabled (use_iops_predictions=true):**
+- IOPS predictions from `/score` endpoint are **used**
+- Tests get actual IOPS values (e.g., 2,500-5,000 per test)
+- IOPS headroom check enforces capacity limits with safety margins
+- Only tests that fit within node's free IOPS capacity can be scheduled
+- **Requires sufficient node IOPS capacity** (see `node_iops_capacity` in tester.conf)
+
+**When to Enable:**
+1. After node IOPS capacity is properly configured (≥ 25,000 for 6 concurrent tests)
+2. After IOPS predictions have been collected and validated
+3. When IOPS is a genuine bottleneck that needs management
+
+**Capacity Planning:**
+Required IOPS capacity = (Number of Tests) × (Avg Test IOPS) × (1 + Safety Margin)
+
+Example for 6 tests with 3,500 IOPS average and 12.8% margin:
+```
+6 tests × 3,500 IOPS × 1.128 = 23,688 IOPS needed
+→ Set node_iops_capacity=25000 in tester.conf
+→ Then enable: use_iops_predictions=true
+```
+
+**Related Configuration:**
+- `scheduling_margin_iops_base` - Base IOPS safety margin (used when enabled)
+- `scheduling_margin_confidence_factor` - Confidence-based margin scaling
+- `node_iops_capacity` in tester.conf - Node's IOPS capacity limit
+
+**Troubleshooting:**
+If all tests are blocked with "No eligible nodes" after enabling:
+1. Check node IOPS capacity: `curl http://tester:8090/health | grep iops`
+2. Verify capacity is sufficient (≥ 25,000 for 6 tests)
+3. Temporarily disable: `use_iops_predictions=false`
+4. Increase `node_iops_capacity` in tester.conf and restart tester
 
 #### `scheduling_margin_confidence_factor`
 
@@ -686,6 +759,101 @@ score_endpoint_enabled=true
 - Required for accurate per-node predictions
 - If disabled, builder uses bootstrap defaults for unseen tests
 - Minimal overhead (stateless queries to in-memory TestStatsStore)
+
+---
+
+### Node Capacity Configuration
+
+#### `node_iops_capacity`
+
+**Type:** Double (IOPS)
+**Default:** `25000` (moderate SATA SSD baseline)
+**Range:** `3000` to `1000000` depending on storage type
+**Since:** November 2025
+
+**Description:**
+Configurable IOPS capacity of the node, used by smart scheduling to determine how many tests can run concurrently. This value is reported in the `/health` endpoint and used by the builder's IOPS headroom checks when `use_iops_predictions=true`.
+
+The default value of 25,000 IOPS is appropriate for SATA SSD storage and allows ~6 concurrent tests with typical IOPS predictions (2,500-5,000 per test).
+
+**Example:**
+```properties
+# Conservative (HDD or shared VM storage)
+node_iops_capacity=15000
+
+# Moderate SATA SSD (default, recommended for most setups)
+node_iops_capacity=25000
+
+# Aggressive NVMe SSD
+node_iops_capacity=35000
+
+# Future-proof high-end storage
+node_iops_capacity=50000
+```
+
+**Storage Type Recommendations:**
+
+| Storage Type | Typical IOPS Range | Recommended Setting | Tests Supported* |
+|--------------|-------------------|---------------------|------------------|
+| HDD (7200 RPM) | 80-120 | 15,000 | 3-4 tests |
+| HDD (15K RPM) | 150-200 | 15,000 | 3-4 tests |
+| SATA SSD | 10,000-90,000 | 25,000 | 6 tests |
+| NVMe SSD (Gen3) | 100,000-500,000 | 35,000 | 8 tests |
+| NVMe SSD (Gen4) | 500,000-1,000,000 | 50,000 | 10+ tests |
+| Cloud VM (shared) | 3,000-16,000 | 15,000 | 3-4 tests |
+
+\* Based on average test prediction of 3,500 IOPS with 12.8% safety margins
+
+**Capacity Planning Formula:**
+```
+Required Capacity = (Target Concurrent Tests) × (Avg Test IOPS) × (1 + Safety Margin)
+
+Example for 6 concurrent tests:
+  Avg test IOPS: 3,500
+  Safety margin: 0.05 (base) + 0.10 × (1 - 0.22) = 12.8%
+  Required: 6 × 3,500 × 1.128 = 23,688 IOPS
+  Setting: 25,000 IOPS (provides 5.5% overhead)
+```
+
+**Verification:**
+```bash
+# Check reported capacity
+curl -s http://localhost:8090/health | python3 -c \
+  "import sys,json; print('IOPS:', json.load(sys.stdin)['capacity']['iops'])"
+
+# Check tester logs
+tail -50 bin/tester_output.log | grep "IOPS"
+# Should show: "... 25000.0 IOPS"
+```
+
+**Tuning Guidelines:**
+- **Start conservative**: Use 15,000 or 25,000 initially
+- **Monitor utilization**: Track actual IOPS usage during test runs
+- **Adjust upward**: If tests consistently use < 60% of capacity
+- **Adjust downward**: If tests show I/O contention or slowdowns
+- **Match hardware**: Align with actual storage capabilities (don't over-estimate)
+
+**Effect on Scheduling:**
+- **Higher capacity** → More tests can run concurrently (if IOPS predictions enabled)
+- **Lower capacity** → Fewer concurrent tests, but safer from I/O contention
+- **No effect if** `use_iops_predictions=false` in builder.conf (default)
+
+**Interaction with Builder Configuration:**
+This parameter works in conjunction with builder.conf settings:
+- `use_iops_predictions` - Must be `true` to enforce IOPS limits
+- `scheduling_margin_iops_base` - Safety margin applied to predictions
+- `scheduling_margin_confidence_factor` - Additional margin for low-confidence tests
+
+**Troubleshooting:**
+If tests aren't being assigned after enabling IOPS predictions:
+1. Check current capacity: `curl http://tester:8090/health | grep iops`
+2. Calculate required capacity (see formula above)
+3. If current < required, increase `node_iops_capacity`
+4. Restart tester: `bash bin/start_tester.sh`
+5. Verify new capacity in /health endpoint
+
+**Historical Note:**
+Prior to November 2025, IOPS capacity was hardcoded to 10,000 in NodeCapacity.java, which was too low for most workloads. The configurable parameter allows proper tuning for different storage types and concurrency targets.
 
 ---
 
@@ -1029,6 +1197,110 @@ optimized_docker_enabled=true                   # Reduce overhead
 
 ---
 
+### Scenario 5: IOPS-Aware Scheduling (Recommended for Production)
+
+**Goal:** Enable full IOPS-based scheduling with properly configured capacity.
+
+**Prerequisites:**
+1. Tests have been running for at least a few days (IOPS observations collected)
+2. Node storage type is known (HDD, SATA SSD, NVMe SSD)
+3. Ready to enforce IOPS capacity limits
+
+**Configuration:**
+
+**Step 1 - Configure Node IOPS Capacity (tester.conf):**
+```properties
+# Tester
+stats_enabled=true
+score_endpoint_enabled=true
+
+# Set based on storage type (see table in node_iops_capacity section)
+# For SATA SSD supporting 6 concurrent tests:
+node_iops_capacity=25000
+
+# For NVMe SSD supporting 8 concurrent tests:
+# node_iops_capacity=35000
+
+# For slow VM or HDD supporting 3-4 concurrent tests:
+# node_iops_capacity=15000
+```
+
+**Step 2 - Enable IOPS Predictions (builder.conf):**
+```properties
+# Builder
+smart_scheduling_enabled=true
+use_iops_predictions=true                       # Enable IOPS enforcement
+
+# Use reduced margins since we're now enforcing limits
+scheduling_margin_iops_base=0.05                # 5% base (was 0.25)
+scheduling_margin_confidence_factor=0.10        # 10% for low confidence (was 0.50)
+
+# Other standard settings
+scheduling_weight_pressure=0.45
+scheduling_weight_duration=0.25
+scheduling_weight_image=0.15
+scheduling_weight_package=0.05
+scheduling_weight_age=0.10
+```
+
+**Step 3 - Restart Services:**
+```bash
+# Restart tester to apply new node_iops_capacity
+bash bin/start_tester.sh
+
+# Verify capacity
+curl -s http://tester:8090/health | grep iops
+# Should show: "iops": 25000
+
+# Builder doesn't need restart (config read per-request)
+```
+
+**Step 4 - Validate:**
+```bash
+# Run a test with 6 tests
+# All should be assigned if capacity is sufficient
+
+# Check builder logs for IOPS headroom checks
+grep "IOPS" builder.log
+
+# Monitor for "No eligible nodes" warnings
+# If present, capacity may be too low
+```
+
+**Capacity Verification Formula:**
+```
+Tests that fit = node_iops_capacity / (avg_test_iops × (1 + margin))
+
+Example with node_iops_capacity=25000:
+  Avg test IOPS: 3,500
+  Margin: 0.05 + 0.10 × (1 - 0.22) = 12.8%
+  Tests that fit: 25,000 / (3,500 × 1.128) = 6.3 ✓
+```
+
+**Monitoring:**
+- Track IOPS utilization in test observations
+- Monitor "No eligible nodes" frequency in builder logs
+- Alert if capacity < 20% free during peak (indicates undersizing)
+
+**Rollback Plan:**
+```properties
+# Disable IOPS predictions if issues arise
+use_iops_predictions=false
+# All tests will schedule regardless of IOPS
+```
+
+**Benefits:**
+- Prevents IOPS oversubscription and I/O contention
+- Better utilization of node I/O capacity
+- Predictable test performance (no I/O throttling)
+
+**When to Adjust:**
+- **Increase capacity** if tests frequently blocked
+- **Decrease capacity** if observing I/O contention or slowdowns
+- **Disable** if IOPS not actually a bottleneck for your workload
+
+---
+
 ## Troubleshooting Configuration Issues
 
 ### Issue: All tests going to one node (load imbalance)
@@ -1133,6 +1405,81 @@ Example:
 10 nodes, 5s polling = 5 KB × 10 × (1000/5000) = 10 KB/s = 80 Kbps (negligible)
 10 nodes, 1s polling = 5 KB × 10 × (1000/1000) = 50 KB/s = 400 Kbps (moderate)
 ```
+
+---
+
+### Issue: Tests blocked with "No eligible nodes" after enabling IOPS predictions
+
+**Symptoms:**
+- Tests stop being assigned after 1-2 are scheduled
+- Builder logs show "No eligible nodes after 10 attempts, waiting..."
+- `/health` endpoint shows IOPS capacity (e.g., 10,000)
+- `/score` endpoint returns IOPS predictions (e.g., 2,500-5,000 per test)
+- Node appears healthy but scheduler rejects tests
+
+**Diagnosis:**
+IOPS capacity exhaustion - node capacity too low for predicted test demands.
+
+**Example Calculation:**
+```
+Node capacity: 10,000 IOPS
+Test predictions: 2,500-5,000 IOPS per test
+Safety margins: 12.8% (5% base + 10% × (1 - 0.22 confidence))
+
+Test 1: 2,500 × 1.128 = 2,820 IOPS required
+Test 2: 5,000 × 1.128 = 5,640 IOPS required
+Total: 8,460 IOPS (fits within 10,000) ✓
+
+Test 3: 3,500 × 1.128 = 3,948 IOPS required
+Total so far: 12,408 IOPS > 10,000 capacity ✗
+→ Test 3 and beyond are rejected
+```
+
+**Fix Option 1 - Increase Node Capacity (Recommended):**
+```properties
+# In tester.conf
+node_iops_capacity=25000    # Increased from 10000
+
+# Restart tester
+bash bin/start_tester.sh
+
+# Verify
+curl http://tester:8090/health | grep iops
+# Should show: "iops": 25000
+```
+
+**Fix Option 2 - Disable IOPS Predictions (Temporary):**
+```properties
+# In builder.conf
+use_iops_predictions=false   # Temporarily disable
+
+# No restart needed (builder reads config per-request)
+```
+
+**Verification:**
+```bash
+# Run test with 6 tests
+# With node_iops_capacity=25000:
+#   25,000 / (3,500 × 1.128) = 6.3 tests fit ✓
+
+# Check builder logs - should see all 6 tests assigned
+grep "Assignment.*/" builder.log
+# Should show: Assignment 1/6, 2/6, ... 6/6
+```
+
+**Root Cause (Historical):**
+Prior to November 2025, IOPS capacity was hardcoded to 10,000 in NodeCapacity.java. This value was:
+- Too low for SATA SSD (typical: 10K-90K IOPS)
+- Too high for HDD (typical: 80-120 IOPS)
+- Did not match any hardware type well
+- Prevented more than 2-3 tests from running concurrently
+
+The configurable `node_iops_capacity` parameter was introduced to allow proper tuning for different storage types.
+
+**Prevention:**
+- Set `node_iops_capacity` based on actual storage type (see table in node_iops_capacity section)
+- Use capacity planning formula before enabling IOPS predictions
+- Start with `use_iops_predictions=false` until capacity is verified
 
 ---
 
@@ -1314,8 +1661,14 @@ scheduling_mice_routing=cluster_a_url
 
 ## Document Metadata
 
-- **Version:** 1.0
-- **Last Updated:** 2025-11-10
+- **Version:** 1.1
+- **Last Updated:** 2025-11-19
+- **Recent Changes:**
+  - Added `use_iops_predictions` configuration parameter (builder.conf)
+  - Added `node_iops_capacity` configuration parameter (tester.conf)
+  - Added Scenario 5: IOPS-Aware Scheduling
+  - Added troubleshooting case for IOPS capacity exhaustion
+  - Documented IOPS capacity planning and storage type recommendations
 - **Related Documents:**
   - [SMART_SCHEDULING_ARCHITECTURE.md](SMART_SCHEDULING_ARCHITECTURE.md) - Architecture and design
   - [SMART_SCHEDULING_TESTING_GUIDE.md](SMART_SCHEDULING_TESTING_GUIDE.md) - Testing procedures
@@ -1359,6 +1712,9 @@ All other parameters will use sensible defaults.
 | `stats_snapshot_interval_seconds` | `300` | tester.conf |
 | `heartbeat_interval_seconds` | `5` | tester.conf |
 | `score_endpoint_enabled` | `true` | tester.conf |
+| `node_iops_capacity` | `25000` | tester.conf |
+| `use_iops_predictions` | `false` | builder.conf |
+| `scheduling_margin_iops_base` | `0.25` (0.05 when predictions enabled) | builder.conf |
 
 ---
 
