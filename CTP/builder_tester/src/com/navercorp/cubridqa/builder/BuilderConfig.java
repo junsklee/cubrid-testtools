@@ -95,9 +95,6 @@ public class BuilderConfig {
     private static final String SCHEDULING_MARGIN_IOPS_BASE = "scheduling_margin_iops_base";
     private static final String SCHEDULING_MARGIN_CONFIDENCE_FACTOR = "scheduling_margin_confidence_factor";
     private static final String USE_IOPS_PREDICTIONS = "use_iops_predictions";
-    private static final String USE_RAMP_UP_DEFERRAL = "use_ramp_up_deferral";
-    private static final String RAMP_UP_IO_UTILIZATION_THRESHOLD = "ramp_up_io_utilization_threshold";
-    private static final String RAMP_UP_MIN_IO_HEADROOM_MBPS = "ramp_up_min_io_headroom_mbps";
 
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
@@ -977,18 +974,6 @@ public class BuilderConfig {
 
     public boolean useIopsPredictions() {
         return Boolean.parseBoolean(properties.getProperty(USE_IOPS_PREDICTIONS, "false"));
-    }
-
-    public boolean useRampUpDeferral() {
-        return Boolean.parseBoolean(properties.getProperty(USE_RAMP_UP_DEFERRAL, "false"));
-    }
-
-    public double getRampUpIoUtilizationThreshold() {
-        return Double.parseDouble(properties.getProperty(RAMP_UP_IO_UTILIZATION_THRESHOLD, "0.40"));
-    }
-
-    public double getRampUpMinIoHeadroomMbps() {
-        return Double.parseDouble(properties.getProperty(RAMP_UP_MIN_IO_HEADROOM_MBPS, "80.0"));
     }
 
     // IO-first scheduling weights
