@@ -915,7 +915,7 @@ public class BuilderConfig {
     }
 
     public long getSchedulingMiceThresholdMs() {
-        return Long.parseLong(properties.getProperty(SCHEDULING_MICE_THRESHOLD_MS, "20000"));
+        return Long.parseLong(properties.getProperty(SCHEDULING_MICE_THRESHOLD_MS, "30000"));
     }
 
     public double getSchedulingElephantWeight() {
@@ -959,7 +959,7 @@ public class BuilderConfig {
     }
 
     public double getSchedulingIoHeavyThreshold() {
-        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_HEAVY_THRESHOLD, "60.0"));
+        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_HEAVY_THRESHOLD, "40.0"));
     }
 
     public double getSchedulingMixLongFraction() {

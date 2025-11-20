@@ -124,7 +124,7 @@ public class PredictedDemand {
     public static PredictedDemand conservative(NodeHardware hw) {
         if (hw == null) {
             // Absolute fallback when hardware unknown
-            final long ioB = 10L * 1024 * 1024;  // 10MB/s total
+            final long ioB = 30L * 1024 * 1024;  // 30MB/s total to avoid under-reporting IO
             final long ioRB = ioB / 2;            // split read/write conservatively
             final long ioWB = ioB - ioRB;
             return new PredictedDemand(30_000, 500, 512L * 1024 * 1024, ioB, ioRB, ioWB,
@@ -133,7 +133,7 @@ public class PredictedDemand {
         // Scale to node: ~0.5 cores per core count, 512MB, moderate IO
         final int cpuMc = Math.max(500, Math.min((int) (hw.getCpuPct() * 10), (int) (0.5 * hw.getCpuPct() * 10)));
         final long memB = 512L * 1024 * 1024; // 512MB
-        final long ioB = 10L * 1024 * 1024;  // 10MB/s total
+        final long ioB = 30L * 1024 * 1024;  // 30MB/s total
         final long ioRB = ioB / 2;            // split read/write conservatively
         final long ioWB = ioB - ioRB;
         final long netB = 5L * 1024 * 1024;  // 5MB/s
