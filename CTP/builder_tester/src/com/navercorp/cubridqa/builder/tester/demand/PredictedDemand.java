@@ -177,6 +177,13 @@ public class PredictedDemand {
                 ioWriteBps = ioBps - ioReadBps;
             }
         }
+        // Legacy per-direction MB/s keys (builder may send these)
+        if (ioReadBps < 0 && p.has("ioReadMbPerSec")) {
+            ioReadBps = (long) Math.max(0, p.optDouble("ioReadMbPerSec", 0.0)) * 1024L * 1024L;
+        }
+        if (ioWriteBps < 0 && p.has("ioWriteMbPerSec")) {
+            ioWriteBps = (long) Math.max(0, p.optDouble("ioWriteMbPerSec", 0.0)) * 1024L * 1024L;
+        }
         if (ioReadBps < 0) ioReadBps = Math.max(0, p.optLong("ioReadBytesPerSec", -1));
         if (ioWriteBps < 0) ioWriteBps = Math.max(0, p.optLong("ioWriteBytesPerSec", -1));
         if (netBps < 0 && p.has("netMbPerSec")) {
