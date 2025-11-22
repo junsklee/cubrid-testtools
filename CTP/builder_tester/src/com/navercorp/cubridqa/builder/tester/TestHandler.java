@@ -248,6 +248,10 @@ public class TestHandler implements HttpHandler {
         if (pd == null) {
             return false;
         }
+        // Do not treat implicit/default predictions as heavy; require explicit predicted block.
+        if (!pd.hasExplicitPrediction()) {
+            return false;
+        }
         long durationMs = pd.getDurationMs();
         if (durationMs < config.getSchedulingMiceThresholdMs()) {
             return false;

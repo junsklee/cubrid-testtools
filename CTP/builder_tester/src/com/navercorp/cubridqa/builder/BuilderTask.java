@@ -154,13 +154,15 @@ public class BuilderTask {
             }
             
             // Distribute tests across multiple tester nodes
-            Map<String, Integer> workerCapacities = new LinkedHashMap<>();
+            Map<String, Integer> workerCapacities = new LinkedHashMap<>(); // current caps (start heavy)
+            Map<String, Integer> workerPeakCaps = new LinkedHashMap<>();
             Map<String, AtomicInteger> dispatchCounts = new ConcurrentHashMap<>();
             for (String worker : workerIps) {
-                int concurrency = Math.max(1, fetchTesterConcurrency(worker));
-                workerCapacities.put(worker, concurrency);
+                TesterCaps caps = fetchTesterCaps(worker);
+                workerCapacities.put(worker, caps.heavyCap);
+                workerPeakCaps.put(worker, caps.peakCap);
                 dispatchCounts.put(worker, new AtomicInteger(0));
-                taskLogger.info(String.format("Tester %s reports max_concurrent_tests=%d", worker, concurrency));
+                taskLogger.info(String.format("Tester %s reports max_concurrent_tests=%d (peak=%d)", worker, caps.heavyCap, caps.peakCap));
             }
             // Calculate total number of test executions
             int totalTestExecutions = builtPackages.size() * tests.length();
@@ -187,6 +189,7 @@ public class BuilderTask {
                     finalBuildType,
                     testRequestId,
                     workerCapacities,
+                    workerPeakCaps,
                     testersUsed
                 );
             } else {
@@ -716,7 +719,16 @@ public class BuilderTask {
 
 
 
-    private int fetchTesterConcurrency(String workerIp) {
+    private static final class TesterCaps {
+        final int heavyCap;
+        final int peakCap;
+        TesterCaps(int heavyCap, int peakCap) {
+            this.heavyCap = heavyCap;
+            this.peakCap = peakCap;
+        }
+    }
+
+    private TesterCaps fetchTesterCaps(String workerIp) {
         try {
             String host = workerIp;
             int port = config.getTesterPort();
@@ -741,30 +753,35 @@ public class BuilderTask {
                     }
                 }
                 JSONObject json = new JSONObject(response.toString());
-                if (json.has("maxConcurrentTests")) {
-                    return json.getInt("maxConcurrentTests");
-                }
-
                 if (json.has("concurrency")) {
                     JSONObject concurrency = json.getJSONObject("concurrency");
 
-                    // Prefer the heavy-mode advertised cap to avoid initial overload
                     int heavyLimit = concurrency.optInt("maxWhileHeavy",
                             concurrency.optInt("max", 0));
                     if (heavyLimit > 0) {
-                        return heavyLimit;
+                        int peak = concurrency.optInt("maxAfterHeavy",
+                                concurrency.optInt("maxPeak",
+                                        concurrency.optInt("max", heavyLimit)));
+                        return new TesterCaps(Math.max(1, heavyLimit), Math.max(heavyLimit, peak));
                     }
 
                     // Fall back to currently active limit if heavy cap missing
                     int activeLimit = concurrency.optInt("activeLimit", 0);
                     if (activeLimit > 0) {
-                        return activeLimit;
+                        int peak = concurrency.optInt("maxAfterHeavy",
+                                concurrency.optInt("maxPeak", activeLimit));
+                        return new TesterCaps(Math.max(1, activeLimit), Math.max(activeLimit, peak));
                     }
 
                     // Legacy fallback
                     if (concurrency.has("max")) {
-                        return concurrency.optInt("max", 4);
+                        int max = concurrency.optInt("max", 4);
+                        return new TesterCaps(Math.max(1, max), Math.max(1, max));
                     }
+                }
+                if (json.has("maxConcurrentTests")) {
+                    int max = json.getInt("maxConcurrentTests");
+                    return new TesterCaps(Math.max(1, max), Math.max(1, max));
                 }
             } else {
                 taskLogger.warning("Health check responded with status: " + status + " from " + host + ":" + port);
@@ -773,7 +790,7 @@ public class BuilderTask {
             taskLogger.log(Level.WARNING, "Failed to fetch tester concurrency from health endpoint, using default", e);
         }
         // Fallback to a sane default if tester does not report or on error
-        return 4;
+        return new TesterCaps(4, 4);
     }
     
     private String buildCommit(String commit, String buildType, File workDir, String baselineCommit) 
@@ -2338,7 +2355,8 @@ public class BuilderTask {
      */
     private void distributeTestsWithSmartScheduling(Map<String, String> builtPackages, JSONArray tests,
                                                      List<String> workerIps, String buildType, String testRequestId,
-                                                     Map<String, Integer> workerCapacities, Set<String> testersUsed) {
+                                                     Map<String, Integer> workerCapacities, Map<String, Integer> workerPeakCaps,
+                                                     Set<String> testersUsed) {
         taskLogger.info("[Smart Scheduling] Initializing scheduler...");
 
         // Initialize scheduler components
@@ -2380,6 +2398,15 @@ public class BuilderTask {
             config
         );
         nodeDirectory.start();
+        // Seed snapshots before offering thousands of tests
+        nodeDirectory.pollNow();
+        if (nodeDirectory.getHealthyNodes().isEmpty()) {
+            try {
+                Thread.sleep(Math.max(1000, config.getSchedulingNodePollIntervalSeconds() * 1000));
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
 
         ScoreFunction scoreFunction = new ScoreFunction(
             config.getSchedulingWeightPressure(),
@@ -2479,23 +2506,75 @@ public class BuilderTask {
             }
         }
 
+        // Log how many tests are expected to trigger heavy mode on testers
+        int heavyCandidates = 0;
+        for (TestInstance ti : testInstances) {
+            if (isHeavyCandidate(ti)) {
+                heavyCandidates++;
+            }
+        }
+        final AtomicInteger heavyAssigned = new AtomicInteger(0);
+        taskLogger.info(String.format(
+                "[Smart Scheduling] Heavy candidates before dispatch: %d/%d (duration>=%.0fms, io>=%.1f MB/s total)",
+                heavyCandidates,
+                testInstances.size(),
+                (double) config.getSchedulingMiceThresholdMs(),
+                config.getSchedulingIoHeavyThreshold()));
+
         taskLogger.info("[Smart Scheduling] Offering " + testInstances.size() + " tests to scheduler");
         scheduler.offer(testInstances);
 
         // Poll scheduler and submit tests
-        int totalConcurrency = workerCapacities.values().stream().mapToInt(Integer::intValue).sum();
-        if (totalConcurrency <= 0) {
-            totalConcurrency = Math.max(1, workerIps.size());
+        int totalHeavy = workerCapacities.values().stream().mapToInt(Integer::intValue).sum();
+        int totalPeak = workerPeakCaps.values().stream().mapToInt(Integer::intValue).sum();
+        if (totalPeak <= 0) {
+            totalPeak = Math.max(1, workerIps.size());
+        }
+        if (totalHeavy <= 0) {
+            totalHeavy = Math.max(1, workerIps.size());
         }
 
-        ExecutorService testExecutor = Executors.newFixedThreadPool(totalConcurrency);
-        Semaphore capacitySemaphore = new Semaphore(totalConcurrency);
+        ExecutorService testExecutor = Executors.newFixedThreadPool(totalPeak);
+        Semaphore capacitySemaphore = new Semaphore(totalHeavy);
+        final AtomicInteger currentTotalPermits = new AtomicInteger(totalHeavy);
+        Map<String, Boolean> workerSawHeavy = new ConcurrentHashMap<>();
         List<Future<?>> inflightTests = Collections.synchronizedList(new ArrayList<>());
 
         int assignedCount = 0;
         int noEligibleCount = 0;
         try {
             while (scheduler.hasPending()) {
+                boolean heavyBacklog = heavyAssigned.get() < heavyCandidates;
+                // Dynamically ramp permits only after heavies have been observed and drained
+                int desiredTotal = 0;
+                for (String worker : workerIps) {
+                    NodeSnapshot snap = nodeDirectory.getSnapshot(worker.contains(":") ? worker : worker + ":" + config.getTesterPort());
+                    int peakCap = workerPeakCaps.getOrDefault(worker, workerCapacities.getOrDefault(worker, 1));
+                    int currentCap = workerCapacities.getOrDefault(worker, 1);
+                    if (snap == null) {
+                        desiredTotal += currentCap;
+                        continue;
+                    }
+                    if (snap.getHeavyRunning() > 0) {
+                        workerSawHeavy.put(worker, true);
+                    }
+                    boolean heaviesRunning = snap.getHeavyRunning() > 0 || snap.getActiveLimit() <= snap.getMaxWhileHeavy();
+                    boolean canRamp = Boolean.TRUE.equals(workerSawHeavy.get(worker))
+                            && !heaviesRunning
+                            && snap.getRunningTests() >= snap.getMaxWhileHeavy()
+                            && !heavyBacklog;
+                    int advertised = snap.getActiveLimit();
+                    int desired = canRamp ? Math.max(currentCap, Math.min(peakCap, advertised)) : currentCap;
+                    workerCapacities.put(worker, desired);
+                    desiredTotal += desired;
+                }
+                if (desiredTotal > currentTotalPermits.get()) {
+                    int delta = desiredTotal - currentTotalPermits.get();
+                    capacitySemaphore.release(delta);
+                    currentTotalPermits.addAndGet(delta);
+                    taskLogger.fine(String.format("Increasing total permits to %d (delta=%d)", desiredTotal, delta));
+                }
+
                 try {
                     capacitySemaphore.acquire();
                 } catch (InterruptedException ie) {
@@ -2522,6 +2601,9 @@ public class BuilderTask {
 
                 noEligibleCount = 0;
                 Assignment a = assignment.get();
+                if (isHeavyCandidate(a.getTest())) {
+                    heavyAssigned.incrementAndGet();
+                }
                 assignedCount++;
                 taskLogger.info(String.format("[Smart Scheduling] Assignment %d/%d: %s",
                     assignedCount, testInstances.size(), a));
@@ -2612,6 +2694,20 @@ public class BuilderTask {
         }
         int idx = nodeId.indexOf(':');
         return idx >= 0 ? nodeId.substring(0, idx) : nodeId;
+    }
+
+    /**
+     * Lightweight builder-side heuristic to estimate whether a test will be treated
+     * as heavy by the tester (duration + IO). Used only for pre-dispatch logging.
+     */
+    private boolean isHeavyCandidate(TestInstance test) {
+        long duration = test.getPredictedDurationMs();
+        double io = test.getPredictedIoReadMbPerSec() + test.getPredictedIoWriteMbPerSec();
+        if (io <= 0) {
+            io = test.getPredictedIoMbPerSec();
+        }
+        return duration >= config.getSchedulingMiceThresholdMs()
+                && io >= config.getSchedulingIoHeavyThreshold();
     }
 
     /**

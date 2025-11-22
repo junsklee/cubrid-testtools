@@ -22,6 +22,10 @@ public class NodeSnapshot {
 
     // Concurrency
     private final int maxConcurrentTests;
+    private final int maxWhileHeavy;
+    private final int maxAfterHeavy;
+    private final int activeLimit;
+    private final int heavyRunning;
     private final int runningTests;
     private final int queuedTests;
 
@@ -56,6 +60,10 @@ public class NodeSnapshot {
         this.timestamp = builder.timestamp;
         this.status = builder.status;
         this.maxConcurrentTests = builder.maxConcurrentTests;
+        this.maxWhileHeavy = builder.maxWhileHeavy;
+        this.maxAfterHeavy = builder.maxAfterHeavy;
+        this.activeLimit = builder.activeLimit;
+        this.heavyRunning = builder.heavyRunning;
         this.runningTests = builder.runningTests;
         this.queuedTests = builder.queuedTests;
         this.cpuPct = builder.cpuPct;
@@ -102,6 +110,11 @@ public class NodeSnapshot {
         if (json.has("concurrency")) {
             JSONObject concurrency = json.getJSONObject("concurrency");
             builder.maxConcurrentTests(concurrency.optInt("max", 1));
+            builder.maxWhileHeavy(concurrency.optInt("maxWhileHeavy", builder.maxConcurrentTests));
+            builder.maxAfterHeavy(concurrency.optInt("maxAfterHeavy",
+                    concurrency.optInt("maxPeak", builder.maxConcurrentTests)));
+            builder.activeLimit(concurrency.optInt("activeLimit", builder.maxConcurrentTests));
+            builder.heavyRunning(concurrency.optInt("heavyRunning", 0));
             builder.runningTests(concurrency.optInt("running", 0));
             builder.queuedTests(concurrency.optInt("queued", 0));
         }
@@ -314,6 +327,22 @@ public class NodeSnapshot {
         return Math.max(0, maxConcurrentTests - runningTests);
     }
 
+    public int getMaxWhileHeavy() {
+        return maxWhileHeavy;
+    }
+
+    public int getMaxAfterHeavy() {
+        return maxAfterHeavy;
+    }
+
+    public int getActiveLimit() {
+        return activeLimit;
+    }
+
+    public int getHeavyRunning() {
+        return heavyRunning;
+    }
+
     /**
      * Returns free capacity for a resource dimension.
      */
@@ -363,6 +392,10 @@ public class NodeSnapshot {
         private Instant timestamp = Instant.now();
         private String status = "unknown";
         private int maxConcurrentTests = 1;
+        private int maxWhileHeavy = 1;
+        private int maxAfterHeavy = 1;
+        private int activeLimit = 1;
+        private int heavyRunning = 0;
         private int runningTests = 0;
         private int queuedTests = 0;
         private double cpuPct = 0.0;
@@ -404,6 +437,26 @@ public class NodeSnapshot {
 
         public Builder maxConcurrentTests(int val) {
             this.maxConcurrentTests = val;
+            return this;
+        }
+
+        public Builder maxWhileHeavy(int val) {
+            this.maxWhileHeavy = val;
+            return this;
+        }
+
+        public Builder maxAfterHeavy(int val) {
+            this.maxAfterHeavy = val;
+            return this;
+        }
+
+        public Builder activeLimit(int val) {
+            this.activeLimit = val;
+            return this;
+        }
+
+        public Builder heavyRunning(int val) {
+            this.heavyRunning = val;
             return this;
         }
 

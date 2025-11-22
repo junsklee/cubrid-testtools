@@ -959,7 +959,7 @@ public class BuilderConfig {
     }
 
     public double getSchedulingIoHeavyThreshold() {
-        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_HEAVY_THRESHOLD, "40.0"));
+        return Double.parseDouble(properties.getProperty(SCHEDULING_IO_HEAVY_THRESHOLD, "20.0"));
     }
 
     public double getSchedulingMixLongFraction() {

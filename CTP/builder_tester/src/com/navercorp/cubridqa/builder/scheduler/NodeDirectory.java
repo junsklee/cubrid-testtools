@@ -72,6 +72,13 @@ public class NodeDirectory {
     }
 
     /**
+     * Synchronously poll all nodes once. Useful when we need fresh snapshots before scheduling.
+     */
+    public void pollNow() {
+        pollAllNodes();
+    }
+
+    /**
      * Stops the background polling thread.
      */
     public void stop() {

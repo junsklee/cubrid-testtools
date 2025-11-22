@@ -43,6 +43,9 @@ public class PredictedDemand {
     private final long netBytesPerSec;
     private final double confidence; // scalar (per-dimension optional via confidenceCpu/Mem/Io/Net/Iops)
 
+    // Whether the request included an explicit "predicted" block (as opposed to defaults)
+    private final boolean hasExplicitPrediction;
+
     // Optional per-dimension confidences (0..1). If negative, scalar confidence applies.
     private final double confidenceCpu;
     private final double confidenceMem;
@@ -86,7 +89,8 @@ public class PredictedDemand {
                             long ioBytesPerSec, long ioReadBytesPerSec, long ioWriteBytesPerSec,
                             long iops, long netBytesPerSec,
                             double confidence, double cCpu, double cMem, double cIo,
-                            double cNet, double cIops, List<Phase> phases) {
+                            double cNet, double cIops, List<Phase> phases,
+                            boolean hasExplicitPrediction) {
         this.durationMs = Math.max(0, durationMs);
         this.cpuMillicores = Math.max(0, cpuMillicores);
         this.memBytes = Math.max(0, memBytes);
@@ -102,6 +106,7 @@ public class PredictedDemand {
         this.confidenceNet = clampOrNeg(cNet);
         this.confidenceIops = clampOrNeg(cIops);
         this.phases = phases == null ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(phases));
+        this.hasExplicitPrediction = hasExplicitPrediction;
     }
 
     private static double clamp01(double v) {
@@ -128,7 +133,7 @@ public class PredictedDemand {
             final long ioRB = ioB / 2;            // split read/write conservatively
             final long ioWB = ioB - ioRB;
             return new PredictedDemand(30_000, 500, 512L * 1024 * 1024, ioB, ioRB, ioWB,
-                    200, 5L * 1024 * 1024, 0.25, -1, -1, -1, -1, -1, null);
+                    200, 5L * 1024 * 1024, 0.25, -1, -1, -1, -1, -1, null, false);
         }
         // Scale to node: ~0.5 cores per core count, 512MB, moderate IO
         final int cpuMc = Math.max(500, Math.min((int) (hw.getCpuPct() * 10), (int) (0.5 * hw.getCpuPct() * 10)));
@@ -137,7 +142,7 @@ public class PredictedDemand {
         final long ioRB = ioB / 2;            // split read/write conservatively
         final long ioWB = ioB - ioRB;
         final long netB = 5L * 1024 * 1024;  // 5MB/s
-        return new PredictedDemand(30_000, cpuMc, memB, ioB, ioRB, ioWB, 200, netB, 0.25, -1, -1, -1, -1, -1, null);
+        return new PredictedDemand(30_000, cpuMc, memB, ioB, ioRB, ioWB, 200, netB, 0.25, -1, -1, -1, -1, -1, null, false);
     }
 
     /**
@@ -148,7 +153,8 @@ public class PredictedDemand {
      * @return PredictedDemand (conservative defaults if absent)
      */
     public static PredictedDemand fromRequest(JSONObject req, NodeHardware hw) {
-        if (req == null || !req.has("predicted")) return conservative(hw);
+        boolean hasPredicted = req != null && req.has("predicted");
+        if (!hasPredicted) return conservative(hw);
         final JSONObject p = req.getJSONObject("predicted");
 
         // Canonical fields
@@ -238,7 +244,7 @@ public class PredictedDemand {
         if (iops < 0) iops = 200;
 
         return new PredictedDemand(durationMs, cpuMc, memBytes, ioBps, ioReadBps, ioWriteBps, iops, netBps,
-                confidence, cCpu, cMem, cIo, cNet, cIops, phases);
+                confidence, cCpu, cMem, cIo, cNet, cIops, phases, hasPredicted);
     }
 
     // Getters
@@ -297,6 +303,10 @@ public class PredictedDemand {
 
     public double getConfidenceIops() {
         return confidenceIops;
+    }
+
+    public boolean hasExplicitPrediction() {
+        return hasExplicitPrediction;
     }
 
     public List<Phase> getPhases() {
