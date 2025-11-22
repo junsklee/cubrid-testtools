@@ -179,7 +179,14 @@ public class NodeDirectory {
         double requiredMem = test.getPredictedMemMb() + Math.max(test.getPredictedMemMb() * mMem, 100.0); // +100MB floor
         double requiredIoRead = test.getPredictedIoReadMbPerSec() * (1.0 + mIoRead);
         double requiredIoWrite = test.getPredictedIoWriteMbPerSec() * (1.0 + mIoWrite);
-        double requiredIops = test.getPredictedIops() * (1.0 + mIops);
+        // IOPS: honor only if explicitly enabled and prediction present
+        boolean enforceIops = config != null && config.useIopsPredictions()
+                && test.getPredictedIops() > 0 && node.getIops() > 0;
+        double requiredIops = enforceIops ? test.getPredictedIops() * (1.0 + mIops) : 0.0;
+        // Clamp unrealistic IOPS ask to a fraction of node capacity to avoid rejecting all nodes
+        if (enforceIops) {
+            requiredIops = Math.min(requiredIops, node.getIops() * 0.9);
+        }
         double requiredNet = test.getPredictedNetMbPerSec() * (1.0 + mNet);
 
         // Get free capacity (accounting for safety headroom)
@@ -196,13 +203,13 @@ public class NodeDirectory {
                 && node.getFreeMemMb() >= requiredMem
                 && (requiredIoRead <= 0 || (freeIoRead - keepFreeRead >= requiredIoRead))
                 && (requiredIoWrite <= 0 || (freeIoWrite - keepFreeWrite >= requiredIoWrite))
-                && (node.getIops() <= 0 || node.getFreeIops() >= requiredIops)
+                && (!enforceIops || node.getFreeIops() >= requiredIops)
                 && (node.getNetMbPerSec() <= 0 || node.getFreeNetMbPerSec() >= requiredNet);
 
         if (!hasHeadroom) {
             logger.fine(String.format(
                     "Node %s lacks headroom for test %s (conf=%.2f, margins: cpu=%.0f%% mem=%.0f%% io_r=%.0f%% io_w=%.0f%%): " +
-                            "CPU %.1f < %.1f, Mem %.0f < %.0f, IO_R %.1f < %.1f (keep_free=%.0f), IO_W %.1f < %.1f (keep_free=%.0f), IOPS %.0f < %.0f, Net %.1f < %.1f",
+                            "CPU %.1f < %.1f, Mem %.0f < %.0f, IO_R %.1f < %.1f (keep_free=%.0f), IO_W %.1f < %.1f (keep_free=%.0f), IOPS %s< %.0f, Net %.1f < %.1f",
                     node.getNodeId(), test.getTestKey(),
                     conf,
                     mCpu * 100, mMem * 100, mIoRead * 100, mIoWrite * 100,
@@ -210,7 +217,7 @@ public class NodeDirectory {
                     node.getFreeMemMb(), requiredMem,
                     freeIoRead, requiredIoRead, (double) keepFreeRead,
                     freeIoWrite, requiredIoWrite, (double) keepFreeWrite,
-                    node.getFreeIops(), requiredIops,
+                    enforceIops ? node.getFreeIops() : -1.0, requiredIops,
                     node.getFreeNetMbPerSec(), requiredNet));
         }
 
