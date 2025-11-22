@@ -2423,6 +2423,10 @@ public class BuilderTask {
 
         ReadyQueue readyQueue = new ReadyQueue(config.getSchedulingMiceThresholdMs());
         SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, config.getSchedulingElephantWeight(), config);
+        final Map<String, Integer> requeueAttempts = new ConcurrentHashMap<>();
+        final int maxRequeueAttempts = config.getRequeueMaxAttempts();
+        final long requeueDelayBaseMs = 5000L;
+        final long requeueDelayMaxMs = 30000L;
 
         // Normalize tests once for scoring and instance creation
         List<String> normalizedTests = new ArrayList<>();
@@ -2539,6 +2543,7 @@ public class BuilderTask {
         final AtomicInteger currentTotalPermits = new AtomicInteger(totalHeavy);
         Map<String, Boolean> workerSawHeavy = new ConcurrentHashMap<>();
         List<Future<?>> inflightTests = Collections.synchronizedList(new ArrayList<>());
+        Map<String, String> lastNodePerTest = new ConcurrentHashMap<>();
 
         int assignedCount = 0;
         int noEligibleCount = 0;
@@ -2610,6 +2615,7 @@ public class BuilderTask {
 
                 String nodeId = a.getTargetNodeId();
                 String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
+                lastNodePerTest.put(buildTestInstanceKey(a.getTest()), workerIp);
                 AtomicInteger inflightCounter = nodeInflight.computeIfAbsent(workerIp, k -> new AtomicInteger());
                 inflightCounter.incrementAndGet();
 
@@ -2631,6 +2637,13 @@ public class BuilderTask {
                         testersUsed.add(workerIp);
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
                             a.getTestKey(), workerIp, this.baselineCommit, buildType, a.getTest());
+                        if (shouldRequeue(testResult)) {
+                            boolean queued = requeueTest(a, workerIp, scheduler, requeueAttempts, workerIps,
+                                    lastNodePerTest, maxRequeueAttempts, requeueDelayBaseMs, requeueDelayMaxMs);
+                            if (queued) {
+                                return; // requeued for later; skip recording result now
+                            }
+                        }
                         results.add(testResult);
                     } catch (Exception e) {
                         taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);
@@ -2694,6 +2707,74 @@ public class BuilderTask {
         }
         int idx = nodeId.indexOf(':');
         return idx >= 0 ? nodeId.substring(0, idx) : nodeId;
+    }
+
+    /**
+     * Decide if a tester response should be retried (capacity-related rejection).
+     */
+    private boolean shouldRequeue(JSONObject result) {
+        if (result == null) return false;
+        String status = result.optString("status", "");
+        if (!"rejected".equalsIgnoreCase(status) && !"error".equalsIgnoreCase(status)) {
+            return false;
+        }
+        String msg = result.optString("message", "").toLowerCase();
+        return msg.contains("concurrency") || msg.contains("capacity") || msg.contains("no capacity");
+    }
+
+    /**
+     * Key to track retries per test instance.
+     */
+    private String buildTestInstanceKey(TestInstance t) {
+        return t.getTestKey() + "|" + t.getCommit() + "|" + t.getBaseline();
+    }
+
+    /**
+     * Requeue logic:
+     * 1) Try other nodes if available (re-offer immediately).
+     * 2) If single node or still no capacity, delay and re-offer up to max attempts.
+     */
+    private boolean requeueTest(Assignment assignment,
+                                String lastWorker,
+                                SchedulerService scheduler,
+                                Map<String, Integer> requeueAttempts,
+                                List<String> workerIps,
+                                Map<String, String> lastNodePerTest,
+                                int maxAttempts,
+                                long baseDelayMs,
+                                long maxDelayMs) {
+        TestInstance test = assignment.getTest();
+        String key = buildTestInstanceKey(test);
+        int attempt = requeueAttempts.getOrDefault(key, 0) + 1;
+        if (attempt > maxAttempts) {
+            taskLogger.warning(String.format("[Smart Scheduling] Requeue attempts exceeded for %s after %d tries", key, maxAttempts));
+            // Let caller record failure
+            return false;
+        }
+        requeueAttempts.put(key, attempt);
+        // Exponential backoff: base * 2^(attempt-1)
+        long delay = baseDelayMs;
+        for (int i = 1; i < attempt; i++) {
+            delay = Math.min(delay * 2, maxDelayMs);
+        }
+        delay = Math.min(delay, maxDelayMs);
+        boolean multiNode = workerIps.size() > 1;
+        boolean immediateFirstRetry = multiNode && attempt == 1;
+
+        taskLogger.info(String.format("[Smart Scheduling] Requeueing %s (attempt %d/%d, last=%s, delay=%ds%s)",
+                key, attempt, maxAttempts, lastWorker, delay / 1000,
+                immediateFirstRetry ? ", immediate other-node retry" : ""));
+
+        if (!immediateFirstRetry) {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        scheduler.offer(java.util.Collections.singletonList(test));
+        return true;
     }
 
     /**
