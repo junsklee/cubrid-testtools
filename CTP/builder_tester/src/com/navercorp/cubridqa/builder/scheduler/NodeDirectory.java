@@ -36,6 +36,7 @@ public class NodeDirectory {
 
     private final ConcurrentHashMap<String, NodeSnapshot> nodeMap;
     private final ScheduledExecutorService pollScheduler;
+    private volatile boolean diskPressureFallbackLogged = false;
 
     public NodeDirectory(List<String> testerNodes) {
         this(testerNodes, DEFAULT_POLL_INTERVAL_SECONDS, DEFAULT_STALE_THRESHOLD_SECONDS, null);
@@ -102,6 +103,47 @@ public class NodeDirectory {
     }
 
     /**
+     * Optimistically increments retryRunning counter for a node.
+     * Used to prevent TOCTOU race where multiple retries are assigned
+     * before the next /health poll updates the actual counter.
+     *
+     * This prevents over-subscription by updating the cached snapshot
+     * immediately after each retry assignment.
+     *
+     * @param nodeId the node ID to update
+     */
+    public void incrementRetryRunning(String nodeId) {
+        nodeMap.computeIfPresent(nodeId, (key, oldSnapshot) -> {
+            // Create optimistically updated snapshot
+            NodeSnapshot updated = oldSnapshot.toBuilder()
+                    .retryRunning(oldSnapshot.getRetryRunning() + 1)
+                    .runningTests(oldSnapshot.getRunningTests() + 1)
+                    .build();
+            return updated;
+        });
+    }
+
+    /**
+     * Optimistically increments runningTests counter for a node.
+     * Used to prevent TOCTOU race where multiple new tests are assigned
+     * before the next /health poll updates the actual counter.
+     *
+     * This ensures retry slot reservation works correctly by preventing
+     * new tests from consuming all capacity when retries are pending.
+     *
+     * @param nodeId the node ID to update
+     */
+    public void incrementRunningTests(String nodeId) {
+        nodeMap.computeIfPresent(nodeId, (key, oldSnapshot) -> {
+            // Create optimistically updated snapshot
+            NodeSnapshot updated = oldSnapshot.toBuilder()
+                    .runningTests(oldSnapshot.getRunningTests() + 1)
+                    .build();
+            return updated;
+        });
+    }
+
+    /**
      * Returns the current snapshot for a node, or null if not present/stale.
      */
     public NodeSnapshot getSnapshot(String nodeId) {
@@ -120,22 +162,85 @@ public class NodeDirectory {
      * Returns all healthy (non-stale, non-degraded) nodes.
      */
     public List<NodeSnapshot> getHealthyNodes() {
-        return nodeMap.values().stream()
+        List<NodeSnapshot> candidates = nodeMap.values().stream()
                 .filter(s -> !isStale(s))
                 .filter(s -> "healthy".equalsIgnoreCase(s.getStatus()))
                 .filter(s -> !s.isDegraded())
+                .collect(Collectors.toList());
+
+        List<NodeSnapshot> withoutDiskPressure = candidates.stream()
                 .filter(s -> !s.isDiskPressure())
+                .collect(Collectors.toList());
+
+        if (!withoutDiskPressure.isEmpty()) {
+            diskPressureFallbackLogged = false;
+            return withoutDiskPressure;
+        }
+
+        // All remaining healthy nodes report disk pressure. Allow them to avoid total starvation.
+        if (!candidates.isEmpty() && !diskPressureFallbackLogged) {
+            diskPressureFallbackLogged = true;
+            logger.warning(String.format(
+                    "All %d healthy nodes report disk pressure; proceeding anyway to avoid request starvation",
+                    candidates.size()));
+        }
+        return candidates;
+    }
+
+    /**
+     * Returns nodes eligible to run a NEW (non-retry) test.
+     * If retries are pending cluster-wide, reserves slots for them.
+     *
+     * @param test the test instance to schedule
+     * @param hasPendingRetries whether retries are pending in the cluster
+     * @return list of eligible nodes
+     */
+    public List<NodeSnapshot> getEligibleNodes(TestInstance test, boolean hasPendingRetries) {
+        final int retryReservedSlots = config != null ? config.getRetryReservedSlotsPerNode() : 1;
+
+        return getHealthyNodes().stream()
+                .filter(s -> hasNewTestConcurrency(s, hasPendingRetries, retryReservedSlots))
+                .filter(s -> hasResourceHeadroom(s, test))
                 .collect(Collectors.toList());
     }
 
     /**
-     * Returns nodes eligible to run a test (has concurrency AND resource headroom).
+     * Returns nodes eligible to run a RETRY test.
+     * Checks retry-specific concurrency limits from /health endpoint.
+     *
+     * @param retry the retry test instance to schedule
+     * @return list of eligible nodes
      */
-    public List<NodeSnapshot> getEligibleNodes(TestInstance test) {
+    public List<NodeSnapshot> getEligibleNodesForRetry(TestInstance retry) {
         return getHealthyNodes().stream()
-                .filter(s -> s.getAvailableConcurrency() > 0)
-                .filter(s -> hasResourceHeadroom(s, test))
+                .filter(this::hasRetryConcurrency)
+                .filter(s -> hasResourceHeadroom(s, retry))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Checks if node has concurrency capacity for new (non-retry) tests.
+     * Reserves slots for retries if any are pending cluster-wide.
+     */
+    private boolean hasNewTestConcurrency(NodeSnapshot node, boolean hasPendingRetries, int retryReservedSlots) {
+        return node.getNewTestHeadroom(hasPendingRetries, retryReservedSlots) > 0;
+    }
+
+    /**
+     * Checks if node has retry concurrency capacity.
+     */
+    private boolean hasRetryConcurrency(NodeSnapshot node) {
+        // Check overall concurrency limit
+        if (node.getAvailableConcurrency() <= 0) {
+            return false;
+        }
+
+        // Check retry-specific limit (if configured)
+        if (node.getMaxRetry() >= 0) {
+            return node.getRetryRunning() < node.getMaxRetry();
+        }
+
+        return true;  // Unlimited retries (maxRetry < 0)
     }
 
     /**

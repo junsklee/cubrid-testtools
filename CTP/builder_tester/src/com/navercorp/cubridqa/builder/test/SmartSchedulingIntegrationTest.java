@@ -179,7 +179,13 @@ public class SmartSchedulingIntegrationTest {
             .timestamp(Instant.now())
             .status("healthy")
             .maxConcurrentTests(4)
+            .activeLimit(4)  // Set activeLimit to match maxConcurrentTests
+            .maxWhileHeavy(2)
+            .maxAfterHeavy(4)
+            .maxRetry(2)
             .runningTests(1)
+            .heavyRunning(0)
+            .retryRunning(0)
             .queuedTests(0)
             .cpuPct(600.0)
             .usedCpuPct(200.0)

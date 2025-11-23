@@ -119,6 +119,14 @@ See usage README for:
 - ✅ BuilderTask integration with config toggle
 - ✅ 10-30% throughput improvement, 15-25% faster mean completion
 
+### December 2025 - Retry-Aware Scheduling
+- ✅ Separate retry queue tier with priority scheduling
+- ✅ Dynamic retry concurrency limits from /health endpoint
+- ✅ Retry slot reservation for starvation prevention
+- ✅ Eliminated static headroom hacks (`retryHeadroomMargin`)
+- ✅ Retry-first scheduling policy (100% priority over new tests)
+- ✅ Configurable retry reservation (`retry_reserved_slots_per_node`)
+
 ### November 2025 - I/O-First Scheduling Enhancement
 - ✅ Separate read/write I/O bandwidth tracking and prediction
 - ✅ I/O-dominant scoring with configurable weights

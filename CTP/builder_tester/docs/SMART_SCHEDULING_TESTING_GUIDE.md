@@ -612,6 +612,7 @@ Once all tests pass:
 - Builder requeues capacity/concurrency 409 rejections instead of marking them complete.
 - Retry metadata (`retryAttempt`, `isRetry`) is sent to testers; testers enforce a separate retry cap (`max_concurrent_tests_retry`, default 5, `-1` for unlimited).
 - `/health` reports `retryRunning` and `maxRetry` to observe retry slots.
+- Requeues stay in the same queue; a retry is only dispatched when the target node reports headroom (otherwise it is deferred and re-offered later), preventing starvation loops when nodes are full.
 - Config knobs:
   - `builder.conf`: `requeue_max_attempts` (`-1` = unlimited until nodes accept or are idle).
   - `tester.conf`: `max_concurrent_tests_retry` to prevent starving new work.

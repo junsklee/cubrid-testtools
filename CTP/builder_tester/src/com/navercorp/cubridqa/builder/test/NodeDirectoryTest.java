@@ -18,6 +18,7 @@ public class NodeDirectoryTest {
         System.out.println("=== NodeDirectoryTest Suite ===\n");
 
         testHealthyNodeFiltering();
+        testDiskPressureFallback();
         testEligibleNodesRequireHeadroom();
         testStaleSnapshotDiscardedOnLookup();
 
@@ -70,6 +71,29 @@ public class NodeDirectoryTest {
         System.out.println();
     }
 
+    private static void testDiskPressureFallback() {
+        System.out.println("Test 1b: Disk pressure fallback when all nodes are pressured");
+
+        NodeDirectory directory = new NodeDirectory(Collections.emptyList(), 5, 2);
+
+        NodeSnapshot diskOnly = baseSnapshot("node-disk-only")
+            .status("healthy")
+            .diskPressure(true)
+            .timestamp(Instant.now())
+            .runningTests(0)
+            .maxConcurrentTests(2)
+            .build();
+
+        directory.updateSnapshot(diskOnly.getNodeId(), diskOnly);
+
+        List<NodeSnapshot> healthyNodes = directory.getHealthyNodes();
+        assert healthyNodes.size() == 1 : "Disk-pressure-only cluster should still be considered available";
+        assert "node-disk-only".equals(healthyNodes.get(0).getNodeId()) : "Disk-pressure node should be returned when it is the only option";
+
+        System.out.println("  ✓ Disk-pressure-only node returned to avoid starvation");
+        System.out.println();
+    }
+
     private static void testEligibleNodesRequireHeadroom() {
         System.out.println("Test 2: Eligible nodes must have available concurrency");
 
@@ -99,7 +123,7 @@ public class NodeDirectoryTest {
             .predictedDurationMs(12_000)
             .build();
 
-        List<NodeSnapshot> eligible = directory.getEligibleNodes(test);
+        List<NodeSnapshot> eligible = directory.getEligibleNodes(test, false);
         assert eligible.size() == 1 : "Only nodes with headroom should be eligible";
         assert "node-idle".equals(eligible.get(0).getNodeId()) : "Idle node should be selected";
 

@@ -2,9 +2,7 @@ package com.navercorp.cubridqa.builder.tester;
 
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
 import java.lang.management.ManagementFactory;
 import com.sun.management.OperatingSystemMXBean;
 import java.util.logging.Logger;
@@ -241,15 +239,33 @@ public class NodeCapacity {
      * Based on pattern from ActualSampler.java.
      */
     private static String getConfigProperty(com.navercorp.cubridqa.builder.BuilderConfig config, String key, String defaultValue) {
+        // Try to use reflection to access the properties field
         try {
-            java.lang.reflect.Field propsField = config.getClass().getDeclaredField("properties");
-            propsField.setAccessible(true);
-            java.util.Properties props = (java.util.Properties) propsField.get(config);
+            // Walk up the class hierarchy to find properties field
+            Class<?> clazz = config.getClass();
+            java.lang.reflect.Field propertiesField = null;
+
+            while (clazz != null && propertiesField == null) {
+                try {
+                    propertiesField = clazz.getDeclaredField("properties");
+                } catch (NoSuchFieldException e) {
+                    clazz = clazz.getSuperclass();
+                }
+            }
+
+            if (propertiesField == null) {
+                logger.warning("Could not find properties field in config class hierarchy");
+                return defaultValue;
+            }
+
+            propertiesField.setAccessible(true);
+            java.util.Properties props = (java.util.Properties) propertiesField.get(config);
             String value = props.getProperty(key, defaultValue);
-            logger.fine("Config property '" + key + "' = '" + value + "' (default: '" + defaultValue + "')");
+            logger.info("Config property '" + key + "' = '" + value + "' (default: '" + defaultValue + "')");
             return value;
         } catch (Exception e) {
-            logger.fine("Could not read config property '" + key + "', using default: " + defaultValue);
+            // Fallback to default if reflection fails
+            logger.warning("Failed to read config property '" + key + "': " + e.getMessage());
             return defaultValue;
         }
     }

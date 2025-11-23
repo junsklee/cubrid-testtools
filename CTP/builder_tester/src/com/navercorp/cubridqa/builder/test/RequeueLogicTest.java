@@ -44,18 +44,17 @@ public class RequeueLogicTest {
         // Reflective access to private helpers
         Method shouldRequeue = BuilderTask.class.getDeclaredMethod("shouldRequeue", JSONObject.class);
         shouldRequeue.setAccessible(true);
-        Method requeueTest = BuilderTask.class.getDeclaredMethod("requeueTest",
-                com.navercorp.cubridqa.builder.scheduler.Assignment.class,
-                String.class,
-                SchedulerService.class,
-                Map.class,
-                List.class,
-                int.class,
-                long.class,
-                long.class,
-                long.class,
-                NodeDirectory.class);
-        requeueTest.setAccessible(true);
+        Method requeueTest = null;
+        for (Method m : BuilderTask.class.getDeclaredMethods()) {
+            if (m.getName().equals("requeueTest")) {
+                requeueTest = m;
+                m.setAccessible(true);
+                break;
+            }
+        }
+        if (requeueTest == null) {
+            throw new IllegalStateException("requeueTest method not found via reflection");
+        }
 
         // Verify shouldRequeue looks at both message and error fields
         JSONObject cap = new JSONObject().put("status", "rejected").put("error", "No capacity - node oversubscribed");
@@ -110,8 +109,16 @@ public class RequeueLogicTest {
         Assignment assign = new Assignment(ti, "n1:8090", 0.0);
 
         Map<String, Integer> attempts = new ConcurrentHashMap<>();
-        boolean queued = (Boolean) requeueTest.invoke(task, assign, "n1", stubScheduler, attempts,
-                Collections.singletonList("n1:8090"), 3, 1L, 2L, 50L, stubDir);
+        Class<?>[] params = requeueTest.getParameterTypes();
+        Object[] invokeArgs;
+        if (params.length == 11) {
+            invokeArgs = new Object[]{assign, "n1", stubScheduler, attempts,
+                    Collections.singletonList("n1:8090"), 3, 1L, 2L, 50L, stubDir, Integer.valueOf(1)};
+        } else {
+            invokeArgs = new Object[]{assign, "n1", stubScheduler, attempts,
+                    Collections.singletonList("n1:8090"), 3, 1L, 2L, 50L, stubDir};
+        }
+        boolean queued = (Boolean) requeueTest.invoke(task, invokeArgs);
 
         if (!queued || requeued.get() == null) {
             throw new IllegalStateException("Expected test to be requeued when capacity is available");

@@ -130,82 +130,127 @@ public class SchedulerService {
     }
 
     /**
-     * Assigns the next test to the best available node.
+     * Assigns the next test to the best available node with retry-aware prioritization.
      *
-     * <p>Algorithm (weighted round-robin with resource awareness):
+     * <p><b>Retry-Aware Priority:</b>
      * <ol>
-     *   <li>Use weighted probability to decide elephant vs mice (default 80% elephant)</li>
-     *   <li>Try selected type first, fall back to other type if needed</li>
-     *   <li>Resource headroom checks and elephant load penalties prevent oversubscription</li>
-     *   <li>Return Assignment with best (test, node, score) triple, or empty if no eligible nodes</li>
+     *   <li><b>Priority 1 (100%):</b> Retry tests (oldest first, to prevent starvation)</li>
+     *   <li><b>Priority 2 (80%):</b> Elephant tests (longest first, for makespan optimization)</li>
+     *   <li><b>Priority 3 (20%):</b> Mice tests (shortest first with aging, for throughput)</li>
      * </ol>
-     * </p>
      *
-     * <p><b>Makespan Optimization with Resource Safety:</b> Elephants (longest tests) get priority
-     * via weighted selection, starting the critical path early. However, mice fill gaps to prevent
-     * elephant pile-up and resource contention. Existing resource checks and load penalties ensure
-     * elephants are distributed across nodes safely.</p>
+     * <p>Retries always attempt scheduling before new tests. This prevents retry starvation
+     * during heavy traffic and ensures failed tests are retried promptly.</p>
      *
      * @return Assignment if successful, empty if no eligible nodes
      */
     public synchronized Optional<Assignment> assignNext() {
+        boolean hasPendingRetries = !readyQueue.isRetriesEmpty();
+
+        // PRIORITY 1: Always try retries first (100% priority)
+        if (hasPendingRetries) {
+            TestInstance retry = readyQueue.peekRetry();
+            if (retry != null) {
+                Optional<Assignment> assignment = assignRetry(retry);
+                if (assignment.isPresent()) {
+                    readyQueue.pollRetry();  // Consume retry on success
+                    // Optimistically increment retryRunning to prevent TOCTOU over-subscription
+                    nodeDirectory.incrementRetryRunning(assignment.get().getTargetNodeId());
+                    logger.info(String.format("Assigned retry (attempt %d, age %ds): %s",
+                            retry.getRetryAttempt(), retry.getWaitTimeSeconds(), assignment.get()));
+                    return assignment;
+                }
+                // Retry couldn't be placed - leave it queued, try new tests
+            }
+        }
+
+        // PRIORITY 2/3: New tests (weighted elephant/mice selection)
+        return assignNewTest(hasPendingRetries);
+    }
+
+    /**
+     * Attempts to assign a retry test using retry-specific eligibility.
+     */
+    private Optional<Assignment> assignRetry(TestInstance retry) {
+        List<NodeSnapshot> eligible = nodeDirectory.getEligibleNodesForRetry(retry);
+        if (eligible.isEmpty()) {
+            logger.fine(String.format("No eligible nodes for retry: %s (attempt %d, retryRunning/maxRetry on nodes exhausted)",
+                    retry.getTestKey(), retry.getRetryAttempt()));
+            return Optional.empty();
+        }
+
+        // Score and pick best node
+        NodeSnapshot best = scoreAndPickBest(retry, eligible);
+        return Optional.of(new Assignment(retry, best.getNodeId(), scoreFunction.score(retry, best)));
+    }
+
+    /**
+     * Assigns a new (non-retry) test using weighted elephant/mice selection.
+     */
+    private Optional<Assignment> assignNewTest(boolean hasPendingRetries) {
         // Weighted selection: decide whether to try elephant first
         boolean tryElephantFirst = (Math.random() < elephantWeight) && !readyQueue.isElephantsEmpty();
 
         if (tryElephantFirst) {
             // Try longest elephant (weighted selection favored this)
-            TestInstance elephant = readyQueue.pollElephant();
+            TestInstance elephant = readyQueue.peekElephant();
             if (elephant != null) {
-                Optional<Assignment> assignment = assignTest(elephant);
+                Optional<Assignment> assignment = assignTest(elephant, hasPendingRetries);
                 if (assignment.isPresent()) {
+                    readyQueue.pollElephant();  // Consume elephant on success
+                    // Optimistically increment runningTests to prevent TOCTOU over-subscription
+                    nodeDirectory.incrementRunningTests(assignment.get().getTargetNodeId());
                     logger.info(String.format("Assigned elephant (%.0f%% weighted LJF): %s",
-                                             elephantWeight * 100, assignment.get()));
+                            elephantWeight * 100, assignment.get()));
                     return assignment;
                 }
-                // No eligible nodes for elephant, re-offer and try mice
-                readyQueue.offer(elephant);
+                // No eligible nodes for elephant, try mice
             }
         }
 
         // Try mice (either weighted selection chose mice, or elephant failed eligibility)
         if (!readyQueue.isMiceEmpty()) {
-            TestInstance mouse = readyQueue.pollMouse();
+            TestInstance mouse = readyQueue.peekMouse();
             if (mouse != null) {
-                Optional<Assignment> assignment = assignTest(mouse);
+                Optional<Assignment> assignment = assignTest(mouse, hasPendingRetries);
                 if (assignment.isPresent()) {
+                    readyQueue.pollMouse();  // Consume mouse on success
+                    // Optimistically increment runningTests to prevent TOCTOU over-subscription
+                    nodeDirectory.incrementRunningTests(assignment.get().getTargetNodeId());
                     logger.info(String.format("Assigned mouse (%.0f%% weighted SJF): %s",
-                                             (1.0 - elephantWeight) * 100, assignment.get()));
+                            (1.0 - elephantWeight) * 100, assignment.get()));
                     return assignment;
                 }
-                // No eligible nodes, re-offer mouse
-                readyQueue.offer(mouse);
             }
         }
 
         // If we tried elephants first and failed, now try mice as fallback
-        // (we skipped mice earlier because elephant was selected)
         if (tryElephantFirst && !readyQueue.isMiceEmpty()) {
-            TestInstance mouse = readyQueue.pollMouse();
+            TestInstance mouse = readyQueue.peekMouse();
             if (mouse != null) {
-                Optional<Assignment> assignment = assignTest(mouse);
+                Optional<Assignment> assignment = assignTest(mouse, hasPendingRetries);
                 if (assignment.isPresent()) {
+                    readyQueue.pollMouse();  // Consume mouse on success
+                    // Optimistically increment runningTests to prevent TOCTOU over-subscription
+                    nodeDirectory.incrementRunningTests(assignment.get().getTargetNodeId());
                     logger.info("Assigned mouse (fallback after elephant filtered): " + assignment.get());
                     return assignment;
                 }
-                readyQueue.offer(mouse);
             }
         }
 
         // If we tried mice first and failed, now try elephants as fallback
         if (!tryElephantFirst && !readyQueue.isElephantsEmpty()) {
-            TestInstance elephant = readyQueue.pollElephant();
+            TestInstance elephant = readyQueue.peekElephant();
             if (elephant != null) {
-                Optional<Assignment> assignment = assignTest(elephant);
+                Optional<Assignment> assignment = assignTest(elephant, hasPendingRetries);
                 if (assignment.isPresent()) {
+                    readyQueue.pollElephant();  // Consume elephant on success
+                    // Optimistically increment runningTests to prevent TOCTOU over-subscription
+                    nodeDirectory.incrementRunningTests(assignment.get().getTargetNodeId());
                     logger.info("Assigned elephant (fallback after mouse filtered): " + assignment.get());
                     return assignment;
                 }
-                readyQueue.offer(elephant);
             }
         }
 
@@ -215,13 +260,21 @@ public class SchedulerService {
     /**
      * Assigns a specific test to the best eligible node.
      */
-    private Optional<Assignment> assignTest(TestInstance test) {
-        List<NodeSnapshot> eligibleNodes = nodeDirectory.getEligibleNodes(test);
+    private Optional<Assignment> assignTest(TestInstance test, boolean hasPendingRetries) {
+        List<NodeSnapshot> eligibleNodes = nodeDirectory.getEligibleNodes(test, hasPendingRetries);
         if (eligibleNodes.isEmpty()) {
             return Optional.empty();
         }
 
-        // Score all eligible nodes, pick minimum
+        NodeSnapshot bestNode = scoreAndPickBest(test, eligibleNodes);
+        double bestScore = scoreFunction.score(test, bestNode);
+        return Optional.of(new Assignment(test, bestNode.getNodeId(), bestScore));
+    }
+
+    /**
+     * Scores all eligible nodes and picks the one with lowest score (best fit).
+     */
+    private NodeSnapshot scoreAndPickBest(TestInstance test, List<NodeSnapshot> eligibleNodes) {
         NodeSnapshot bestNode = null;
         double bestScore = Double.MAX_VALUE;
 
@@ -233,11 +286,7 @@ public class SchedulerService {
             }
         }
 
-        if (bestNode == null) {
-            return Optional.empty();
-        }
-
-        return Optional.of(new Assignment(test, bestNode.getNodeId(), bestScore));
+        return bestNode;
     }
 
     private double ageNudge(TestInstance test) {

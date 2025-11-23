@@ -2433,7 +2433,7 @@ public class BuilderTask {
         final Map<String, Integer> requeueAttempts = new ConcurrentHashMap<>();
         final int maxRequeueAttempts = config.getRequeueMaxAttempts();
         final long requeueDelayBaseMs = 5000L;
-        final long requeueDelayMaxMs = 30000L;
+        final long requeueDelayMaxMs = 60000L;  // Max exponential backoff: 60s
         final long requeueWaitCapMs = 30000L;
 
         // Normalize tests once for scoring and instance creation
@@ -2554,18 +2554,20 @@ public class BuilderTask {
         final AtomicBoolean requeueSignal = new AtomicBoolean(false);
 
         int assignedCount = 0;
+        int newTestCount = 0;   // Track unique tests assigned (not retries)
+        int retryCount = 0;     // Track retry assignments
         int noEligibleCount = 0;
         try {
-            for (;;) {
-                if (!scheduler.hasPending()) {
-                    if (requeueSignal.getAndSet(false)) {
-                        try {
-                            Thread.sleep(500);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                        continue; // check again for requeued tests
+        for (;;) {
+            if (!scheduler.hasPending()) {
+                if (requeueSignal.getAndSet(false)) {
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    continue; // check again for requeued tests
                     }
                     break;
                 }
@@ -2629,9 +2631,21 @@ public class BuilderTask {
                 if (isHeavyCandidate(a.getTest())) {
                     heavyAssigned.incrementAndGet();
                 }
+
+                boolean isRetry = a.getTest().isRetry();
                 assignedCount++;
-                taskLogger.info(String.format("[Smart Scheduling] Assignment %d/%d: %s",
-                    assignedCount, testInstances.size(), a));
+
+                if (isRetry) {
+                    retryCount++;
+                    int attempt = a.getTest().getRetryAttempt();
+                    String maxAttempts = maxRequeueAttempts >= 0 ? String.valueOf(maxRequeueAttempts) : "∞";
+                    taskLogger.info(String.format("[Smart Scheduling] Retry assignment #%d (test: %s, attempt %d/%s)",
+                        assignedCount, a.getTestKey(), attempt, maxAttempts));
+                } else {
+                    newTestCount++;
+                    taskLogger.info(String.format("[Smart Scheduling] Assignment %d/%d (total: %d, retries: %d): %s",
+                        newTestCount, testInstances.size(), assignedCount, retryCount, a));
+                }
 
                 String nodeId = a.getTargetNodeId();
                 String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
@@ -2654,6 +2668,7 @@ public class BuilderTask {
                         }
                         // Track that this tester received a test for this requestId
                         testersUsed.add(workerIp);
+
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
                             a.getTestKey(), workerIp, this.baselineCommit, buildType, a.getTest());
                         if (shouldRequeue(testResult)) {
@@ -2807,7 +2822,7 @@ public class BuilderTask {
             try {
                 nodeDirectory.pollNow();
             } catch (Exception ignore) { }
-            String readyNode = findReadyNode(workerIps, nodeDirectory, config.getTesterPort());
+            String readyNode = findReadyNodeForRetry(workerIps, nodeDirectory, config.getTesterPort());
             if (readyNode != null) {
                 log.info(String.format("[Smart Scheduling] Found ready node %s for %s during requeue", readyNode, key));
                 scheduler.offer(java.util.Collections.singletonList(copyForRetry(test, attempt)));
@@ -2831,13 +2846,33 @@ public class BuilderTask {
         return true;
     }
 
-    private String findReadyNode(List<String> workerIps, NodeDirectory nodeDirectory, int defaultPort) {
+    /**
+     * Finds a node with available retry capacity.
+     * Uses retry-specific limits (maxRetry, retryRunning) instead of static headroom.
+     */
+    private String findReadyNodeForRetry(List<String> workerIps, NodeDirectory nodeDirectory, int defaultPort) {
         for (String worker : workerIps) {
             String nodeId = worker.contains(":") ? worker : worker + ":" + defaultPort;
             NodeSnapshot snap = nodeDirectory.getSnapshot(nodeId);
             if (snap == null) continue;
             if (!"healthy".equalsIgnoreCase(snap.getStatus())) continue;
-            if (snap.getRunningTests() < snap.getActiveLimit()) {
+
+            // Check retry-specific capacity
+            int retryHeadroom = snap.getRetryHeadroom();
+            if (retryHeadroom > 0) {
+                return nodeId;
+            }
+        }
+        return null;
+    }
+
+    private String findReadyNode(List<String> workerIps, NodeDirectory nodeDirectory, int defaultPort, int headroomMargin) {
+        for (String worker : workerIps) {
+            String nodeId = worker.contains(":") ? worker : worker + ":" + defaultPort;
+            NodeSnapshot snap = nodeDirectory.getSnapshot(nodeId);
+            if (snap == null) continue;
+            if (!"healthy".equalsIgnoreCase(snap.getStatus())) continue;
+            if (snap.getActiveLimit() - snap.getRunningTests() > headroomMargin) {
                 return nodeId;
             }
         }

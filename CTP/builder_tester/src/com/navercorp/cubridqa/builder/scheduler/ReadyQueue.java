@@ -6,13 +6,16 @@ import java.util.PriorityQueue;
 import java.util.Set;
 
 /**
- * Two-tier ready queue for test scheduling with makespan optimization.
+ * Three-tier ready queue for test scheduling with retry prioritization and makespan optimization.
  *
- * <p>Separates tests into "mice" (short tests) and "elephants" (long tests)
- * based on predicted duration threshold. Mice are prioritized using a min-heap
- * by predicted duration with aging boost (shortest first). Elephants are prioritized
- * using a max-heap by predicted duration (longest first) to minimize overall makespan.</p>
+ * <p>Separates tests into three queues:</p>
+ * <ul>
+ *   <li><b>Retries:</b> Failed tests being retried (highest priority, oldest first)</li>
+ *   <li><b>Mice:</b> Short tests (prioritized by shortest first with aging)</li>
+ *   <li><b>Elephants:</b> Long tests (prioritized by longest first for makespan optimization)</li>
+ * </ul>
  *
+ * <p><b>Retry Priority:</b> Retries are always attempted first to prevent starvation.</p>
  * <p><b>Key Optimization:</b> Elephants use longest-job-first (LJF) scheduling to ensure
  * the critical path (longest tests) starts early in parallel execution, minimizing the
  * time for all tests to complete.</p>
@@ -24,6 +27,9 @@ public class ReadyQueue {
     private static final long DEFAULT_MICE_THRESHOLD_MS = 20_000L;  // 20 seconds
 
     private final long miceThresholdMs;
+
+    // Retries: Priority queue sorted by submission time (oldest first), then attempt count (most retries first)
+    private final PriorityQueue<TestInstance> retriesQueue;
 
     // Mice: Priority queue sorted by (predicted_duration - age_boost)
     private final PriorityQueue<TestInstance> miceQueue;
@@ -38,6 +44,12 @@ public class ReadyQueue {
     public ReadyQueue(long miceThresholdMs) {
         this.miceThresholdMs = miceThresholdMs;
 
+        // Retries comparator: sort by submission time (oldest first), then attempt count (most retries first)
+        this.retriesQueue = new PriorityQueue<>(
+            Comparator.comparing(TestInstance::getSubmittedAt)
+                     .thenComparing(TestInstance::getRetryAttempt, Comparator.reverseOrder())
+        );
+
         // Mice comparator: sort by effective duration (predicted - age boost)
         this.miceQueue = new PriorityQueue<>(Comparator.comparingLong(this::effectiveDuration));
 
@@ -48,10 +60,13 @@ public class ReadyQueue {
     }
 
     /**
-     * Adds a test to the appropriate queue (mice or elephants).
+     * Adds a test to the appropriate queue (retries, mice, or elephants).
+     * Retries are routed to the retries queue regardless of duration.
      */
     public void offer(TestInstance test) {
-        if (test.getPredictedDurationMs() <= miceThresholdMs) {
+        if (test.isRetry()) {
+            retriesQueue.offer(test);
+        } else if (test.getPredictedDurationMs() <= miceThresholdMs) {
             miceQueue.offer(test);
         } else {
             elephantsQueue.offer(test);
@@ -75,26 +90,66 @@ public class ReadyQueue {
     }
 
     /**
-     * Removes the given test from either queue.
+     * Returns the next retry test (oldest submission, then most retries),
+     * or null if retries queue is empty.
      */
-    public boolean remove(TestInstance test) {
-        return miceQueue.remove(test) || elephantsQueue.remove(test);
+    public TestInstance pollRetry() {
+        return retriesQueue.poll();
     }
 
     /**
-     * Returns a snapshot view of all pending tests (across mice and elephants).
+     * Returns the next retry test without removing it,
+     * or null if retries queue is empty.
+     */
+    public TestInstance peekRetry() {
+        return retriesQueue.peek();
+    }
+
+    /**
+     * Returns the next mouse test without removing it,
+     * or null if mice queue is empty.
+     */
+    public TestInstance peekMouse() {
+        return miceQueue.peek();
+    }
+
+    /**
+     * Returns the next elephant test without removing it,
+     * or null if elephants queue is empty.
+     */
+    public TestInstance peekElephant() {
+        return elephantsQueue.peek();
+    }
+
+    /**
+     * Removes the given test from any queue.
+     */
+    public boolean remove(TestInstance test) {
+        return retriesQueue.remove(test) || miceQueue.remove(test) || elephantsQueue.remove(test);
+    }
+
+    /**
+     * Returns a snapshot view of all pending tests (across retries, mice, and elephants).
      */
     public Set<TestInstance> snapshot() {
-        Set<TestInstance> all = new HashSet<>(miceQueue);
+        Set<TestInstance> all = new HashSet<>(retriesQueue);
+        all.addAll(miceQueue);
         all.addAll(elephantsQueue);
         return all;
     }
 
     /**
-     * Returns true if both queues are empty.
+     * Returns true if all queues are empty.
      */
     public boolean isEmpty() {
-        return miceQueue.isEmpty() && elephantsQueue.isEmpty();
+        return retriesQueue.isEmpty() && miceQueue.isEmpty() && elephantsQueue.isEmpty();
+    }
+
+    /**
+     * Returns true if the retries queue is empty.
+     */
+    public boolean isRetriesEmpty() {
+        return retriesQueue.isEmpty();
     }
 
     /**
@@ -115,7 +170,14 @@ public class ReadyQueue {
      * Returns the total number of pending tests.
      */
     public int size() {
-        return miceQueue.size() + elephantsQueue.size();
+        return retriesQueue.size() + miceQueue.size() + elephantsQueue.size();
+    }
+
+    /**
+     * Returns the number of retry tests.
+     */
+    public int getRetryCount() {
+        return retriesQueue.size();
     }
 
     /**
@@ -148,6 +210,6 @@ public class ReadyQueue {
 
     @Override
     public String toString() {
-        return "ReadyQueue{mice=" + miceQueue.size() + ", elephants=" + elephantsQueue.size() + "}";
+        return "ReadyQueue{retries=" + retriesQueue.size() + ", mice=" + miceQueue.size() + ", elephants=" + elephantsQueue.size() + "}";
     }
 }

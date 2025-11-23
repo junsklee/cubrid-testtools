@@ -77,7 +77,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible1 = directory.getEligibleNodes(readHeavy);
+        List<NodeSnapshot> eligible1 = directory.getEligibleNodes(readHeavy, false);
         assert eligible1.size() == 1 : "Read-heavy test should be eligible";
 
         // Test with write-heavy demand that exceeds capacity (should fail)
@@ -94,7 +94,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(writeHeavy);
+        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(writeHeavy, false);
         assert eligible2.size() == 0 : "Write-heavy test should be rejected (exceeds capacity)";
 
         System.out.println("  ✓ Read/write headroom checks work independently");
@@ -156,7 +156,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible = directory.getEligibleNodes(test);
+        List<NodeSnapshot> eligible = directory.getEligibleNodes(test, false);
         assert eligible.size() == 0 : "Test should be rejected (exceeds safety headroom)";
 
         // Test requiring 30 MB/s read (should pass - within 35 MB/s available)
@@ -173,7 +173,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(test2);
+        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(test2, false);
         assert eligible2.size() == 1 : "Test should be eligible (within safety headroom)";
 
         System.out.println("  ✓ Safety headroom enforced correctly");
@@ -233,7 +233,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible = directory.getEligibleNodes(test);
+        List<NodeSnapshot> eligible = directory.getEligibleNodes(test, false);
         // With 100 MB/s capacity, 48 MB/s required should pass
         assert eligible.size() == 1 : "Test should be eligible with high margins";
 
@@ -253,7 +253,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.2)  // Low confidence
             .build();
 
-        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(lowConf);
+        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(lowConf, false);
         // 57 MB/s should still pass with 100 MB/s capacity
         assert eligible2.size() == 1 : "Low confidence test should still be eligible";
 
@@ -312,7 +312,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible1 = directory.getEligibleNodes(readHeavy);
+        List<NodeSnapshot> eligible1 = directory.getEligibleNodes(readHeavy, false);
         assert eligible1.size() == 1 : "Read-heavy test should pass";
 
         // Write-heavy test (should fail - exceeds write capacity)
@@ -329,7 +329,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(writeHeavy);
+        List<NodeSnapshot> eligible2 = directory.getEligibleNodes(writeHeavy, false);
         assert eligible2.size() == 0 : "Write-heavy test should fail (exceeds write capacity)";
 
         System.out.println("  ✓ Asymmetric read/write demands handled correctly");
@@ -381,7 +381,7 @@ public class NodeDirectoryIoTest {
             .confidence(0.8)
             .build();
 
-        List<NodeSnapshot> eligible = directory.getEligibleNodes(noIo);
+        List<NodeSnapshot> eligible = directory.getEligibleNodes(noIo, false);
         assert eligible.size() == 1 : "Zero I/O test should pass (I/O check bypassed)";
 
         System.out.println("  ✓ Zero I/O demand bypasses headroom check");

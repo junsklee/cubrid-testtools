@@ -99,6 +99,7 @@ public class BuilderConfig {
     private static final String USE_IOPS_PREDICTIONS = "use_iops_predictions";
     private static final String REQUEUE_MAX_ATTEMPTS = "requeue_max_attempts";
     private static final String MAX_CONCURRENT_TESTS_RETRY = "max_concurrent_tests_retry";
+    private static final String RETRY_RESERVED_SLOTS_PER_NODE = "retry_reserved_slots_per_node";
 
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
@@ -1012,6 +1013,15 @@ public class BuilderConfig {
 
     public int getMaxConcurrentTestsRetry() {
         return Integer.parseInt(properties.getProperty(MAX_CONCURRENT_TESTS_RETRY, "5"));
+    }
+
+    /**
+     * Number of slots to reserve per node for retries when retries are pending cluster-wide.
+     * Default: 1 (conservative reservation)
+     * Set to 0 to disable retry reservation (not recommended)
+     */
+    public int getRetryReservedSlotsPerNode() {
+        return Integer.parseInt(properties.getProperty(RETRY_RESERVED_SLOTS_PER_NODE, "1"));
     }
 
     // IO-first scheduling weights

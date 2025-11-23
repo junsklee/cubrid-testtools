@@ -122,6 +122,23 @@ public class TestInstance {
         return java.time.Duration.between(submittedAt, Instant.now()).getSeconds();
     }
 
+    /**
+     * Returns true if this is a retry test (retryAttempt > 0).
+     */
+    public boolean isRetry() {
+        return retryAttempt > 0;
+    }
+
+    /**
+     * Returns true if this is a heavy test based on predicted duration.
+     *
+     * @param heavyThresholdMs Duration threshold in milliseconds
+     * @return true if predictedDurationMs exceeds threshold
+     */
+    public boolean isHeavy(long heavyThresholdMs) {
+        return predictedDurationMs > heavyThresholdMs;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

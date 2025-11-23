@@ -95,6 +95,45 @@ public class NodeSnapshot {
     }
 
     /**
+     * Creates a builder pre-populated with this snapshot's values.
+     * Useful for creating modified copies via optimistic updates.
+     */
+    public Builder toBuilder() {
+        Builder builder = new Builder();
+        builder.nodeId = this.nodeId;
+        builder.timestamp = this.timestamp;
+        builder.status = this.status;
+        builder.maxConcurrentTests = this.maxConcurrentTests;
+        builder.maxWhileHeavy = this.maxWhileHeavy;
+        builder.maxAfterHeavy = this.maxAfterHeavy;
+        builder.activeLimit = this.activeLimit;
+        builder.heavyRunning = this.heavyRunning;
+        builder.retryRunning = this.retryRunning;
+        builder.maxRetry = this.maxRetry;
+        builder.runningTests = this.runningTests;
+        builder.queuedTests = this.queuedTests;
+        builder.cpuPct = this.cpuPct;
+        builder.memMb = this.memMb;
+        builder.ioMbPerSec = this.ioMbPerSec;
+        builder.ioReadMbPerSec = this.ioReadMbPerSec;
+        builder.ioWriteMbPerSec = this.ioWriteMbPerSec;
+        builder.iops = this.iops;
+        builder.netMbPerSec = this.netMbPerSec;
+        builder.usedCpuPct = this.usedCpuPct;
+        builder.usedMemMb = this.usedMemMb;
+        builder.usedIoMbPerSec = this.usedIoMbPerSec;
+        builder.usedIoReadMbPerSec = this.usedIoReadMbPerSec;
+        builder.usedIoWriteMbPerSec = this.usedIoWriteMbPerSec;
+        builder.usedIops = this.usedIops;
+        builder.usedNetMbPerSec = this.usedNetMbPerSec;
+        builder.cachedImages = new HashSet<>(this.cachedImages);
+        builder.cachedPackages = new HashSet<>(this.cachedPackages);
+        builder.degraded = this.degraded;
+        builder.diskPressure = this.diskPressure;
+        return builder;
+    }
+
+    /**
      * Parses NodeSnapshot from /health JSON response.
      */
     public static NodeSnapshot fromJSON(JSONObject json) {
@@ -355,6 +394,38 @@ public class NodeSnapshot {
 
     public int getMaxRetry() {
         return maxRetry;
+    }
+
+    /**
+     * Returns available retry slots (maxRetry - retryRunning).
+     * Returns Integer.MAX_VALUE if maxRetry < 0 (unlimited).
+     */
+    public int getRetryHeadroom() {
+        if (maxRetry < 0) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(0, maxRetry - retryRunning);
+    }
+
+    /**
+     * Returns non-retry running count (running - retryRunning).
+     */
+    public int getNonRetryRunning() {
+        return Math.max(0, runningTests - retryRunning);
+    }
+
+    /**
+     * Returns available slots for new (non-retry) tests considering retry reservation.
+     * If retries are pending cluster-wide, reserves slots for them.
+     *
+     * @param hasPendingRetries whether retries are pending in the cluster
+     * @param retryReservedSlots number of slots to reserve per node for retries
+     * @return available slots for new tests
+     */
+    public int getNewTestHeadroom(boolean hasPendingRetries, int retryReservedSlots) {
+        int reserved = hasPendingRetries ? Math.min(retryReservedSlots, Math.max(0, maxRetry)) : 0;
+        int nonRetryRunning = getNonRetryRunning();
+        return Math.max(0, activeLimit - reserved - nonRetryRunning);
     }
 
     /**
