@@ -72,7 +72,7 @@ public class HealthHandlerConcurrencyTest {
         }
 
         // Drain heavies and expect post-heavy limit
-        orchestrator.releaseSlot(true);
+        orchestrator.releaseSlot(true, false);
         JSONObject postHealth = (JSONObject) buildHealth.invoke(handler);
         int postAdvertised = postHealth.getInt("maxConcurrentTests");
         int postMax = postHealth.getJSONObject("concurrency").getInt("max");

@@ -26,6 +26,7 @@ public class TestInstance {
     private final double predictedIops;
     private final double predictedNetMbPerSec;
     private final double confidence;
+    private final int retryAttempt;
 
     private TestInstance(Builder builder) {
         this.testKey = builder.testKey;
@@ -43,6 +44,7 @@ public class TestInstance {
         this.predictedIops = builder.predictedIops;
         this.predictedNetMbPerSec = builder.predictedNetMbPerSec;
         this.confidence = builder.confidence;
+        this.retryAttempt = builder.retryAttempt;
     }
 
     public static Builder builder() {
@@ -109,6 +111,10 @@ public class TestInstance {
         return confidence;
     }
 
+    public int getRetryAttempt() {
+        return retryAttempt;
+    }
+
     /**
      * Returns wait time in seconds since submission.
      */
@@ -150,6 +156,7 @@ public class TestInstance {
         private double predictedIops = 0.0;
         private double predictedNetMbPerSec = 5.0;
         private double confidence = 0.0;
+        private int retryAttempt = 0;
 
         private Builder() {
         }
@@ -231,6 +238,11 @@ public class TestInstance {
 
         public Builder confidence(double val) {
             this.confidence = val;
+            return this;
+        }
+
+        public Builder retryAttempt(int val) {
+            this.retryAttempt = val;
             return this;
         }
 

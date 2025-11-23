@@ -53,6 +53,7 @@ public class TestHandler implements HttpHandler {
         int httpStatus = 200;
         boolean releaseSlotNeeded = false;
         boolean heavySlot = false;
+        boolean retrySlot = false;
 
         try {
             String requestBody = HttpUtils.readRequestBody(exchange);
@@ -70,11 +71,14 @@ public class TestHandler implements HttpHandler {
                 return;
             }
 
+            int retryAttempt = request.optInt("retryAttempt", 0);
+            boolean isRetry = request.optBoolean("isRetry", retryAttempt > 0) || retryAttempt > 0;
+
             boolean heavyTest = isHeavyTest(pd);
-            if (!orchestrator.tryAcquireSlot(heavyTest)) {
+            if (!orchestrator.tryAcquireSlot(heavyTest, isRetry)) {
                 logger.warning(String.format(
-                        "Rejecting test due to concurrency cap (heavy=%s, running=%d, limit=%d)",
-                        heavyTest, orchestrator.getRunningTestCount(), orchestrator.getActiveConcurrencyLimit()));
+                        "Rejecting test due to concurrency cap (heavy=%s, retry=%s, running=%d, limit=%d)",
+                        heavyTest, isRetry, orchestrator.getRunningTestCount(), orchestrator.getActiveConcurrencyLimit()));
                 responseWriter.sendJson(exchange, 409, new JSONObject()
                         .put("status", "rejected")
                         .put("error", "No capacity - concurrency cap reached"));
@@ -82,6 +86,7 @@ public class TestHandler implements HttpHandler {
             }
             releaseSlotNeeded = true;
             heavySlot = heavyTest;
+            retrySlot = isRetry;
 
             // Extract request ID if provided
             String requestId = request.optString("requestId", null);
@@ -125,7 +130,7 @@ public class TestHandler implements HttpHandler {
             httpStatus = 500;
         } finally {
             if (releaseSlotNeeded) {
-                orchestrator.releaseSlot(heavySlot);
+                orchestrator.releaseSlot(heavySlot, retrySlot);
             }
         }
 

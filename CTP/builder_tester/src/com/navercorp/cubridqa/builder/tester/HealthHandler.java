@@ -82,6 +82,8 @@ public class HealthHandler implements HttpHandler {
         if (testOrchestrator != null) {
             concurrency.put("activeLimit", activeLimit);
             concurrency.put("heavyRunning", Math.max(0, testOrchestrator.getHeavyInFlightCount()));
+            concurrency.put("retryRunning", Math.max(0, testOrchestrator.getRetryInFlightCount()));
+            concurrency.put("maxRetry", Math.max(0, testOrchestrator.getMaxRetryConcurrency()));
         }
         concurrency.put("running", runningTests);
         concurrency.put("queued", 0); // Not implemented yet

@@ -40,8 +40,10 @@ public class TestOrchestrator {
     private final TestStatsStore testStatsStore;
     private final AtomicInteger runningTestCount = new AtomicInteger(0);
     private final AtomicInteger heavyInFlight = new AtomicInteger(0);
+    private final AtomicInteger retryInFlight = new AtomicInteger(0);
     private final int maxConcurrencyHeavy;
     private final int maxConcurrencyPostHeavy;
+    private final int maxConcurrencyRetry;
     private final RunningTestTracker runningTestTracker = new RunningTestTracker();
 
     public TestOrchestrator(Config config, DirectExecutor directExecutor,
@@ -60,6 +62,7 @@ public class TestOrchestrator {
         this.testStatsStore = testStatsStore;
         this.maxConcurrencyHeavy = Math.max(1, config.getMaxConcurrentTestsWhileHeavy());
         this.maxConcurrencyPostHeavy = Math.max(this.maxConcurrencyHeavy, config.getMaxConcurrentTestsAfterHeavy());
+        this.maxConcurrencyRetry = config.getMaxConcurrentTestsRetry();
     }
 
     /**
@@ -583,7 +586,14 @@ public class TestOrchestrator {
      * can retry on another node).
      */
     public boolean tryAcquireSlot(boolean heavyTest) {
+        return tryAcquireSlot(heavyTest, false);
+    }
+
+    public boolean tryAcquireSlot(boolean heavyTest, boolean retryTest) {
         while (true) {
+            if (retryTest && maxConcurrencyRetry >= 0 && retryInFlight.get() >= maxConcurrencyRetry) {
+                return false;
+            }
             int current = runningTestCount.get();
             int limit = determineActiveLimit(heavyTest);
             if (current >= limit) {
@@ -593,20 +603,34 @@ public class TestOrchestrator {
                 if (heavyTest) {
                     heavyInFlight.incrementAndGet();
                 }
+                if (retryTest) {
+                    retryInFlight.incrementAndGet();
+                }
                 return true;
             }
         }
     }
 
-    public void releaseSlot(boolean heavyTest) {
+    public void releaseSlot(boolean heavyTest, boolean retryTest) {
         runningTestCount.decrementAndGet();
         if (heavyTest) {
             heavyInFlight.updateAndGet(val -> Math.max(0, val - 1));
+        }
+        if (retryTest) {
+            retryInFlight.updateAndGet(val -> Math.max(0, val - 1));
         }
     }
 
     public int getHeavyInFlightCount() {
         return heavyInFlight.get();
+    }
+
+    public int getRetryInFlightCount() {
+        return retryInFlight.get();
+    }
+
+    public int getMaxRetryConcurrency() {
+        return maxConcurrencyRetry;
     }
 
     public int getActiveConcurrencyLimit() {

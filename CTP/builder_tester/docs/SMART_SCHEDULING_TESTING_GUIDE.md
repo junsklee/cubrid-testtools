@@ -592,18 +592,32 @@ Once all tests pass:
 
 1. **Production Rollout**:
    - Deploy to staging environment for 1-2 weeks
-   - Monitor metrics dashboard
-   - Gradually tune weights based on workload characteristics
+- Monitor metrics dashboard
+- Gradually tune weights based on workload characteristics
 
 2. **Optimization**:
-   - Adjust mice/elephants threshold based on observed P50 duration
-   - Tune scoring weights for your specific test mix
-   - Consider enabling optional features (speculation, pull mode)
+  - Adjust mice/elephants threshold based on observed P50 duration
+  - Tune scoring weights for your specific test mix
+  - Consider enabling optional features (speculation, pull mode)
 
 3. **Documentation**:
-   - Update team runbooks with new config options
-   - Document expected metrics and alerting thresholds
-   - Create troubleshooting playbook for common issues
+  - Update team runbooks with new config options
+  - Document expected metrics and alerting thresholds
+  - Create troubleshooting playbook for common issues
+
+---
+
+## Requeue & Retry Capacity (November 2025)
+
+- Builder requeues capacity/concurrency 409 rejections instead of marking them complete.
+- Retry metadata (`retryAttempt`, `isRetry`) is sent to testers; testers enforce a separate retry cap (`max_concurrent_tests_retry`, default 5, `-1` for unlimited).
+- `/health` reports `retryRunning` and `maxRetry` to observe retry slots.
+- Config knobs:
+  - `builder.conf`: `requeue_max_attempts` (`-1` = unlimited until nodes accept or are idle).
+  - `tester.conf`: `max_concurrent_tests_retry` to prevent starving new work.
+- Validation:
+  - Run `RequeueLogicTest`: `java -cp "build:lib/builder-tester.jar:lib/json.jar" com.navercorp.cubridqa.builder.test.RequeueLogicTest`
+  - Trigger 409s and watch logs/health for retries filling retry slots.
 
 ---
 

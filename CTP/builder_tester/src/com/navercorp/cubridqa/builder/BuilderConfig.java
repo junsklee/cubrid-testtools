@@ -98,8 +98,7 @@ public class BuilderConfig {
     private static final String SCHEDULING_MARGIN_CONFIDENCE_FACTOR = "scheduling_margin_confidence_factor";
     private static final String USE_IOPS_PREDICTIONS = "use_iops_predictions";
     private static final String REQUEUE_MAX_ATTEMPTS = "requeue_max_attempts";
-    private static final String REQUEUE_INITIAL_DELAY_MS = "requeue_initial_delay_ms";
-    private static final String REQUEUE_MAX_DELAY_MS = "requeue_max_delay_ms";
+    private static final String MAX_CONCURRENT_TESTS_RETRY = "max_concurrent_tests_retry";
 
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
@@ -1011,12 +1010,8 @@ public class BuilderConfig {
         return Integer.parseInt(properties.getProperty(REQUEUE_MAX_ATTEMPTS, "5"));
     }
 
-    public long getRequeueInitialDelayMs() {
-        return Long.parseLong(properties.getProperty(REQUEUE_INITIAL_DELAY_MS, "5000"));
-    }
-
-    public long getRequeueMaxDelayMs() {
-        return Long.parseLong(properties.getProperty(REQUEUE_MAX_DELAY_MS, "30000"));
+    public int getMaxConcurrentTestsRetry() {
+        return Integer.parseInt(properties.getProperty(MAX_CONCURRENT_TESTS_RETRY, "5"));
     }
 
     // IO-first scheduling weights

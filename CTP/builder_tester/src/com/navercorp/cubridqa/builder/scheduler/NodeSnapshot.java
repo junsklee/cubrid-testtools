@@ -26,6 +26,8 @@ public class NodeSnapshot {
     private final int maxAfterHeavy;
     private final int activeLimit;
     private final int heavyRunning;
+    private final int retryRunning;
+    private final int maxRetry;
     private final int runningTests;
     private final int queuedTests;
 
@@ -64,6 +66,8 @@ public class NodeSnapshot {
         this.maxAfterHeavy = builder.maxAfterHeavy;
         this.activeLimit = builder.activeLimit;
         this.heavyRunning = builder.heavyRunning;
+        this.retryRunning = builder.retryRunning;
+        this.maxRetry = builder.maxRetry;
         this.runningTests = builder.runningTests;
         this.queuedTests = builder.queuedTests;
         this.cpuPct = builder.cpuPct;
@@ -115,6 +119,8 @@ public class NodeSnapshot {
                     concurrency.optInt("maxPeak", builder.maxConcurrentTests)));
             builder.activeLimit(concurrency.optInt("activeLimit", builder.maxConcurrentTests));
             builder.heavyRunning(concurrency.optInt("heavyRunning", 0));
+            builder.retryRunning(concurrency.optInt("retryRunning", 0));
+            builder.maxRetry(concurrency.optInt("maxRetry", builder.maxConcurrentTests));
             builder.runningTests(concurrency.optInt("running", 0));
             builder.queuedTests(concurrency.optInt("queued", 0));
         }
@@ -343,6 +349,14 @@ public class NodeSnapshot {
         return heavyRunning;
     }
 
+    public int getRetryRunning() {
+        return retryRunning;
+    }
+
+    public int getMaxRetry() {
+        return maxRetry;
+    }
+
     /**
      * Returns free capacity for a resource dimension.
      */
@@ -396,6 +410,8 @@ public class NodeSnapshot {
         private int maxAfterHeavy = 1;
         private int activeLimit = 1;
         private int heavyRunning = 0;
+        private int retryRunning = 0;
+        private int maxRetry = 0;
         private int runningTests = 0;
         private int queuedTests = 0;
         private double cpuPct = 0.0;
@@ -457,6 +473,16 @@ public class NodeSnapshot {
 
         public Builder heavyRunning(int val) {
             this.heavyRunning = val;
+            return this;
+        }
+
+        public Builder retryRunning(int val) {
+            this.retryRunning = val;
+            return this;
+        }
+
+        public Builder maxRetry(int val) {
+            this.maxRetry = val;
             return this;
         }
 
