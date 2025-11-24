@@ -1259,12 +1259,12 @@ public class BuilderTask {
     }
     
     private JSONObject runTest(String commit, String buildPackage, String testPath,
-                               String workerIp, String baselineCommit, String buildType) {
+                               String workerIp, String baselineCommit, String buildType) throws CapacityConflictException {
         return runTest(commit, buildPackage, testPath, workerIp, baselineCommit, buildType, null);
     }
 
     private JSONObject runTest(String commit, String buildPackage, String testPath,
-                               String workerIp, String baselineCommit, String buildType, TestInstance testInstance) {
+                               String workerIp, String baselineCommit, String buildType, TestInstance testInstance) throws CapacityConflictException {
         try {
             // Parse host and port from workerIp (supports "host:port" format)
             String host = workerIp;
@@ -1423,10 +1423,33 @@ public class BuilderTask {
             int httpStatus = conn.getResponseCode();
             String contentType = conn.getHeaderField("Content-Type");
             taskLogger.info("Tester response HTTP " + httpStatus + " for '" + testName + "' on " + host + ":" + port + " (Content-Type: " + contentType + ")");
-            
+
+            // Handle 409 Conflict: node rejected the test due to capacity mismatch
+            // This triggers node cooldown and test re-offering via scheduler.handle409()
+            if (httpStatus == 409) {
+                // Read error message from response
+                StringBuilder errorMsg = new StringBuilder();
+                InputStream errorStream = conn.getErrorStream();
+                if (errorStream != null) {
+                    try (BufferedReader br = new BufferedReader(new InputStreamReader(errorStream))) {
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            errorMsg.append(line);
+                        }
+                    }
+                }
+
+                String nodeId = host + ":" + port;
+                taskLogger.warning(String.format("409 Conflict from node %s for test %s: %s",
+                        nodeId, testPath, errorMsg.length() > 0 ? errorMsg.toString() : "No capacity"));
+
+                // Throw special exception that will be caught in smart scheduling loop
+                throw new CapacityConflictException(nodeId, testPath, errorMsg.toString());
+            }
+
             JSONObject responseJson = null;
             Map<String, byte[]> logFiles = new HashMap<>();
-            
+
             if (contentType != null && contentType.startsWith("multipart/form-data")) {
                 // Parse multipart response
                 String boundary = null;
@@ -1716,7 +1739,11 @@ public class BuilderTask {
             }
             
             return result;
-                
+
+        } catch (CapacityConflictException cce) {
+            // 409 Conflict is an expected condition - re-throw without logging stack trace
+            // The scheduler will handle the cooldown and requeueing
+            throw cce;
         } catch (Exception e) {
             // Determine if this is a network/communication failure that should trigger circuit breaker
             boolean isNetworkFailure = isNetworkError(e);
@@ -2604,9 +2631,8 @@ public class BuilderTask {
                 if (isHeavyCandidate(a.getTest())) {
                     heavyAssigned.incrementAndGet();
                 }
-                assignedCount++;
-                taskLogger.info(String.format("[Smart Scheduling] Assignment %d/%d: %s",
-                    assignedCount, testInstances.size(), a));
+                // Don't increment assignedCount here - we'll increment it only on successful submission
+                taskLogger.info(String.format("[Smart Scheduling] Attempting assignment: %s", a));
 
                 String nodeId = a.getTargetNodeId();
                 String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
@@ -2622,6 +2648,7 @@ public class BuilderTask {
                 }
 
                 final AtomicInteger finalElephantCounter = elephantCounter;
+                final AtomicInteger successfulAssignments = new AtomicInteger();
                 Future<?> future = testExecutor.submit(() -> {
                     try {
                         if (testRequestId != null) {
@@ -2632,6 +2659,15 @@ public class BuilderTask {
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
                             a.getTestKey(), workerIp, this.baselineCommit, buildType, a.getTest());
                         results.add(testResult);
+                        // Only count as successful assignment if we got a result (not a 409)
+                        successfulAssignments.incrementAndGet();
+                    } catch (CapacityConflictException cce) {
+                        // 409 Conflict: Node rejected test due to capacity mismatch
+                        // Trigger node cooldown and re-offer test to scheduler
+                        taskLogger.info(String.format("[Smart Scheduling] 409 Conflict from %s for %s - test requeued",
+                                cce.getNodeId(), a.getTest().getTestKey()));
+                        scheduler.handle409(a.getTest(), cce.getNodeId());
+                        // Don't add to results - test will be retried from queue
                     } catch (Exception e) {
                         taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);
                         results.add(new JSONObject()
@@ -2649,8 +2685,42 @@ public class BuilderTask {
                     }
                 });
                 inflightTests.add(future);
+
+            // If queue is empty, wait for in-flight tests to complete
+            // (they might requeue tests on 409)
+            if (!scheduler.hasPending() && !inflightTests.isEmpty()) {
+                taskLogger.fine("[Smart Scheduling] Queue empty, waiting for in-flight tests to complete...");
+                // Wait for all futures with a timeout
+                for (Iterator<Future<?>> it = inflightTests.iterator(); it.hasNext(); ) {
+                    Future<?> inflightFuture = it.next();
+                    if (inflightFuture.isDone()) {
+                        try {
+                            inflightFuture.get();
+                        } catch (Exception e) {
+                            taskLogger.log(Level.FINE, "[Smart Scheduling] Test task completed with exception", e);
+                        }
+                        it.remove();
+                    }
+                }
+                // Check if tests were requeued
+                if (scheduler.hasPending()) {
+                    taskLogger.info("[Smart Scheduling] Tests were requeued after 409s, continuing...");
+                } else if (inflightTests.isEmpty()) {
+                    // All done
+                    break;
+                } else {
+                    // Wait a bit for more tests to complete
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
             }
+        }
         } finally {
+            // Wait for any remaining in-flight tests
             testExecutor.shutdown();
             for (Future<?> future : inflightTests) {
                 try {
@@ -2660,9 +2730,9 @@ public class BuilderTask {
                 }
             }
             nodeDirectory.stop();
-        }
 
-        taskLogger.info("[Smart Scheduling] Completed: assigned " + assignedCount + " tests");
+            taskLogger.info("[Smart Scheduling] Completed - all tests processed");
+        }
     }
 
     private static final class TestJob {

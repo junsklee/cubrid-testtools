@@ -194,6 +194,133 @@ scheduling_weight_net=0.80
 
 **Note:** IOPS pressure uses the same weight as I/O (`scheduling_weight_io`) since IOPS are I/O-related.
 
+---
+
+### Backpressure and Retry Control (Pending Until Placed)
+
+**Since:** November 2025
+
+These parameters control the pending-until-placed model that handles 409 Conflict responses gracefully without separate retry queues.
+
+#### `retry_node_cooldown_seconds`
+
+**Type:** Integer (seconds)
+**Default:** `15`
+**Range:** `5` to `300` (5s to 5min)
+
+**Description:**
+Duration for which a node is excluded from scheduling after returning HTTP 409 Conflict. When a tester rejects a test due to capacity constraints, it enters "cooldown" to prevent the scheduler from hammering it with repeated assignment attempts. After the cooldown expires, the node automatically becomes eligible again.
+
+**Example:**
+```properties
+# Short cooldown (aggressive retries)
+retry_node_cooldown_seconds=5
+
+# Default (balanced)
+retry_node_cooldown_seconds=15
+
+# Long cooldown (conservative, reduce 409 churn)
+retry_node_cooldown_seconds=30
+```
+
+**Tuning Guidelines:**
+- **Decrease** if 409s are rare and nodes recover quickly (want fast retries)
+- **Increase** if seeing 409 churn (same test hitting same node repeatedly)
+- Should be longer than typical test setup time (~5-10s)
+- Balance between retry latency and avoiding wasteful attempts
+
+**Effect on Performance:**
+- Shorter cooldown → Faster retries, but risk of repeated 409s
+- Longer cooldown → More spreading across nodes, but slower retries if only one node suitable
+
+**Implementation:**
+- Tracked via `NodeSnapshot.cooldownUntil` (Instant timestamp)
+- Nodes in cooldown excluded from `getEligibleNodes()` filtering
+- Automatic expiration (no active timer needed)
+
+#### `unsched_max_rounds`
+
+**Type:** Integer (rounds)
+**Default:** `10`
+**Range:** `5` to `100`
+
+**Description:**
+Maximum number of "no headroom" rounds before a test is marked as unschedulable and permanently failed. Each scheduling round where no node has sufficient capacity for a test increments its `noHeadroomRounds` counter. When this counter exceeds the threshold AND the wallclock threshold is also exceeded, the test is failed with diagnostic information.
+
+**Example:**
+```properties
+# Aggressive unschedulable detection
+unsched_max_rounds=5
+
+# Default (balanced)
+unsched_max_rounds=10
+
+# Conservative (more patience for transient capacity issues)
+unsched_max_rounds=20
+```
+
+**Tuning Guidelines:**
+- **Decrease** if you want fast failure for truly unschedulable tests (saves time)
+- **Increase** if capacity fluctuates frequently (avoid false positives)
+- Must be exceeded ALONG WITH `unsched_max_wallclock_minutes` (both thresholds required)
+- Consider cluster churn rate: faster churn → higher threshold
+
+**Effect on Performance:**
+- Lower threshold → Faster failure detection, but risk of false positives
+- Higher threshold → More patience, but may waste time on impossible tests
+
+**Notes:**
+- Prevents infinite retry loops for tests that exceed all nodes' capacity
+- Both round count AND wallclock time must be exceeded to trigger
+- Failed tests include diagnostic info (test demands vs cluster capacity)
+
+#### `unsched_max_wallclock_minutes`
+
+**Type:** Integer (minutes)
+**Default:** `10`
+**Range:** `1` to `120` (1min to 2hr)
+
+**Description:**
+Maximum wallclock time a test can wait in queue before being marked as unschedulable. Works in conjunction with `unsched_max_rounds` - BOTH thresholds must be exceeded for a test to be marked unschedulable. This prevents premature failure due to short bursts of high "no headroom" rounds.
+
+**Example:**
+```properties
+# Aggressive timeout (fast failure)
+unsched_max_wallclock_minutes=5
+
+# Default (balanced)
+unsched_max_wallclock_minutes=10
+
+# Patient (long wait for capacity)
+unsched_max_wallclock_minutes=30
+```
+
+**Tuning Guidelines:**
+- **Decrease** if you want fast feedback on unschedulable tests
+- **Increase** if cluster capacity is tight and tests may legitimately wait
+- Should be longer than typical test duration × max concurrency
+- Consider SLA for test completion time
+
+**Effect on Performance:**
+- Shorter timeout → Faster failure, but may fail tests that could eventually succeed
+- Longer timeout → More patience, but wasted time on impossible tests
+
+**Notes:**
+- Calculated from `test.submittedAt` timestamp
+- Requires BOTH round count and wallclock thresholds to prevent premature failure
+- Example: 10 rounds in 2 minutes → NOT unschedulable (wallclock < 10min)
+- Example: 5 rounds in 15 minutes → NOT unschedulable (rounds < 10)
+- Example: 12 rounds in 12 minutes → UNSCHEDULABLE (both exceeded)
+
+**Combined Threshold Logic:**
+```java
+boolean isUnschedulable =
+    test.getNoHeadroomRounds() >= unsched_max_rounds
+    && test.getWaitTimeMinutes() >= unsched_max_wallclock_minutes;
+```
+
+---
+
 #### `scheduling_weight_pressure`
 
 **Type:** Double (0.0 to 1.0 recommended)
@@ -1729,14 +1856,15 @@ scheduling_mice_routing=cluster_a_url
 
 ## Document Metadata
 
-- **Version:** 1.1
-- **Last Updated:** 2025-11-19
+- **Version:** 1.2
+- **Last Updated:** 2025-11-24
 - **Recent Changes:**
-  - Added `use_iops_predictions` configuration parameter (builder.conf)
-  - Added `node_iops_capacity` configuration parameter (tester.conf)
-  - Added Scenario 5: IOPS-Aware Scheduling
-  - Added troubleshooting case for IOPS capacity exhaustion
-  - Documented IOPS capacity planning and storage type recommendations
+  - Added pending-until-placed configuration parameters (builder.conf)
+    - `retry_node_cooldown_seconds` - Node cooldown duration after 409 responses
+    - `unsched_max_rounds` - Maximum no-headroom rounds before marking unschedulable
+    - `unsched_max_wallclock_minutes` - Maximum wait time before marking unschedulable
+  - Updated default values summary table
+  - Previous (v1.1): Added IOPS-aware scheduling parameters
 - **Related Documents:**
   - [SMART_SCHEDULING_ARCHITECTURE.md](SMART_SCHEDULING_ARCHITECTURE.md) - Architecture and design
   - [SMART_SCHEDULING_TESTING_GUIDE.md](SMART_SCHEDULING_TESTING_GUIDE.md) - Testing procedures
@@ -1776,6 +1904,9 @@ All other parameters will use sensible defaults.
 | `scheduling_weight_age` | `0.10` | builder.conf |
 | `scheduling_poll_interval_ms` | `5000` | builder.conf |
 | `scheduling_stale_threshold_ms` | `30000` | builder.conf |
+| `retry_node_cooldown_seconds` | `15` | builder.conf |
+| `unsched_max_rounds` | `10` | builder.conf |
+| `unsched_max_wallclock_minutes` | `10` | builder.conf |
 | `stats_enabled` | `true` | tester.conf |
 | `stats_snapshot_interval_seconds` | `300` | tester.conf |
 | `heartbeat_interval_seconds` | `5` | tester.conf |

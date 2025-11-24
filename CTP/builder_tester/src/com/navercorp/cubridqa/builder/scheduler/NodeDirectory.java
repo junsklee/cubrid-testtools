@@ -133,9 +133,27 @@ public class NodeDirectory {
      */
     public List<NodeSnapshot> getEligibleNodes(TestInstance test) {
         return getHealthyNodes().stream()
+                .filter(s -> !s.isInCooldown())  // Exclude nodes in cooldown after 409
                 .filter(s -> s.getAvailableConcurrency() > 0)
                 .filter(s -> hasResourceHeadroom(s, test))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Fast check: does ANY node have headroom for this test?
+     * Used for global backpressure detection to avoid spinning when cluster is full.
+     *
+     * @param test the test to check
+     * @return true if at least one node can potentially host the test
+     */
+    public boolean hasAnyNodeHeadroomFor(TestInstance test) {
+        return nodeMap.values().stream()
+                .filter(s -> !isStale(s))
+                .filter(s -> "healthy".equalsIgnoreCase(s.getStatus()))
+                .filter(s -> !s.isDegraded())
+                .filter(s -> !s.isInCooldown())
+                .filter(s -> s.getAvailableConcurrency() > 0)
+                .anyMatch(s -> hasResourceHeadroom(s, test));
     }
 
     /**
@@ -232,6 +250,31 @@ public class NodeDirectory {
     }
 
     /**
+     * Marks a node as being in cooldown after receiving a 409 Conflict response.
+     * The node will be excluded from scheduling decisions until the cooldown expires.
+     *
+     * @param nodeId the nodeId that returned 409
+     */
+    public void onCapacity409(String nodeId) {
+        NodeSnapshot snapshot = nodeMap.get(nodeId);
+        if (snapshot == null) {
+            logger.fine("Cannot apply cooldown to unknown node: " + nodeId);
+            return;
+        }
+
+        // Get cooldown duration from config (default 15 seconds)
+        int cooldownSeconds = (config != null) ? config.getRetryNodeCooldownSeconds() : 15;
+        Instant cooldownUntil = Instant.now().plusSeconds(cooldownSeconds);
+
+        // Update snapshot with cooldown
+        NodeSnapshot updated = snapshot.withCooldownUntil(cooldownUntil);
+        nodeMap.put(nodeId, updated);
+
+        logger.info(String.format("Node %s in cooldown until %s (409 Conflict received)",
+                nodeId, cooldownUntil));
+    }
+
+    /**
      * Polls all configured tester nodes and updates snapshots.
      */
     private void pollAllNodes() {
@@ -239,6 +282,14 @@ public class NodeDirectory {
             try {
                 NodeSnapshot snapshot = pollNode(nodeAddr);
                 if (snapshot != null) {
+                    // Preserve cooldown from existing snapshot (if any)
+                    NodeSnapshot existing = nodeMap.get(snapshot.getNodeId());
+                    if (existing != null && existing.getCooldownUntil() != null) {
+                        // Preserve cooldown if it hasn't expired
+                        if (existing.isInCooldown()) {
+                            snapshot = snapshot.withCooldownUntil(existing.getCooldownUntil());
+                        }
+                    }
                     nodeMap.put(snapshot.getNodeId(), snapshot);
                 }
             } catch (Exception e) {

@@ -2306,10 +2306,15 @@ This enables precise reservation timing (reserve only when container actually st
 
 ## Document Metadata
 
-- **Version:** 2.0
-- **Last Updated:** November 2025
+- **Version:** 2.1
+- **Last Updated:** November 24, 2025
 - **Authors:** Claude (Anthropic)
 - **Status:** Production-ready
+- **Recent Changes:**
+  - Added "Pending Until Placed Model" section documenting 409 handling flow
+  - Documented node cooldown, global backpressure detection, test requeueing
+  - Documented attempt-based aging boost and unschedulable detection
+  - Previous (v2.0): Added v2 Production Hardening documentation
 - **Related Docs:**
   - [SMART_SCHEDULING_TESTING_GUIDE.md](SMART_SCHEDULING_TESTING_GUIDE.md)
   - [SMART_SCHEDULING_CONFIG.md](SMART_SCHEDULING_CONFIG.md)
@@ -2318,11 +2323,179 @@ This enables precise reservation timing (reserve only when container actually st
 
 ---
 
+## Pending Until Placed Model (November 2025)
+
+### Overview
+
+The scheduler implements a **Kubernetes-style pending-until-placed model** that eliminates retry queues and implements graceful backpressure handling. Tests remain in the PENDING state until successfully assigned to a node, with three possible outcomes:
+
+**Test States:**
+- **PENDING**: Test is in queue, waiting for placement
+- **ASSIGNED**: Test has been successfully placed on a node and is running
+- **FINISHED**: Test execution completed (success, failure, or timeout)
+
+### 409 Conflict Handling Flow
+
+When a tester cannot accept a test due to capacity constraints (TOCTOU race between scheduler check and actual admission), it returns **HTTP 409 Conflict**. This triggers a backpressure loop:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  BUILDER (SchedulerService)                  │
+│                                                               │
+│  1. assignNext() → Select test from queue                   │
+│  2. Check global backpressure (hasAnyNodeHeadroomFor())     │
+│  3. Filter eligible nodes (not in cooldown, has headroom)   │
+│  4. Score nodes and pick best fit                           │
+│  5. POST /test to selected node                             │
+│     │                                                         │
+│     ▼                                                         │
+│  ┌──────────────────────────────────────┐                   │
+│  │ TESTER (TestHandler)                  │                   │
+│  │                                        │                   │
+│  │ 1. Fast-fail admission check          │                   │
+│  │    (hasLocalHeadroom())                │                   │
+│  │ 2. If insufficient capacity:          │                   │
+│  │    → Return 409 Conflict              │                   │
+│  │ 3. If capacity available:             │                   │
+│  │    → Accept test, start execution     │                   │
+│  └─────────────┬──────────────────────────┘                   │
+│                │                                               │
+│     ┌──────────┴──────────┐                                  │
+│     │                     │                                   │
+│     ▼ 409                 ▼ 200 OK                           │
+│  handle409()           Test runs                             │
+│  │                                                            │
+│  ├─> Put node on cooldown (15s default)                      │
+│  ├─> Increment test.scheduleAttemptCount                     │
+│  ├─> Add jitter delay (1-3s)                                 │
+│  └─> Re-offer test to queue                                  │
+│                                                               │
+│  Next scheduling round:                                       │
+│  - Node in cooldown → excluded from eligibleNodes()          │
+│  - Test gets attempt boost in aging priority                 │
+│  - After cooldown expires → node becomes eligible again      │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Node Cooldown
+
+**Purpose:** Prevent hammering the same node with repeated assignment attempts after it rejects a test.
+
+**Implementation:**
+- When a node returns 409, it enters cooldown for `retry_node_cooldown_seconds` (default: 15s)
+- Cooldown tracked via `NodeSnapshot.cooldownUntil` (Instant timestamp)
+- Nodes in cooldown are excluded from `getEligibleNodes()` filtering
+- After cooldown expires, node automatically becomes eligible again
+
+**Configuration:** `retry_node_cooldown_seconds` in builder.conf
+
+### Global Backpressure Detection
+
+**Purpose:** Prevent scheduler from spinning when the entire cluster is saturated.
+
+**Implementation:**
+- Before attempting assignment, check `nodeDirectory.hasAnyNodeHeadroomFor(test)`
+- Fast cluster-wide scan: does ANY node have headroom for this test's resource demands?
+- If no headroom anywhere → wait/backoff instead of attempting assignment
+- Prevents wasteful assignment attempts and 409 churn
+
+**Benefits:**
+- Reduces network overhead (fewer failed POST /test calls)
+- Avoids 409 spam in logs
+- Natural backpressure signal to calling code
+
+### Test Requeueing on 409
+
+**Purpose:** Tests that hit 409 should be reattempted, not failed.
+
+**Implementation:**
+- `SchedulerService.handle409(test, nodeId)` method handles 409 responses
+- Increments `test.scheduleAttemptCount` to track retry pressure
+- Adds jitter delay (`earliestRescheduleTime`) to spread out retries (1-3s random)
+- Re-offers test to `readyQueue` for next scheduling round
+- Main scheduling loop waits for in-flight tests to prevent race condition where queue appears empty but executor threads haven't requeued yet
+
+**Race Condition Fix:**
+```java
+// Wait for in-flight tests when queue is empty
+if (!scheduler.hasPending() && !inflightTests.isEmpty()) {
+    // Check if any completed
+    for (Future<?> future : inflightTests) {
+        if (future.isDone()) {
+            future.get(); // May throw CapacityConflictException → handle409()
+        }
+    }
+    // Re-check queue after in-flight tests complete
+    if (scheduler.hasPending()) {
+        continue; // Tests were requeued, keep looping
+    }
+}
+```
+
+### Attempt-Based Aging Boost
+
+**Purpose:** Give priority to tests that have been repeatedly rejected (hit multiple 409s).
+
+**Implementation:**
+- `ReadyQueue.effectiveDuration()` includes attempt boost in aging calculation
+- Formula: `attemptBoost = min(0.5, scheduleAttemptCount × 0.05)`
+- Each failed attempt adds 5% boost, capped at 50%
+- Combined with time-based aging for total priority boost
+- Tests with more attempts bubble up in the mice queue faster
+
+**Effect:**
+```
+Test A: duration=10s, attempts=0, wait=30s → effective duration = ~7.5s
+Test B: duration=10s, attempts=5, wait=30s → effective duration = ~5.0s
+→ Test B gets priority (more 409s = higher urgency)
+```
+
+### Unschedulable Detection
+
+**Purpose:** Prevent infinite retry loops for tests that cannot be placed (e.g., demand exceeds any node's capacity).
+
+**Implementation:**
+- Track two counters per test:
+  - `noHeadroomRounds`: Incremented when no node has headroom
+  - `submittedAt`: Timestamp for wallclock wait time calculation
+- Thresholds (both must be exceeded):
+  - `unsched_max_rounds` (default: 10 rounds)
+  - `unsched_max_wallclock_minutes` (default: 10 minutes)
+- When thresholds exceeded → `failAsUnschedulable(test)` permanently fails test
+- Includes diagnostic info (test demands vs cluster capacity)
+
+**Configuration:** `unsched_max_rounds` and `unsched_max_wallclock_minutes` in builder.conf
+
+### Benefits of Pending-Until-Placed Model
+
+**Simplicity:**
+- No separate retry queue to manage
+- Single queue with PENDING → ASSIGNED → FINISHED state transitions
+- Clear semantics aligned with Kubernetes admission model
+
+**Reliability:**
+- 409s are expected and handled gracefully (not errors)
+- Node cooldown prevents repeated hammering
+- Backpressure prevents cluster saturation
+- Unschedulable detection prevents infinite loops
+
+**Fairness:**
+- Tests that hit 409s get priority boost
+- Prevents starvation from repeated rejections
+- Aging ensures all tests eventually complete
+
+**Performance:**
+- Jitter prevents thundering herd on node cooldown expiration
+- Global backpressure check avoids wasteful assignment attempts
+- Efficient requeue (no serialization/deserialization overhead)
+
+---
+
 ## Implementation Snapshot: IO-Aware Tetris + Backfill (Late-Binding Ready)
 
-The codebase now contains the core pieces for the IO-aware, multi-resource “Tetris + backfill” design with an optional late-binding path:
+The codebase now contains the core pieces for the IO-aware, multi-resource "Tetris + backfill" design with an optional late-binding path:
 
 - **Test classification**: Duration (short/medium/long) and IO (light/medium/heavy) buckets via `TestClassifier`, enabling per-class caps and mix targets.
-- **Cluster mix tracking**: `ClusterMixTracker` tracks running short/medium/long counts to bias toward healthy mixes (avoids “all long at tail” or “all short first”).
+- **Cluster mix tracking**: `ClusterMixTracker` tracks running short/medium/long counts to bias toward healthy mixes (avoids "all long at tail" or "all short first").
 - **Node metrics for pull**: `NodeMetrics` plus `SchedulerService.assignForNode(...)` accept live CPU/MEM/IO state from testers for Sparrow-style late binding when enabled.
 - **Tetris alignment scoring**: `ScoreFunction.alignment()` uses headroom · normalized demand to pick the test that best fits current node slack, reducing IO/CPU/MEM fragmentation.

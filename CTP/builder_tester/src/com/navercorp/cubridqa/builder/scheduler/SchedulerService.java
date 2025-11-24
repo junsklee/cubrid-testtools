@@ -156,6 +156,22 @@ public class SchedulerService {
             // Try longest elephant (weighted selection favored this)
             TestInstance elephant = readyQueue.pollElephant();
             if (elephant != null) {
+                // Global backpressure: if NO node can host this test, stop trying
+                if (!nodeDirectory.hasAnyNodeHeadroomFor(elephant)) {
+                    logger.fine("No nodes have headroom for elephant " + elephant.getTestKey() + ", re-offering to queue");
+                    elephant.incrementNoHeadroomRounds();
+
+                    // Check if test is unschedulable (too many failures for too long)
+                    if (checkAndFailIfUnschedulable(elephant)) {
+                        // Test was failed as unschedulable, return empty
+                        return Optional.empty();
+                    }
+
+                    readyQueue.offer(elephant);
+                    // Don't try to assign, return empty to signal backpressure
+                    return Optional.empty();
+                }
+
                 Optional<Assignment> assignment = assignTest(elephant);
                 if (assignment.isPresent()) {
                     logger.info(String.format("Assigned elephant (%.0f%% weighted LJF): %s",
@@ -171,6 +187,22 @@ public class SchedulerService {
         if (!readyQueue.isMiceEmpty()) {
             TestInstance mouse = readyQueue.pollMouse();
             if (mouse != null) {
+                // Global backpressure: if NO node can host this test, stop trying
+                if (!nodeDirectory.hasAnyNodeHeadroomFor(mouse)) {
+                    logger.fine("No nodes have headroom for mouse " + mouse.getTestKey() + ", re-offering to queue");
+                    mouse.incrementNoHeadroomRounds();
+
+                    // Check if test is unschedulable (too many failures for too long)
+                    if (checkAndFailIfUnschedulable(mouse)) {
+                        // Test was failed as unschedulable, return empty
+                        return Optional.empty();
+                    }
+
+                    readyQueue.offer(mouse);
+                    // Don't try to assign, return empty to signal backpressure
+                    return Optional.empty();
+                }
+
                 Optional<Assignment> assignment = assignTest(mouse);
                 if (assignment.isPresent()) {
                     logger.info(String.format("Assigned mouse (%.0f%% weighted SJF): %s",
@@ -287,6 +319,111 @@ public class SchedulerService {
     public void onCompletion(String testKey, String nodeId, long actualDurationMs) {
         // Future: Track actual vs. predicted for adaptive scheduling
         // Future: Trigger speculation if test took much longer than predicted
+    }
+
+    /**
+     * Handles a 409 Conflict response from a node.
+     * This means the node's local admission check disagreed with our snapshot.
+     * We mark the node on cooldown and re-offer the test to the queue.
+     *
+     * @param test the test that was rejected
+     * @param nodeId the node that returned 409
+     */
+    public synchronized void handle409(TestInstance test, String nodeId) {
+        logger.info(String.format("Received 409 from node %s for test %s (attempt %d)",
+                nodeId, test.getTestKey(), test.getScheduleAttemptCount() + 1));
+
+        // Mark node on cooldown to prevent hammering
+        nodeDirectory.onCapacity409(nodeId);
+
+        // Test was never successfully scheduled, stays PENDING
+        test.incrementScheduleAttemptCount();
+
+        // Add small jitter to avoid spinning on same test
+        long jitterMs = 1000 + (long) (Math.random() * 2000);  // 1-3 seconds
+        test.setEarliestRescheduleTime(java.time.Instant.now().plusMillis(jitterMs));
+
+        // Re-offer to queue (stays in same mice/elephants lane)
+        readyQueue.offer(test);
+
+        logger.fine(String.format("Test %s re-offered to queue with %dms jitter (total attempts: %d)",
+                test.getTestKey(), jitterMs, test.getScheduleAttemptCount()));
+    }
+
+    /**
+     * Checks if a test should be marked as unschedulable and fails it if so.
+     * A test is unschedulable if it has been blocked too many times for too long.
+     *
+     * @param test the test to check
+     * @return true if test was failed as unschedulable, false otherwise
+     */
+    private boolean checkAndFailIfUnschedulable(TestInstance test) {
+        // Get thresholds from config (defaults: 10 rounds, 10 minutes)
+        int maxRounds = (config != null) ? config.getUnschedMaxRounds() : 10;
+        long maxWallclockMinutes = (config != null) ? config.getUnschedMaxWallclockMinutes() : 10;
+
+        boolean tooManyRounds = test.getNoHeadroomRounds() >= maxRounds;
+        boolean tooLongWaiting = java.time.Duration.between(test.getSubmittedAt(), java.time.Instant.now())
+                .toMinutes() >= maxWallclockMinutes;
+
+        if (tooManyRounds && tooLongWaiting) {
+            String reason = gatherUnschedulableDiagnostics(test);
+            failAsUnschedulable(test, reason);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Marks a test as permanently failed due to being unschedulable.
+     */
+    private void failAsUnschedulable(TestInstance test, String reason) {
+        logger.severe(String.format(
+                "Test %s is UNSCHEDULABLE after %d rounds and %d minutes: %s",
+                test.getTestKey(),
+                test.getNoHeadroomRounds(),
+                java.time.Duration.between(test.getSubmittedAt(), java.time.Instant.now()).toMinutes(),
+                reason
+        ));
+
+        // Remove from queue - it won't be retried
+        readyQueue.remove(test);
+
+        // Future: Report failure to BuilderTask via callback or exception
+        // For now, just log the failure
+    }
+
+    /**
+     * Gathers diagnostic information about why a test is unschedulable.
+     */
+    private String gatherUnschedulableDiagnostics(TestInstance test) {
+        StringBuilder diag = new StringBuilder();
+        diag.append(String.format("Test demands: CPU=%.1f%%, Mem=%.0fMB, IO_R=%.1fMB/s, IO_W=%.1fMB/s, IOPS=%.0f, Net=%.1fMB/s, Duration=%dms. ",
+                test.getPredictedCpuPct(),
+                test.getPredictedMemMb(),
+                test.getPredictedIoReadMbPerSec(),
+                test.getPredictedIoWriteMbPerSec(),
+                test.getPredictedIops(),
+                test.getPredictedNetMbPerSec(),
+                test.getPredictedDurationMs()));
+
+        // Get node capacities to compare
+        List<NodeSnapshot> healthyNodes = nodeDirectory.getHealthyNodes();
+        if (healthyNodes.isEmpty()) {
+            diag.append("No healthy nodes available.");
+        } else {
+            diag.append(String.format("Available nodes: %d. ", healthyNodes.size()));
+            NodeSnapshot firstNode = healthyNodes.get(0);
+            diag.append(String.format("Example node capacity: CPU=%.1f%%, Mem=%.0fMB, IO_R=%.1fMB/s, IO_W=%.1fMB/s, IOPS=%.0f. ",
+                    firstNode.getCpuPct(),
+                    firstNode.getMemMb(),
+                    firstNode.getIoReadMbPerSec(),
+                    firstNode.getIoWriteMbPerSec(),
+                    firstNode.getIops()));
+        }
+
+        return diag.toString();
     }
 
     /**

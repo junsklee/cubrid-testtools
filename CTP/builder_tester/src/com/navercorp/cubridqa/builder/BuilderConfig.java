@@ -98,6 +98,11 @@ public class BuilderConfig {
     private static final String SCHEDULING_MARGIN_CONFIDENCE_FACTOR = "scheduling_margin_confidence_factor";
     private static final String USE_IOPS_PREDICTIONS = "use_iops_predictions";
 
+    // Retry and backpressure configuration
+    private static final String RETRY_NODE_COOLDOWN_SECONDS = "retry_node_cooldown_seconds";
+    private static final String UNSCHED_MAX_ROUNDS = "unsched_max_rounds";
+    private static final String UNSCHED_MAX_WALLCLOCK_MINUTES = "unsched_max_wallclock_minutes";
+
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
     private static final Object SHELL_TC_OVERLAY_LOCK = new Object();
@@ -1032,6 +1037,31 @@ public class BuilderConfig {
 
     public double getIoSafetyHeadroomRatio() {
         return Double.parseDouble(properties.getProperty("io_safety_headroom_ratio", "0.15"));
+    }
+
+    // Retry and backpressure configuration
+
+    /**
+     * Returns the cooldown duration (in seconds) for a node after receiving a 409 response.
+     * During cooldown, the node is excluded from scheduling decisions.
+     */
+    public int getRetryNodeCooldownSeconds() {
+        return Integer.parseInt(properties.getProperty(RETRY_NODE_COOLDOWN_SECONDS, "15"));
+    }
+
+    /**
+     * Returns the maximum number of "no headroom" rounds before a test is marked as unschedulable.
+     */
+    public int getUnschedMaxRounds() {
+        return Integer.parseInt(properties.getProperty(UNSCHED_MAX_ROUNDS, "10"));
+    }
+
+    /**
+     * Returns the maximum wallclock time (in minutes) a test can wait before being marked
+     * as unschedulable (when combined with max rounds threshold).
+     */
+    public int getUnschedMaxWallclockMinutes() {
+        return Integer.parseInt(properties.getProperty(UNSCHED_MAX_WALLCLOCK_MINUTES, "10"));
     }
 
     @Override

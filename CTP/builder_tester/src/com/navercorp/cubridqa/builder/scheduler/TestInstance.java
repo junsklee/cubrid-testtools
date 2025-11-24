@@ -27,6 +27,11 @@ public class TestInstance {
     private final double predictedNetMbPerSec;
     private final double confidence;
 
+    // Mutable tracking state for scheduling attempts and backpressure
+    private int scheduleAttemptCount = 0;
+    private int noHeadroomRounds = 0;
+    private Instant earliestRescheduleTime = null;
+
     private TestInstance(Builder builder) {
         this.testKey = builder.testKey;
         this.commit = builder.commit;
@@ -114,6 +119,49 @@ public class TestInstance {
      */
     public long getWaitTimeSeconds() {
         return java.time.Duration.between(submittedAt, Instant.now()).getSeconds();
+    }
+
+    /**
+     * Increments the count of scheduling attempts (including 409 responses).
+     */
+    public void incrementScheduleAttemptCount() {
+        this.scheduleAttemptCount++;
+    }
+
+    /**
+     * Increments the count of rounds where no nodes had headroom for this test.
+     * Used for unschedulable detection.
+     */
+    public void incrementNoHeadroomRounds() {
+        this.noHeadroomRounds++;
+    }
+
+    /**
+     * Sets the earliest time this test can be rescheduled (for jitter/backoff).
+     */
+    public void setEarliestRescheduleTime(Instant time) {
+        this.earliestRescheduleTime = time;
+    }
+
+    /**
+     * Returns the number of scheduling attempts made for this test.
+     */
+    public int getScheduleAttemptCount() {
+        return scheduleAttemptCount;
+    }
+
+    /**
+     * Returns the number of rounds where no nodes had headroom.
+     */
+    public int getNoHeadroomRounds() {
+        return noHeadroomRounds;
+    }
+
+    /**
+     * Returns true if this test can be scheduled now (not in backoff period).
+     */
+    public boolean canScheduleNow() {
+        return earliestRescheduleTime == null || Instant.now().isAfter(earliestRescheduleTime);
     }
 
     @Override

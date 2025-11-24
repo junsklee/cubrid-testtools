@@ -85,6 +85,15 @@ public class HealthHandler implements HttpHandler {
         }
         concurrency.put("running", runningTests);
         concurrency.put("queued", 0); // Not implemented yet
+
+        // DEPRECATED: These fields are no longer used by smart scheduling as of the
+        // "pending until placed" refactoring. Tests remain in the ReadyQueue (PENDING)
+        // until successfully assigned, and 409 responses trigger node cooldown rather
+        // than creating separate retry queues. These fields are kept for backward
+        // compatibility with legacy monitoring tools.
+        concurrency.put("maxRetry", 0);  // DEPRECATED
+        concurrency.put("retryRunning", 0);  // DEPRECATED
+
         response.put("concurrency", concurrency);
 
         // Back-compat: expose current limit at top level for legacy builders

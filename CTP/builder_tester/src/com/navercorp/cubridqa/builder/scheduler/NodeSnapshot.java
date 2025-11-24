@@ -55,6 +55,9 @@ public class NodeSnapshot {
     private final boolean degraded;
     private final boolean diskPressure;
 
+    // Cooldown state (for 409 backoff)
+    private final Instant cooldownUntil;
+
     private NodeSnapshot(Builder builder) {
         this.nodeId = builder.nodeId;
         this.timestamp = builder.timestamp;
@@ -84,6 +87,7 @@ public class NodeSnapshot {
         this.cachedPackages = Collections.unmodifiableSet(new HashSet<>(builder.cachedPackages));
         this.degraded = builder.degraded;
         this.diskPressure = builder.diskPressure;
+        this.cooldownUntil = builder.cooldownUntil;
     }
 
     public static Builder builder() {
@@ -321,6 +325,65 @@ public class NodeSnapshot {
     }
 
     /**
+     * Returns true if this node is in cooldown period after a 409 response.
+     */
+    public boolean isInCooldown() {
+        return cooldownUntil != null && Instant.now().isBefore(cooldownUntil);
+    }
+
+    /**
+     * Returns the cooldown expiration time, or null if not in cooldown.
+     */
+    public Instant getCooldownUntil() {
+        return cooldownUntil;
+    }
+
+    /**
+     * Returns a copy of this snapshot with cooldown set to the specified time.
+     * Used by NodeDirectory when a node returns 409 Conflict.
+     */
+    public NodeSnapshot withCooldownUntil(Instant until) {
+        Builder b = builder()
+            .nodeId(this.nodeId)
+            .timestamp(this.timestamp)
+            .status(this.status)
+            .maxConcurrentTests(this.maxConcurrentTests)
+            .maxWhileHeavy(this.maxWhileHeavy)
+            .maxAfterHeavy(this.maxAfterHeavy)
+            .activeLimit(this.activeLimit)
+            .heavyRunning(this.heavyRunning)
+            .runningTests(this.runningTests)
+            .queuedTests(this.queuedTests)
+            .cpuPct(this.cpuPct)
+            .memMb(this.memMb)
+            .ioMbPerSec(this.ioMbPerSec)
+            .ioReadMbPerSec(this.ioReadMbPerSec)
+            .ioWriteMbPerSec(this.ioWriteMbPerSec)
+            .iops(this.iops)
+            .netMbPerSec(this.netMbPerSec)
+            .usedCpuPct(this.usedCpuPct)
+            .usedMemMb(this.usedMemMb)
+            .usedIoMbPerSec(this.usedIoMbPerSec)
+            .usedIoReadMbPerSec(this.usedIoReadMbPerSec)
+            .usedIoWriteMbPerSec(this.usedIoWriteMbPerSec)
+            .usedIops(this.usedIops)
+            .usedNetMbPerSec(this.usedNetMbPerSec)
+            .degraded(this.degraded)
+            .diskPressure(this.diskPressure)
+            .cooldownUntil(until);
+
+        // Copy cached artifacts
+        for (String img : this.cachedImages) {
+            b.addCachedImage(img);
+        }
+        for (String pkg : this.cachedPackages) {
+            b.addCachedPackage(pkg);
+        }
+
+        return b.build();
+    }
+
+    /**
      * Returns available concurrency headroom.
      */
     public int getAvailableConcurrency() {
@@ -416,6 +479,7 @@ public class NodeSnapshot {
         private Set<String> cachedPackages = new HashSet<>();
         private boolean degraded = false;
         private boolean diskPressure = false;
+        private Instant cooldownUntil = null;
 
         private Builder() {
         }
@@ -557,6 +621,11 @@ public class NodeSnapshot {
 
         public Builder diskPressure(boolean val) {
             this.diskPressure = val;
+            return this;
+        }
+
+        public Builder cooldownUntil(Instant val) {
+            this.cooldownUntil = val;
             return this;
         }
 

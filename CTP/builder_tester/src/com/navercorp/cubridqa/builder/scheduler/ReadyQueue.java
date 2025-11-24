@@ -51,6 +51,9 @@ public class ReadyQueue {
      * Adds a test to the appropriate queue (mice or elephants).
      */
     public void offer(TestInstance test) {
+        if (test == null) {
+            throw new IllegalArgumentException("Cannot offer null test to queue");
+        }
         if (test.getPredictedDurationMs() <= miceThresholdMs) {
             miceQueue.offer(test);
         } else {
@@ -134,15 +137,23 @@ public class ReadyQueue {
 
     /**
      * Computes effective duration for mice queue ordering.
-     * Applies age boost to reduce effective duration for long-waiting tests.
+     * Applies age boost AND attempt boost to reduce effective duration for long-waiting
+     * or frequently-blocked tests (e.g., those hitting 409s or backpressure).
      */
     private long effectiveDuration(TestInstance test) {
         long waitSeconds = test.getWaitTimeSeconds();
         double ageCap = 300.0;  // 5 minutes cap
-        double ageBoost = Math.min(1.0, waitSeconds / ageCap);
+        double timeBoost = Math.min(1.0, waitSeconds / ageCap);
 
-        // Reduce effective duration by up to 50% for aged tests
-        double reduction = ageBoost * 0.5 * test.getPredictedDurationMs();
+        // Attempt boost: +5% per failed scheduling attempt, capped at 50%
+        int attempts = test.getScheduleAttemptCount();
+        double attemptBoost = Math.min(0.5, attempts * 0.05);
+
+        // Total boost (caps at 1.5 = 100% time + 50% attempts)
+        double totalBoost = timeBoost + attemptBoost;
+
+        // Reduce effective duration by up to 75% for aged+blocked tests (1.5 * 0.5)
+        double reduction = totalBoost * 0.5 * test.getPredictedDurationMs();
         return Math.max(0, test.getPredictedDurationMs() - (long) reduction);
     }
 
