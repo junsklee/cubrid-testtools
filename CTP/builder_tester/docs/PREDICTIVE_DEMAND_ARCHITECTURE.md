@@ -20,6 +20,323 @@ This document describes the **implemented** architecture for tracking predicted 
 - ✅ NodeDirectory validates resource headroom before scheduling (10% safety margin)
 - ✅ Multi-layer protection against node oversubscription
 
+## Simple Explanation: How Predictive Demand Tracking Works
+
+### The Problem: "How Busy is This Server?"
+
+Imagine you're a **restaurant manager** scheduling waiters to serve tables. You need to know:
+- How many waiters are currently busy?
+- How much work can each waiter handle?
+- Can I assign a new table to this waiter?
+
+**Old Way (Broken):**
+```
+Manager: "How busy are you?"
+Waiter: "I'm serving 3 tables"  ← But we don't know how much work each table needs!
+
+Manager: "OK, I'll assume each table needs 50% of your time"
+         → Assigns 2 more tables
+         → Waiter gets overwhelmed! ❌
+```
+
+**New Way (Fixed):**
+```
+Manager: "How busy are you?"
+Waiter: "I'm serving 3 tables:
+         - Table 1: needs 30% of my time (light order)
+         - Table 2: needs 80% of my time (big party)
+         - Table 3: needs 20% of my time (quick snack)
+         Total: 130% - I'm overloaded!"  ← Accurate! ✅
+
+Manager: "OK, I won't assign more tables to you"
+```
+
+### The Solution: Track Actual Predictions
+
+Instead of guessing "each test uses 50% CPU", we:
+1. **Predict** how much each test will need (from historical data)
+2. **Send** that prediction with the test request
+3. **Track** all running tests and their predictions
+4. **Sum** the predictions to get accurate utilization
+
+### Complete Example: A Day in the Life
+
+**Scenario:** A tester node with 8 CPU cores, 16 GB RAM, running multiple tests
+
+#### Step 1: Scheduler Predicts Test Demands
+
+The scheduler (BuilderTask) asks the Predictor: "How much will this test need?"
+
+```
+Test: sql_partition_test
+Predictor Response:
+  - CPU: 75% (of one core)
+  - Memory: 1024 MB
+  - I/O Read: 10 MB/s
+  - I/O Write: 5 MB/s
+  - Duration: 45 seconds
+  - Confidence: 85%
+```
+
+#### Step 2: Scheduler Sends Test Request with Predictions
+
+The scheduler sends a test request to the tester node:
+
+```json
+{
+  "testKey": "sql/_01_object/_09_partition/...",
+  "commit": "b3a0c2d1234...",
+  "predicted": {
+    "cpuPct": 75.5,
+    "memMb": 1024.0,
+    "ioReadBytesPerSec": 10485760,   // 10 MB/s
+    "ioWriteBytesPerSec": 5242880,    // 5 MB/s
+    "durationMs": 45000,
+    "confidence": 0.85
+  }
+}
+```
+
+#### Step 3: Tester Registers the Test
+
+When the test starts, the tester:
+1. Generates a unique test ID: `sql_partition_test@b3a0c2d@1699901234567@a3f9`
+2. Extracts the predicted demand from the request
+3. Registers it in the `RunningTestTracker`:
+
+```
+RunningTestTracker (in-memory map):
+  "sql_partition_test@b3a0c2d@1699901234567@a3f9" → {
+    testKey: "sql_partition_test",
+    cpuPct: 75.5,
+    memMb: 1024.0,
+    ioReadBytesPerSec: 10485760,
+    ioWriteBytesPerSec: 5242880,
+    ...
+  }
+```
+
+#### Step 4: Multiple Tests Run Concurrently
+
+As more tests start, the tracker accumulates them:
+
+```
+Time 10:00 AM - Test A starts
+RunningTestTracker:
+  Test A: CPU 75%, Memory 1024 MB
+
+Time 10:01 AM - Test B starts  
+RunningTestTracker:
+  Test A: CPU 75%, Memory 1024 MB
+  Test B: CPU 50%, Memory 512 MB
+  TOTAL: CPU 125%, Memory 1536 MB
+
+Time 10:02 AM - Test C starts
+RunningTestTracker:
+  Test A: CPU 75%, Memory 1024 MB
+  Test B: CPU 50%, Memory 512 MB
+  Test C: CPU 100%, Memory 2048 MB
+  TOTAL: CPU 225%, Memory 3584 MB
+```
+
+#### Step 5: Scheduler Polls Health Endpoint
+
+Every second, the scheduler asks: "How busy are you?"
+
+**Tester's /health endpoint:**
+```json
+{
+  "utilization": {
+    "cpu_millicores": 2250,        // 225% of one core = 2250 millicores
+    "mem_bytes": 3758096384,        // 3584 MB
+    "io_read_bytes_per_sec": 15728640,  // Sum of all tests
+    "io_write_bytes_per_sec": 7864320,
+    "test_count": 3
+  },
+  "capacity": {
+    "cpu_millicores": 8000,         // 8 cores = 8000 millicores
+    "mem_bytes": 17179869184,        // 16 GB
+    "io_read_bytes_per_sec": 104857600,  // 100 MB/s capacity
+    "io_write_bytes_per_sec": 52428800   // 50 MB/s capacity
+  },
+  "free": {
+    "cpu_millicores": 5750,         // 8000 - 2250 = 5750 free
+    "mem_bytes": 13421772800,       // 16 GB - 3.5 GB = 12.5 GB free
+    ...
+  }
+}
+```
+
+#### Step 6: Scheduler Validates Before Assigning New Test
+
+When a new test needs scheduling:
+
+```
+New Test D needs: CPU 100%, Memory 2048 MB
+
+Scheduler checks Node A:
+  - Free CPU: 5750 millicores (57.5% of one core)
+  - Required: 100% of one core = 1000 millicores
+  - With 10% safety margin: 1100 millicores needed
+  
+  ❌ REJECTED: 1100 > 575 (not enough free CPU)
+
+Scheduler checks Node B:
+  - Free CPU: 5000 millicores (50% of one core)
+  - Required: 1100 millicores (with safety margin)
+  
+  ❌ REJECTED: 1100 > 500 (not enough free CPU)
+
+Scheduler checks Node C:
+  - Free CPU: 8000 millicores (100% of one core)
+  - Required: 1100 millicores
+  
+  ✅ ACCEPTED: 1100 < 8000 (plenty of headroom)
+```
+
+#### Step 7: Test Completes and Unregisters
+
+When Test A finishes:
+
+```
+Test A completes → Unregisters from tracker
+
+RunningTestTracker:
+  Test B: CPU 50%, Memory 512 MB
+  Test C: CPU 100%, Memory 2048 MB
+  TOTAL: CPU 150%, Memory 2560 MB  ← Utilization decreased!
+```
+
+The next health poll will show lower utilization, and the scheduler can assign more tests.
+
+### Visual Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SCHEDULER (BuilderTask)                      │
+│                                                                 │
+│  1. Query Predictor: "How much will this test need?"           │
+│     → Gets: CPU 75%, Memory 1024 MB, I/O 10 MB/s read, etc.   │
+│                                                                 │
+│  2. Build test request with "predicted" field                  │
+│                                                                 │
+│  3. Select best node (has enough free resources)               │
+│     └─ Checks: free_cpu >= predicted_cpu × 1.10               │
+│                free_mem >= predicted_mem × 1.10                │
+│                                                                 │
+│  4. Send HTTP request to tester                                │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             │ HTTP POST /runTest
+                             │ { "testKey": "...", "predicted": {...} }
+                             ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                    TESTER NODE                                  │
+│                                                                 │
+│  1. TestHandler receives request                                │
+│                                                                 │
+│  2. TestOrchestrator:                                           │
+│     ├─ Generate test ID: "test@commit@time@random"             │
+│     ├─ Extract predicted demand from request                   │
+│     └─ Register: runningTestTracker.registerTestStart(...)     │
+│                                                                 │
+│  3. Execute test (runs in background)                          │
+│                                                                 │
+│  4. When test completes:                                        │
+│     └─ Unregister: runningTestTracker.unregisterTestEnd(...)  │
+│                                                                 │
+│  5. HealthHandler (polled every second):                        │
+│     ├─ Query: testOrchestrator.getCurrentUtilization()        │
+│     ├─ Sum all running test predictions                        │
+│     └─ Return: { "utilization": {...}, "capacity": {...} }     │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             │ HTTP GET /health (every 1 second)
+                             ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                    SCHEDULER (NodeDirectory)                    │
+│                                                                 │
+│  1. Parse health response                                       │
+│                                                                 │
+│  2. Calculate free resources:                                  │
+│     free = capacity - utilization                              │
+│                                                                 │
+│  3. Store in NodeSnapshot                                       │
+│                                                                 │
+│  4. Use for eligibility checks when scheduling                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why This is Better
+
+**Old Way Problems:**
+- ❌ Assumed every test uses 50% CPU, 512 MB memory (wrong!)
+- ❌ Some tests use 10% CPU, others use 200% CPU
+- ❌ Scheduler either wastes capacity (too conservative) or crashes nodes (too aggressive)
+
+**New Way Benefits:**
+- ✅ Each test reports its actual predicted needs
+- ✅ Utilization = sum of real predictions (accurate!)
+- ✅ Scheduler can safely pack tests without overloading
+- ✅ 10% safety margin prevents edge cases
+
+### What About Tests Without Predictions?
+
+**Backward Compatibility:**
+- If a test request has no `predicted` field → use conservative defaults
+- Defaults: 50% CPU, 512 MB memory, 10 MB/s I/O
+- System still works, just less accurate for those tests
+
+**Example:**
+```
+Test with prediction:    CPU 75%, Memory 1024 MB  ← Accurate
+Test without prediction: CPU 50%, Memory 512 MB   ← Conservative default
+```
+
+### The RunningTestTracker: A Simple In-Memory Map
+
+Think of it like a **whiteboard** that tracks who's working:
+
+```
+┌─────────────────────────────────────────────────────┐
+│           RunningTestTracker (Whiteboard)           │
+├─────────────────────────────────────────────────────┤
+│ Test ID                    │ CPU  │ Memory │ I/O     │
+├────────────────────────────┼──────┼────────┼─────────┤
+│ test_a@abc123@...@x1      │ 75%  │ 1024MB │ 10MB/s  │
+│ test_b@def456@...@x2      │ 50%  │ 512MB  │ 5MB/s   │
+│ test_c@ghi789@...@x3      │ 100% │ 2048MB │ 20MB/s  │
+├────────────────────────────┼──────┼────────┼─────────┤
+│ TOTAL                      │ 225% │ 3584MB │ 35MB/s  │
+└─────────────────────────────────────────────────────┘
+```
+
+When a test starts → **Add row** to whiteboard
+When a test ends → **Remove row** from whiteboard
+When asked "how busy?" → **Sum all rows**
+
+### Multi-Layer Protection
+
+The system has **4 layers** to prevent node overload:
+
+1. **Concurrency Limit:** "Max 10 tests at once" (simple count)
+2. **Resource Headroom:** "Do you have enough CPU/memory?" (accurate check)
+3. **Accurate Utilization:** Real-time sum of predictions (not guesses)
+4. **Stale Node Detection:** Remove unreachable nodes from scheduling
+
+**Example:**
+```
+Node has capacity for 10 tests (concurrency limit)
+But 8 tests are running, each using 15% CPU
+Total: 8 × 15% = 120% CPU (overloaded!)
+
+Scheduler sees:
+  - Concurrency: 2 slots free (8/10) ✓
+  - CPU headroom: 0% free (120% used) ✗
+  
+Result: Scheduler WON'T assign more tests (even though slots are free)
+```
+
 ## Architecture Components
 
 ### 1. Request Protocol Enhancement

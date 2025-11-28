@@ -54,6 +54,464 @@ testIndex % numWorkers → target worker
 - **No fairness guarantees**: Some tests could starve
 - **Heterogeneous hardware**: Same test on different nodes treated identically
 
+## Simple Explanation: How Smart Scheduling Works
+
+### The Problem: "Dumb" Round-Robin Distribution
+
+Imagine you're a **restaurant manager** assigning waiters to tables. The old way (round-robin) was like this:
+
+```
+Table 1 → Waiter A
+Table 2 → Waiter B
+Table 3 → Waiter C
+Table 4 → Waiter A (round-robin repeats)
+Table 5 → Waiter B
+...
+```
+
+**Problems:**
+- ❌ Doesn't consider how busy each waiter is
+- ❌ Doesn't consider which waiter already knows the menu (cache)
+- ❌ Doesn't consider table size (big party vs quick snack)
+- ❌ Some waiters get overloaded, others sit idle
+
+**Real Example:**
+```
+Node A: 8 CPU cores, 16 GB RAM, running 2 tests (50% busy)
+Node B: 8 CPU cores, 16 GB RAM, running 0 tests (idle)
+Node C: 8 CPU cores, 16 GB RAM, running 1 test (25% busy)
+
+Round-Robin assigns:
+  Test 1 → Node A (now 75% busy)
+  Test 2 → Node B (now 25% busy) ✓ Good!
+  Test 3 → Node C (now 50% busy)
+  Test 4 → Node A (now 100% busy - OVERLOADED!) ❌
+  Test 5 → Node B (now 50% busy)
+```
+
+### The Solution: Smart Scheduling
+
+Smart scheduling is like a **smart restaurant manager** who:
+1. **Knows each waiter's workload** (resource awareness)
+2. **Knows which waiters have the right tools** (cache locality)
+3. **Assigns big parties to available waiters** (duration awareness)
+4. **Makes sure no waiter starves** (fairness)
+
+**Same Example with Smart Scheduling:**
+```
+Node A: 8 CPU cores, 16 GB RAM, running 2 tests (50% busy)
+Node B: 8 CPU cores, 16 GB RAM, running 0 tests (idle)
+Node C: 8 CPU cores, 16 GB RAM, running 1 test (25% busy)
+
+Smart Scheduler assigns:
+  Test 1 → Node B (idle, best fit) ✓
+  Test 2 → Node C (25% busy, good fit) ✓
+  Test 3 → Node B (now 50% busy, still best) ✓
+  Test 4 → Node C (now 50% busy, avoids Node A) ✓
+  Test 5 → Node A (only if it has resources) ✓
+```
+
+### Key Concepts
+
+#### 1. Mice vs Elephants (Test Classification)
+
+Tests are divided into two categories:
+
+**Mice (Short Tests ≤ 20 seconds):**
+- Fast, lightweight tests
+- Strategy: **Shortest-Job-First (SJF)** - get them done quickly
+- Example: Unit tests, quick validation tests
+
+**Elephants (Long Tests > 20 seconds):**
+- Slow, resource-heavy tests
+- Strategy: **Longest-Job-First (LJF)** - start critical path early
+- Example: Integration tests, performance tests
+
+**Why This Matters:**
+```
+Without classification:
+  - Long test starts first → blocks short tests → slow feedback
+  - Short tests start first → long tests wait → slow overall completion
+
+With classification:
+  - 80% of assignments try elephants first (start critical path)
+  - 20% of assignments try mice (fill gaps, fast feedback)
+  - Result: Both fast feedback AND fast overall completion
+```
+
+#### 2. Multi-Resource Scoring
+
+The scheduler scores each test-node pair based on **5 factors**:
+
+**1. Resource Pressure (45% weight):**
+```
+"How much of this node's resources will this test use?"
+
+Example:
+  Test needs: 2 CPU cores, 4 GB RAM
+  Node A has: 4 CPU cores free, 8 GB RAM free
+  Node B has: 2 CPU cores free, 4 GB RAM free
+  
+  Pressure on Node A: max(2/4, 4/8) = 0.5 (50% of resources)
+  Pressure on Node B: max(2/2, 4/4) = 1.0 (100% of resources)
+  
+  → Node A is better (lower pressure = better score)
+```
+
+**2. Duration (25% weight):**
+```
+"Does this test fit the node's workload?"
+
+Example:
+  Short test (5s) on node with other short tests → Good fit
+  Long test (60s) on node with other long tests → Good fit
+  Mixed → Less ideal
+```
+
+**3. Image Cache Locality (15% weight):**
+```
+"Does this node already have the Docker image?"
+
+Example:
+  Test needs: cubrid-test:abc1234_def5678
+  Node A: Has image cached → No penalty (0.0)
+  Node B: Missing image → Penalty (1.0, must pull 10-30s)
+  
+  → Node A is better (saves 10-30 seconds)
+```
+
+**4. Package Cache Locality (5% weight):**
+```
+"Does this node already have the build package?"
+
+Example:
+  Test needs: cubrid_abc1234.tar.gz
+  Node A: Has package cached → No penalty (0.0)
+  Node B: Missing package → Penalty (1.0, must extract 5-10s)
+  
+  → Node A is better (saves 5-10 seconds)
+```
+
+**5. Age/Fairness (10% weight):**
+```
+"How long has this test been waiting?"
+
+Example:
+  Test A: Waiting 0 seconds → No boost
+  Test B: Waiting 200 seconds → Full boost (1.0)
+  
+  → Test B gets priority (prevents starvation)
+```
+
+**Final Score:**
+```
+Score = (0.45 × pressure) + (0.25 × duration) + (0.15 × image) + 
+        (0.05 × package) - (0.10 × age)
+
+Lower score = Better placement
+```
+
+#### 3. Complete Example: Scheduling a Test Suite
+
+**Scenario:** 10 tests need to be scheduled across 3 nodes
+
+**Step 1: Classify Tests**
+```
+Mice (≤ 20s):
+  - test_01.sh: 5s, needs 0.5 CPU, 256 MB RAM
+  - test_02.sh: 8s, needs 0.3 CPU, 128 MB RAM
+  - test_03.sh: 12s, needs 0.8 CPU, 512 MB RAM
+  - test_04.sh: 15s, needs 0.4 CPU, 256 MB RAM
+
+Elephants (> 20s):
+  - test_05.sh: 45s, needs 2.0 CPU, 2 GB RAM
+  - test_06.sh: 60s, needs 1.5 CPU, 1.5 GB RAM
+  - test_07.sh: 90s, needs 3.0 CPU, 4 GB RAM
+  - test_08.sh: 30s, needs 1.0 CPU, 1 GB RAM
+  - test_09.sh: 120s, needs 2.5 CPU, 3 GB RAM
+  - test_10.sh: 35s, needs 1.2 CPU, 1.2 GB RAM
+```
+
+**Step 2: Check Node State (from /health polling)**
+```
+Node A:
+  Capacity: 8 CPU cores, 16 GB RAM
+  Utilization: 2 CPU cores, 4 GB RAM (running 2 tests)
+  Free: 6 CPU cores, 12 GB RAM
+  Cached images: [cubrid-test:abc1234_def5678]
+  Cached packages: [cubrid_abc1234.tar.gz]
+
+Node B:
+  Capacity: 8 CPU cores, 16 GB RAM
+  Utilization: 0 CPU cores, 0 GB RAM (idle)
+  Free: 8 CPU cores, 16 GB RAM
+  Cached images: []
+  Cached packages: []
+
+Node C:
+  Capacity: 8 CPU cores, 16 GB RAM
+  Utilization: 1 CPU core, 2 GB RAM (running 1 test)
+  Free: 7 CPU cores, 14 GB RAM
+  Cached images: [cubrid-test:xyz9999_aaa0000]
+  Cached packages: [cubrid_xyz9999.tar.gz]
+```
+
+**Step 3: Weighted Selection (80% elephant, 20% mouse)**
+```
+Random number: 0.75 (75% < 80%) → Try elephant first
+```
+
+**Step 4: Score Elephant (test_09.sh - longest)**
+```
+test_09.sh: 120s, needs 2.5 CPU, 3 GB RAM, image: abc1234_def5678
+
+Node A:
+  Pressure: max(2.5/6, 3/12) = 0.42
+  Duration: 120/120 = 1.0 (normalized)
+  Image: Has image → 0.0
+  Package: Has package → 0.0
+  Age: 0.0 (just submitted)
+  Score: 0.45×0.42 + 0.25×1.0 + 0.15×0.0 + 0.05×0.0 - 0.10×0.0 = 0.44
+
+Node B:
+  Pressure: max(2.5/8, 3/16) = 0.31
+  Duration: 120/120 = 1.0
+  Image: Missing → 1.0
+  Package: Missing → 1.0
+  Age: 0.0
+  Score: 0.45×0.31 + 0.25×1.0 + 0.15×1.0 + 0.05×1.0 - 0.10×0.0 = 0.79
+
+Node C:
+  Pressure: max(2.5/7, 3/14) = 0.36
+  Duration: 120/120 = 1.0
+  Image: Missing → 1.0
+  Package: Missing → 1.0
+  Age: 0.0
+  Score: 0.45×0.36 + 0.25×1.0 + 0.15×1.0 + 0.05×1.0 = 0.81
+
+→ Node A wins (lowest score: 0.44)
+→ Assign test_09.sh to Node A
+```
+
+**Step 5: Next Assignment (Try Mouse)**
+```
+Random number: 0.15 (15% < 20%) → Try mouse
+
+test_01.sh: 5s, needs 0.5 CPU, 256 MB RAM
+
+Node A (now 4.5 CPU free, 13 GB free):
+  Pressure: max(0.5/4.5, 0.256/13) = 0.11
+  Score: 0.45×0.11 + 0.25×0.04 + 0.15×0.0 + 0.05×0.0 = 0.06
+
+Node B:
+  Pressure: max(0.5/8, 0.256/16) = 0.06
+  Score: 0.45×0.06 + 0.25×0.04 + 0.15×1.0 + 0.05×1.0 = 0.33
+
+Node C:
+  Pressure: max(0.5/7, 0.256/14) = 0.07
+  Score: 0.45×0.07 + 0.25×0.04 + 0.15×1.0 + 0.05×1.0 = 0.33
+
+→ Node A wins (has cache, low pressure)
+→ Assign test_01.sh to Node A
+```
+
+**Result:**
+- Long test (test_09) started early on Node A (has cache)
+- Short test (test_01) filled gap on Node A
+- Node B and C available for other tests
+- **Total time: ~120s** (determined by longest test, not blocked by short tests)
+
+### Visual Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    BUILDER (Scheduler)                         │
+│                                                                 │
+│  1. Build test instances (commit × test matrix)                │
+│     ├─ Query Predictor: "How long will this test take?"        │
+│     ├─ Get predictions: duration, CPU, memory, I/O, etc.      │
+│     └─ Create TestInstance objects                             │
+│                                                                 │
+│  2. Classify tests                                             │
+│     ├─ Mice (≤ 20s) → Min-heap (shortest first)                │
+│     └─ Elephants (> 20s) → Max-heap (longest first)            │
+│                                                                 │
+│  3. Poll testers for state (every 5 seconds)                  │
+│     └─ GET /health → Get capacity, utilization, cached images  │
+│                                                                 │
+│  4. Assignment Loop                                             │
+│     ┌─────────────────────────────────────────────────────┐   │
+│     │ while (tests pending) {                              │   │
+│     │   // 80% chance: try elephant first                  │   │
+│     │   if (random() < 0.80 && elephants available) {      │   │
+│     │     test = pollElephant()  // Longest elephant       │   │
+│     │   } else {                                            │   │
+│     │     test = pollMouse()    // Shortest mouse           │   │
+│     │   }                                                    │   │
+│     │                                                        │   │
+│     │   // FILTER: Find eligible nodes                      │   │
+│     │   eligible = []                                       │   │
+│     │   for each node:                                      │   │
+│     │     if (node.hasCapacity && node.hasResources) {      │   │
+│     │       eligible.add(node)                              │   │
+│     │     }                                                 │   │
+│     │                                                        │   │
+│     │   // SCORE: Find best node                            │   │
+│     │   bestNode = null                                     │   │
+│     │   bestScore = INFINITY                                │   │
+│     │   for each eligible node:                             │   │
+│     │     score = computeScore(test, node)                  │   │
+│     │     if (score < bestScore) {                          │   │
+│     │       bestNode = node                                 │   │
+│     │       bestScore = score                               │   │
+│     │     }                                                 │   │
+│     │                                                        │   │
+│     │   // BIND: Assign test to node                        │   │
+│     │   POST /test to bestNode                              │   │
+│     │ }                                                     │   │
+│     └─────────────────────────────────────────────────────┘   │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                │ HTTP POST /test
+                                ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                    TESTER NODE                                  │
+│                                                                 │
+│  1. Receive test request                                       │
+│     ├─ Check capacity (fast-fail if no resources)             │
+│     └─ Return 409 Conflict if oversubscribed                  │
+│                                                                 │
+│  2. Execute test                                               │
+│     ├─ Check Docker image cache                                │
+│     ├─ Check build package cache                               │
+│     ├─ Run test (with resource limits)                         │
+│     └─ Collect metrics                                         │
+│                                                                 │
+│  3. Record observation                                         │
+│     └─ Update TestStatsStore (for future predictions)          │
+│                                                                 │
+│  4. Health endpoint (polled every 5s)                           │
+│     └─ Return: capacity, utilization, cached images/packages  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why This is Better
+
+**Round-Robin Problems:**
+- ❌ Node A gets overloaded (100% CPU, OOM kills)
+- ❌ Node B sits idle (0% utilization)
+- ❌ Cold starts everywhere (no cache reuse)
+- ❌ Long tests block short tests (slow feedback)
+
+**Smart Scheduling Benefits:**
+- ✅ Nodes balanced (60-80% utilization across cluster)
+- ✅ Cache hits (10-30s saved per test)
+- ✅ Fast feedback (mice get priority 20% of time)
+- ✅ Fast completion (elephants start early, 80% of time)
+- ✅ No overload (resource checks prevent crashes)
+
+### Resource Safety: Preventing Overload
+
+The scheduler has **multiple layers** to prevent node overload:
+
+**1. Resource Headroom Checks:**
+```
+Test needs: 2 CPU cores, 4 GB RAM
+Node has: 2.5 CPU cores free, 5 GB RAM free
+
+With 10% safety margin:
+  Required: 2.2 CPU cores, 4.4 GB RAM
+  Available: 2.5 CPU cores, 5 GB RAM
+  
+  → PASS (has headroom)
+```
+
+**2. Concurrency Limits:**
+```
+Node max_concurrent_tests: 6
+Currently running: 5 tests
+
+→ Can accept 1 more test
+→ Rejects if already at limit
+```
+
+**3. Fast-Fail Admission:**
+```
+Tester receives test request:
+  - Quick check: "Do I have resources?"
+  - If no: Return 409 Conflict immediately
+  - Builder retries on different node
+```
+
+**4. Confidence-Aware Margins:**
+```
+High confidence (0.9): Use 10% margin
+Low confidence (0.1): Use 60% margin (more safety)
+
+Unknown test (confidence=0): Use conservative defaults + high margin
+```
+
+### Example: Complete Test Suite Run
+
+**Scenario:** 100 tests, 3 nodes, mixed workload
+
+**Round-Robin Result:**
+```
+Time 0:00 - Tests 1-33 → Node A, 34-66 → Node B, 67-100 → Node C
+Time 0:05 - Node A overloaded (OOM kills), Node B idle, Node C busy
+Time 0:10 - Node A crashed, tests redistributed
+Time 0:15 - All tests complete (with retries)
+Total time: ~15 minutes
+```
+
+**Smart Scheduling Result:**
+```
+Time 0:00 - Long tests start on all nodes (80% priority)
+Time 0:01 - Short tests fill gaps (20% priority)
+Time 0:02 - Nodes balanced at 70% utilization
+Time 0:05 - Cache hits save 10-30s per test
+Time 0:08 - All tests complete (no crashes, no retries)
+Total time: ~8 minutes (47% faster!)
+```
+
+### The Learning Loop
+
+Smart scheduling gets **smarter over time**:
+
+```
+Day 1: Tests run with conservative defaults
+       → Metrics collected
+       → TestStatsStore updated
+
+Day 2: Predictions available (low confidence)
+       → Better scheduling decisions
+       → More cache hits
+
+Day 7: High confidence predictions
+       → Optimal scheduling
+       → 10-30% faster completion
+```
+
+**Example Learning:**
+```
+Test: sql_partition_test
+
+Day 1 (first run):
+  Prediction: Default (30s, 50% CPU, 512 MB)
+  Confidence: 0.0
+  Result: Actually took 45s, used 75% CPU, 1 GB RAM
+
+Day 2 (after 5 runs):
+  Prediction: 42s, 70% CPU, 950 MB
+  Confidence: 0.22
+  Result: Close, but still learning
+
+Day 7 (after 50 runs):
+  Prediction: 45s, 75% CPU, 1 GB RAM
+  Confidence: 0.92
+  Result: Accurate! Scheduler makes perfect decisions
+```
+
 ### Solution Architecture
 
 The Smart Scheduling System introduces:

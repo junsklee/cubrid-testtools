@@ -11,6 +11,196 @@ Production-grade WAL (Write-Ahead Log) architecture with crash-safety guarantees
 - **Comprehensive validation** filtering invalid observations
 - **Legacy compatibility** for smooth migration
 
+## Simple Explanation: Why Rotations and Replays?
+
+### The Problem with a Simple Log
+
+Imagine you're keeping a diary of test results. With a simple log file, you'd write everything to one file:
+
+```
+wal.log:
+  Test A: passed (10:00 AM)
+  Test B: passed (10:05 AM)
+  Test C: passed (10:10 AM)
+  ... (thousands more entries) ...
+  Test Z: passed (11:00 PM)
+```
+
+**Problems:**
+1. **File grows forever** - After a year, `wal.log` is 50 GB and still growing
+2. **Slow startup** - Every time you restart, you must read the entire 50 GB file to rebuild your memory
+3. **Can't delete old data** - If you delete the file, you lose everything. If you keep it, it grows forever
+
+### The Solution: Snapshots + Segmented WAL
+
+Think of it like a **checkpoint system** in a video game:
+
+1. **Snapshot** = A saved game state (complete picture of all test results at a moment in time)
+2. **WAL Segments** = The "replay log" of what happened since the last save
+
+**Example Timeline:**
+
+```
+10:00 AM - Snapshot created
+           snapshot.json: { "Test A": passed, "Test B": passed }
+
+10:00-10:05 AM - New tests run
+           segment-001.jl: Test C: passed
+                           Test D: passed
+
+10:05 AM - Snapshot created (includes everything up to now)
+           snapshot.json: { "Test A": passed, "Test B": passed, 
+                           "Test C": passed, "Test D": passed }
+           segment-001.jl: (now safe to delete - data is in snapshot)
+
+10:05-10:10 AM - More tests run
+           segment-002.jl: Test E: passed
+                           Test F: passed
+```
+
+### Why Rotations?
+
+**Rotation = Creating a new log file when the current one gets too big or old**
+
+Instead of one giant file, you get many small files:
+
+```
+wal/
+  segment-20251111-100000-000001.jl  (4 MB, closed)
+  segment-20251111-100500-000002.jl  (4 MB, closed)
+  segment-20251111-101000-000003.jl  (2 MB, currently open)
+```
+
+**Benefits:**
+- **Bounded size**: Each file maxes out at 4 MB (or 5 minutes)
+- **Easy cleanup**: Once data is in a snapshot, old segments can be deleted
+- **Fast recovery**: Only need to replay recent segments, not entire history
+
+### Why Replays?
+
+**Replay = Reading log files to rebuild memory state after a crash**
+
+When the program starts, it needs to know: "What tests have run?" The answer is in two places:
+
+1. **Snapshot** (the saved game state)
+2. **WAL segments** (what happened since the snapshot)
+
+**Example Startup:**
+
+```
+Program starts:
+  1. Load snapshot.json → Memory now has: { Test A, B, C, D }
+  2. Check MANIFEST: "Snapshot includes up to segment-001.jl"
+  3. Replay segments NEWER than segment-001:
+     - Replay segment-002.jl → Add Test E, F to memory
+     - Replay segment-003.jl → Add Test G, H to memory
+  4. Memory now complete: { Test A, B, C, D, E, F, G, H }
+```
+
+**Why not just read the snapshot?** Because the snapshot is only updated every few minutes. The WAL segments contain the latest data that hasn't been snapshotted yet.
+
+### How the MANIFEST Tracks Everything
+
+The **MANIFEST** is like a **table of contents** that tells you:
+- Which snapshot is current
+- Which WAL segments exist
+- Which segments are safe to delete
+
+**Example MANIFEST:**
+
+```json
+{
+  "snapshot": {
+    "path": "snapshot.json",
+    "created_at": "2025-11-11T10:05:00Z",
+    "includes_up_to_wal": "segment-000001.jl"  ← "Snapshot has all data up to this segment"
+  },
+  "open_wal": "segment-000003.jl",              ← "Currently writing to this segment"
+  "retained": [                                  ← "These segments need to be kept"
+    "segment-000002.jl",                         ← "Newer than snapshot, must replay"
+    "segment-000003.jl"                          ← "Currently open"
+  ]
+}
+```
+
+**How Replay Works:**
+
+1. **Read MANIFEST** → "Snapshot includes up to segment-000001.jl"
+2. **Find all segments** in the `wal/` directory
+3. **Filter segments** → Only replay segments NEWER than segment-000001.jl
+4. **Replay in order** → segment-000002.jl, then segment-000003.jl
+
+**What about segments NOT in MANIFEST?**
+
+The MANIFEST's `retained` list only tracks segments that are **newer than the snapshot**. But the replay logic is smarter:
+
+```java
+// Pseudo-code of actual replay logic
+List<String> allSegments = listFilesInDirectory("wal/");
+String snapshotIncludesUpTo = manifest.snapshot.includes_up_to_wal;
+
+for (String segment : allSegments) {
+    if (segmentIsNewerThan(segment, snapshotIncludesUpTo)) {
+        replaySegment(segment);  // Replay it
+    }
+}
+```
+
+So even if a segment isn't explicitly listed in `retained`, if it exists on disk and is newer than what the snapshot includes, it will be replayed. The MANIFEST's `retained` list is more of a "cleanup hint" than a strict requirement.
+
+### Complete Example: A Day in the Life
+
+**Morning (10:00 AM):**
+```
+Files:
+  snapshot.json: { Test 1-100: results }
+  segment-001.jl: (empty, just created)
+  
+MANIFEST:
+  snapshot includes up to: segment-000.jl (deleted, was old)
+  open_wal: segment-001.jl
+```
+
+**10:05 AM - Tests 101-200 run:**
+```
+Files:
+  snapshot.json: { Test 1-100: results }  (old)
+  segment-001.jl: Test 101, 102, ... 200  (new data)
+  
+MANIFEST: (unchanged, snapshot hasn't run yet)
+```
+
+**10:10 AM - Snapshot cycle runs:**
+```
+1. Write new snapshot.json: { Test 1-200: results }
+2. Rotate WAL: Close segment-001.jl, open segment-002.jl
+3. Update MANIFEST:
+   - snapshot includes up to: segment-001.jl
+   - open_wal: segment-002.jl
+   - retained: [segment-002.jl]  (segment-001.jl can be deleted)
+4. Delete segment-001.jl (data is now in snapshot)
+```
+
+**10:15 AM - Crash! Program restarts:**
+```
+1. Load MANIFEST → "Snapshot includes up to segment-001.jl"
+2. Load snapshot.json → Memory: { Test 1-200 }
+3. Check wal/ directory → Find segment-002.jl
+4. Is segment-002.jl newer than segment-001.jl? YES
+5. Replay segment-002.jl → Add Test 201-250 to memory
+6. Final state: { Test 1-250 } ✓
+```
+
+### Why This is Better Than a Simple Log
+
+| Simple Log | Segmented WAL + Snapshots |
+|------------|---------------------------|
+| One file grows forever | Many small files (max 4 MB each) |
+| Must read entire file on startup | Only replay recent segments |
+| Can't safely delete old data | Old segments deleted after snapshot |
+| 50 GB file = 5 minute startup | 4 MB segments = 1 second replay |
+| If file corrupts, lose everything | If one segment corrupts, others survive |
+
 ## Key Improvements
 
 ### Previous Design Problems
