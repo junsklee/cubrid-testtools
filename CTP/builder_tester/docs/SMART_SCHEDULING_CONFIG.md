@@ -653,7 +653,7 @@ Configuration file: `conf/tester.conf`
 **Default:** Falls back to `max_concurrent_tests` (legacy)
 
 **Description:**
-Hard cap on the number of concurrent tests a tester runs while any heavy test is still in flight. Heavy tests are defined using the same thresholds as the scheduler: predicted duration ≥ `scheduling_mice_threshold_ms` **and** total predicted I/O ≥ `scheduling_io_heavy_threshold` MB/s. As long as a heavy test is running locally, new requests beyond this limit are rejected with `409 Conflict` so the builder can route them elsewhere.
+Hard cap on the number of concurrent tests a tester runs while any heavy test is still in flight. Heavy tests are defined using the same thresholds as the scheduler: predicted duration ≥ `scheduling_mice_threshold_ms` **and** total predicted I/O ≥ `scheduling_io_heavy_threshold` MB/s. As long as a heavy test is running locally, new requests beyond this limit are queued (blocked) until a slot opens or the heavy test finishes.
 
 **Guidelines:**
 - Set to the number of tests your node can safely run when heavy jobs are present.

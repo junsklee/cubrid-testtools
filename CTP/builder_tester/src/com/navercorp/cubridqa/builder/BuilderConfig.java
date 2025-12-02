@@ -98,6 +98,12 @@ public class BuilderConfig {
     private static final String SCHEDULING_MARGIN_CONFIDENCE_FACTOR = "scheduling_margin_confidence_factor";
     private static final String USE_IOPS_PREDICTIONS = "use_iops_predictions";
 
+    // Elastic Overcommit Configuration
+    private static final String SCHEDULING_OVERCOMMIT_CPU = "scheduling_overcommit_cpu";
+    private static final String SCHEDULING_OVERCOMMIT_MEM = "scheduling_overcommit_mem";
+    private static final String SCHEDULING_CIRCUIT_BREAKER_CPU = "scheduling_circuit_breaker_cpu";
+    private static final String SCHEDULING_CIRCUIT_BREAKER_MEM = "scheduling_circuit_breaker_mem";
+
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
     private static final Object SHELL_TC_OVERLAY_LOCK = new Object();
@@ -1032,6 +1038,23 @@ public class BuilderConfig {
 
     public double getIoSafetyHeadroomRatio() {
         return Double.parseDouble(properties.getProperty("io_safety_headroom_ratio", "0.15"));
+    }
+
+    // Elastic Overcommit Getters
+    public double getSchedulingOvercommitCpu() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_OVERCOMMIT_CPU, "1.0"));
+    }
+
+    public double getSchedulingOvercommitMem() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_OVERCOMMIT_MEM, "1.0"));
+    }
+
+    public double getSchedulingCircuitBreakerCpu() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_CIRCUIT_BREAKER_CPU, "90.0"));
+    }
+
+    public double getSchedulingCircuitBreakerMem() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_CIRCUIT_BREAKER_MEM, "90.0"));
     }
 
     @Override

@@ -149,6 +149,16 @@ public class Tester {
         long snapshotIntervalSeconds = config.getLongOrDefault("stats.snapshot_interval_seconds", 300L);
         this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds, walWriter, manifest, walDir);
 
+        // Measure node capacity for health endpoint (with config for customizable IOPS)
+        // Moved up before TestOrchestrator so it can be passed in
+        NodeCapacity nodeCapacity = NodeCapacity.measure(config.getWorkDir(), config);
+
+        // Set node hardware for latest.json.gz export
+        testStatsStore.setNodeHardwareJson(nodeCapacity.toJSON());
+
+        // Create actual resource sampler for health metrics (starts background thread)
+        ActualSampler actualSampler = new ActualSampler(config);
+
         // Create orchestrator
         this.testOrchestrator = new TestOrchestrator(
             config,
@@ -159,20 +169,13 @@ public class Tester {
             dockerManager,
             new DockerUtils(),
             observationWriter,
-            testStatsStore
+            testStatsStore,
+            nodeCapacity,
+            actualSampler
         );
 
-        // Measure node capacity for health endpoint (with config for customizable IOPS)
-        NodeCapacity nodeCapacity = NodeCapacity.measure(config.getWorkDir(), config);
-
-        // Set node hardware for latest.json.gz export
-        testStatsStore.setNodeHardwareJson(nodeCapacity.toJSON());
-
-        // Create actual resource sampler for health metrics
-        ActualSampler actualSampler = new ActualSampler(config);
-
         // Create HTTP handlers
-        this.testHandler = new TestHandler(config, testOrchestrator, nodeCapacity, logger);
+        this.testHandler = new TestHandler(config, testOrchestrator, logger);
         this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator, actualSampler);
         this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());

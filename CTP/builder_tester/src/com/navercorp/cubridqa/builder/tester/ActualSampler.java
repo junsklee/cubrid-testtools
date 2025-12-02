@@ -31,7 +31,6 @@ public class ActualSampler {
     private static final String FORMAT = "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}";
     private static final double BYTES_PER_MB = 1024d * 1024d;
     private static final long SAMPLE_TIMEOUT_MS = 2000; // 2 second timeout
-
     private final BuilderConfig config;
     private final boolean enabled;
     private final String containerPattern;
@@ -44,6 +43,15 @@ public class ActualSampler {
     private final long minIntervalMs;
     private final long cacheTtlMs;
     private static final int MAX_CACHED_CONTAINERS = 100;
+    
+    // Cached snapshot for high-frequency polling (reduce docker overhead)
+    private volatile UtilizationSnapshot cachedSnapshot = UtilizationSnapshot.empty();
+    private volatile long lastSnapshotTime = 0;
+    private static final long SNAPSHOT_CACHE_TTL_MS = 2000; // Cache for 2 seconds
+
+    // Background sampling configuration
+    private final Thread backgroundSampler;
+    private volatile boolean isRunning = true;
 
     public ActualSampler(BuilderConfig config) {
         this.config = config;
@@ -59,6 +67,59 @@ public class ActualSampler {
         logger.log(Level.INFO,
                 "ActualSampler initialized: enabled={0}, containerPattern=''{1}'', minInterval={2}ms, cacheTTL={3}s",
                 new Object[]{enabled, containerPattern, minIntervalMs, cacheTtlSeconds});
+        
+        // Initialize background sampler thread if enabled
+        if (enabled) {
+            this.backgroundSampler = new Thread(this::runBackgroundSampling, "ActualSampler-Background");
+            this.backgroundSampler.setDaemon(true);
+            this.backgroundSampler.start();
+        } else {
+            this.backgroundSampler = null;
+        }
+    }
+
+    private void runBackgroundSampling() {
+        while (isRunning) {
+            try {
+                performSampling();
+                // Sleep for cache TTL (minus a small buffer) to keep cache fresh
+                Thread.sleep(Math.max(100, SNAPSHOT_CACHE_TTL_MS - 100));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Background sampling failed", e);
+                try {
+                    Thread.sleep(5000); // Backoff on error
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+    }
+
+    private void performSampling() {
+        if (!dockerAvailable) return;
+
+        try {
+            List<String> containers = listRunningTestContainers();
+            if (containers.isEmpty()) {
+                cachedSnapshot = UtilizationSnapshot.empty();
+            } else {
+                cachedSnapshot = aggregateContainerMetrics(containers);
+            }
+            lastSnapshotTime = System.currentTimeMillis();
+        } catch (Exception e) {
+            logThrottledWarning("Failed to sample actual utilization: " + e.getMessage());
+        }
+    }
+
+    public void stop() {
+        isRunning = false;
+        if (backgroundSampler != null) {
+            backgroundSampler.interrupt();
+        }
     }
 
     /**
@@ -105,37 +166,22 @@ public class ActualSampler {
      * @return UtilizationSnapshot with actual metrics, or zeros if sampling fails
      */
     public UtilizationSnapshot sampleCurrentUtilization() {
-        logger.log(Level.FINE, "sampleCurrentUtilization called: enabled={0}, dockerAvailable={1}",
-                new Object[]{enabled, dockerAvailable});
+        return getLatestSnapshot();
+    }
 
-        if (!enabled) {
-            logger.log(Level.WARNING, "ActualSampler is disabled (actual_sampling_enabled=false)");
+    /**
+     * Alias for sampleCurrentUtilization for API consistency.
+     * Returns the latest cached snapshot immediately.
+     */
+    public UtilizationSnapshot getLatestSnapshot() {
+        // If disabled or unavailable, return empty immediately
+        if (!enabled || !dockerAvailable) {
             return UtilizationSnapshot.empty();
         }
 
-        if (!dockerAvailable) {
-            logger.log(Level.FINE, "Docker marked as unavailable, returning empty snapshot");
-            return UtilizationSnapshot.empty();
-        }
-
-        try {
-            List<String> containers = listRunningTestContainers();
-            logger.log(Level.FINE, "Found {0} test containers matching pattern ''{1}''",
-                    new Object[]{containers.size(), containerPattern});
-
-            if (containers.isEmpty()) {
-                return UtilizationSnapshot.empty();
-            }
-
-            UtilizationSnapshot result = aggregateContainerMetrics(containers);
-            logger.log(Level.FINE, "Sampled metrics: cpu={0}mCPU, mem={1}B",
-                    new Object[]{result.getTotalCpuMillicores(), result.getTotalMemBytes()});
-            return result;
-        } catch (Exception e) {
-            logThrottledWarning("Failed to sample actual utilization: " + e.getMessage());
-            logger.log(Level.FINE, "Exception details", e);
-            return UtilizationSnapshot.empty();
-        }
+        // Return the cached snapshot updated by the background thread
+        // If the background thread hasn't run yet (e.g. startup), this returns empty() which is safe
+        return cachedSnapshot;
     }
 
     /**

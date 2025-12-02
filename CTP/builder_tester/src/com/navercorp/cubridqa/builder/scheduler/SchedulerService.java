@@ -149,66 +149,59 @@ public class SchedulerService {
      * @return Assignment if successful, empty if no eligible nodes
      */
     public synchronized Optional<Assignment> assignNext() {
-        // Weighted selection: decide whether to try elephant first
-        boolean tryElephantFirst = (Math.random() < elephantWeight) && !readyQueue.isElephantsEmpty();
+        // Weighted selection: decide priority order
+        // 80% chance to prefer Elephant (LPT), 20% chance to prefer Mouse (SJF)
+        // If one queue is empty, we naturally prioritize the other by skipping the empty one.
+        boolean preferElephant = (Math.random() < elephantWeight);
 
-        if (tryElephantFirst) {
-            // Try longest elephant (weighted selection favored this)
-            TestInstance elephant = readyQueue.pollElephant();
-            if (elephant != null) {
-                Optional<Assignment> assignment = assignTest(elephant);
-                if (assignment.isPresent()) {
-                    logger.info(String.format("Assigned elephant (%.0f%% weighted LJF): %s",
-                                             elephantWeight * 100, assignment.get()));
-                    return assignment;
-                }
-                // No eligible nodes for elephant, re-offer and try mice
-                readyQueue.offer(elephant);
-            }
+        if (preferElephant) {
+            // Strategy: Try Elephant -> Fallback to Mouse
+            Optional<Assignment> result = attemptElephant("weighted LJF");
+            if (result.isPresent()) return result;
+
+            return attemptMouse("fallback after elephant skipped/filtered");
+        } else {
+            // Strategy: Try Mouse -> Fallback to Elephant
+            Optional<Assignment> result = attemptMouse("weighted SJF");
+            if (result.isPresent()) return result;
+
+            return attemptElephant("fallback after mouse skipped/filtered");
+        }
+    }
+
+    private Optional<Assignment> attemptElephant(String reason) {
+        if (readyQueue.isElephantsEmpty()) {
+            return Optional.empty();
+        }
+        TestInstance elephant = readyQueue.pollElephant();
+        if (elephant == null) return Optional.empty();
+
+        Optional<Assignment> assignment = assignTest(elephant);
+        if (assignment.isPresent()) {
+            logger.info(String.format("Assigned elephant (%s): %s", reason, assignment.get()));
+            return assignment;
+        }
+        
+        // Failed to assign (resources), put back
+        readyQueue.offer(elephant);
+        return Optional.empty();
+    }
+
+    private Optional<Assignment> attemptMouse(String reason) {
+        if (readyQueue.isMiceEmpty()) {
+            return Optional.empty();
+        }
+        TestInstance mouse = readyQueue.pollMouse();
+        if (mouse == null) return Optional.empty();
+
+        Optional<Assignment> assignment = assignTest(mouse);
+        if (assignment.isPresent()) {
+            logger.info(String.format("Assigned mouse (%s): %s", reason, assignment.get()));
+            return assignment;
         }
 
-        // Try mice (either weighted selection chose mice, or elephant failed eligibility)
-        if (!readyQueue.isMiceEmpty()) {
-            TestInstance mouse = readyQueue.pollMouse();
-            if (mouse != null) {
-                Optional<Assignment> assignment = assignTest(mouse);
-                if (assignment.isPresent()) {
-                    logger.info(String.format("Assigned mouse (%.0f%% weighted SJF): %s",
-                                             (1.0 - elephantWeight) * 100, assignment.get()));
-                    return assignment;
-                }
-                // No eligible nodes, re-offer mouse
-                readyQueue.offer(mouse);
-            }
-        }
-
-        // If we tried elephants first and failed, now try mice as fallback
-        // (we skipped mice earlier because elephant was selected)
-        if (tryElephantFirst && !readyQueue.isMiceEmpty()) {
-            TestInstance mouse = readyQueue.pollMouse();
-            if (mouse != null) {
-                Optional<Assignment> assignment = assignTest(mouse);
-                if (assignment.isPresent()) {
-                    logger.info("Assigned mouse (fallback after elephant filtered): " + assignment.get());
-                    return assignment;
-                }
-                readyQueue.offer(mouse);
-            }
-        }
-
-        // If we tried mice first and failed, now try elephants as fallback
-        if (!tryElephantFirst && !readyQueue.isElephantsEmpty()) {
-            TestInstance elephant = readyQueue.pollElephant();
-            if (elephant != null) {
-                Optional<Assignment> assignment = assignTest(elephant);
-                if (assignment.isPresent()) {
-                    logger.info("Assigned elephant (fallback after mouse filtered): " + assignment.get());
-                    return assignment;
-                }
-                readyQueue.offer(elephant);
-            }
-        }
-
+        // Failed to assign (resources), put back
+        readyQueue.offer(mouse);
         return Optional.empty();
     }
 

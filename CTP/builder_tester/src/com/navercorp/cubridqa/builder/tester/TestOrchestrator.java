@@ -1,6 +1,5 @@
 package com.navercorp.cubridqa.builder.tester;
 
-import com.navercorp.cubridqa.builder.exec.ExecutorStrategy;
 import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
@@ -25,6 +24,7 @@ import java.util.List;
 import java.time.Instant;
 import java.util.logging.Logger;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.PriorityBlockingQueue;
 
 public class TestOrchestrator {
     private static final double BYTES_PER_MB = 1024.0 * 1024.0;
@@ -40,15 +40,21 @@ public class TestOrchestrator {
     private final TestStatsStore testStatsStore;
     private final AtomicInteger runningTestCount = new AtomicInteger(0);
     private final AtomicInteger heavyInFlight = new AtomicInteger(0);
+    private final AtomicInteger queuedTestCount = new AtomicInteger(0);
     private final int maxConcurrencyHeavy;
     private final int maxConcurrencyPostHeavy;
     private final RunningTestTracker runningTestTracker = new RunningTestTracker();
+    private final NodeCapacity nodeCapacity;
+    private final ActualSampler actualSampler; // Used for Circuit Breaker logic
+    private final Object reservationLock = new Object();
+    private final PriorityBlockingQueue<QueueToken> waitQueue = new PriorityBlockingQueue<>();
 
     public TestOrchestrator(Config config, DirectExecutor directExecutor,
                           StandardDockerExecutor standardDockerExecutor,
                           OptimizedDockerExecutor optimizedDockerExecutor,
                           boolean useDocker, Object dockerManager, Object dockerUtils,
-                          TestObservationWriter observationWriter, TestStatsStore testStatsStore) {
+                          TestObservationWriter observationWriter, TestStatsStore testStatsStore,
+                          NodeCapacity nodeCapacity, ActualSampler actualSampler) {
         this.config = config;
         this.directExecutor = directExecutor;
         this.standardDockerExecutor = standardDockerExecutor;
@@ -60,6 +66,8 @@ public class TestOrchestrator {
         this.testStatsStore = testStatsStore;
         this.maxConcurrencyHeavy = Math.max(1, config.getMaxConcurrentTestsWhileHeavy());
         this.maxConcurrencyPostHeavy = Math.max(this.maxConcurrencyHeavy, config.getMaxConcurrentTestsAfterHeavy());
+        this.nodeCapacity = nodeCapacity;
+        this.actualSampler = actualSampler;
     }
 
     /**
@@ -76,17 +84,22 @@ public class TestOrchestrator {
         // This will use conservative defaults if no prediction is provided
         PredictedDemand demand = PredictedDemand.fromRequest(request, null);
 
-        // TODO: Wire up proper state transitions for RunningTestTracker.
-        // Currently using admit() for both soft and hard admission. Should be:
-        //   1. admit(testId, testKey, demand) - soft admission (here, before execution) ✓
-        //   2. startRunning(testId) - hard reservation (right before Docker/executor starts)
-        //   3. updatePhase(testId, phase) - if test has phases (setup → run transition)
-        //   4. unregister(testId) - release reservation (in finally block) ✓
-        // This ensures reserved utilization matches actual running tests and supports
-        // phase-based resource modeling (different CPU/mem for setup vs run).
+        // Wait for resources and admit to tracker (prevents TOCTOU overload)
+        boolean heavyTest = isHeavyTest(demand);
+        
+        // Use timeout from request if available, otherwise default to 24 hours
+        long reqTimeoutSec = request.optLong("timeout", 0);
+        long waitTimeoutMs = reqTimeoutSec > 0 ? reqTimeoutSec * 1000L : 24 * 60 * 60 * 1000L;
+        
+        boolean reserved = waitForReservation(testId, testKey, demand, heavyTest, testLogger, waitTimeoutMs);
+        
+        if (!reserved) {
+            JSONObject response = new JSONObject();
+            response.put("status", "rejected");
+            response.put("error", "No capacity - node oversubscribed (timeout waiting for resources)");
+            return response;
+        }
 
-        // Admit test to tracker (reserves capacity)
-        runningTestTracker.admit(testId, testKey, demand);
         try {
             // Unified execution semantics (v2): minRuns, maxRuns, optional timeBudgetMs
             String runMode = request.optString("runMode", "until-pass").toLowerCase();
@@ -274,8 +287,16 @@ public class TestOrchestrator {
 
             return finalResponse;
         } finally {
+            // Release concurrency slot
+            releaseSlot(heavyTest);
+            
             // Unregister test from tracker (releases reserved capacity)
             runningTestTracker.unregister(testId);
+            
+            // Notify waiting threads that capacity/slots are available
+            synchronized (reservationLock) {
+                reservationLock.notifyAll();
+            }
         }
     }
     
@@ -524,6 +545,204 @@ public class TestOrchestrator {
         }
     }
 
+    private static class QueueToken implements Comparable<QueueToken> {
+        final String testId;
+        final long durationMs;
+        final long timestamp;
+
+        QueueToken(String testId, long durationMs) {
+            this.testId = testId;
+            this.durationMs = durationMs;
+            this.timestamp = System.nanoTime();
+        }
+
+        @Override
+        public int compareTo(QueueToken other) {
+            // Descending duration (Longest Processing Time First - LPT)
+            // This prioritizes elephants over mice
+            int cmp = Long.compare(other.durationMs, this.durationMs);
+            if (cmp != 0) return cmp;
+            // Ascending timestamp (FIFO for ties)
+            return Long.compare(this.timestamp, other.timestamp);
+        }
+    }
+
+    /**
+     * Blocks until resources and concurrency slots are available, then admits the test.
+     * Uses a priority queue to ensure long tests (elephants) are prioritized over
+     * short tests (mice) to reduce overall makespan and prevent starvation.
+     * 
+     * Returns false if timeout reached.
+     */
+    private boolean waitForReservation(String testId, String testKey, PredictedDemand pd, boolean heavyTest, Logger logger, long timeoutMs) {
+        long start = System.currentTimeMillis();
+
+        QueueToken token = new QueueToken(testId, pd.getDurationMs());
+        waitQueue.add(token);
+        queuedTestCount.incrementAndGet();
+        
+        try {
+            synchronized (reservationLock) {
+                while (true) {
+                    // Priority check: Am I the highest priority waiter?
+                    // We peek at the head of the queue.
+                    QueueToken head = waitQueue.peek();
+                    
+                    // If I am the head (highest priority), I get exclusive right to try acquiring resources.
+                    // This prevents small tests from jumping ahead of a large waiting test.
+                    if (head != null && head.testId.equals(testId)) {
+                        if (hasLocalHeadroom(pd) && tryAcquireSlot(heavyTest)) {
+                            // Success! Claim the resources.
+                            runningTestTracker.admit(testId, testKey, pd);
+                            runningTestTracker.startRunning(testId);
+                            
+                            // Remove myself from the queue and notify others 
+                            // (so the next head can check if they also fit)
+                            waitQueue.remove(token);
+                            reservationLock.notifyAll();
+                            return true;
+                        }
+                        // If I am head but don't fit, I wait.
+                        // Everyone else waits too, because I am blocking the head of the queue.
+                        // This is intentional to prioritize elephants.
+                    }
+
+                    long elapsed = System.currentTimeMillis() - start;
+                    if (elapsed >= timeoutMs) {
+                        logger.warning("Timeout waiting for resources (" + timeoutMs + "ms) for test " + testKey);
+                        return false;
+                    }
+
+                    try {
+                        // Wait for resources to free up or queue position to change
+                        reservationLock.wait(1000); 
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+            }
+        } finally {
+            // Ensure token is removed if exception occurs or timeout returns false
+            if (waitQueue.contains(token)) {
+                waitQueue.remove(token);
+            }
+            queuedTestCount.decrementAndGet();
+        }
+    }
+
+    /**
+     * Checks if the tester has enough local capacity to admit the predicted demand.
+     * Uses "Elastic Overcommit" logic with a "Circuit Breaker" based on real-time load.
+     */
+    private boolean hasLocalHeadroom(PredictedDemand pd) {
+        // 1. Circuit Breaker: Check Real-Time System Load
+        // If the system is actually sweating (regardless of what our bookkeeping says), stop admitting.
+        if (actualSampler != null) {
+            UtilizationSnapshot actual = actualSampler.getLatestSnapshot();
+            // Calculate actual utilization percentages
+            // Note: actual.getTotalCpuMillicores() is already millicores. 
+            // nodeCapacity.getCpuMillicores() is now millicores.
+            // So (actual / capacity) * 100.0 gives %.
+            double actualCpuPct = (actual.getTotalCpuMillicores()) / nodeCapacity.getCpuMillicores() * 100.0;
+            double actualMemPct = (actual.getTotalMemBytes() / (1024.0 * 1024.0)) / nodeCapacity.getMemMb() * 100.0;
+
+            double maxCpu = config.getSchedulingCircuitBreakerCpu();
+            double maxMem = config.getSchedulingCircuitBreakerMem();
+
+            if (actualCpuPct > maxCpu || actualMemPct > maxMem) {
+                // Circuit Breaker Tripped!
+                return false;
+            }
+        }
+
+        // 2. Elastic Overcommit: Admission Control with Overprovisioning
+        
+        // Dimension-specific base margins
+        final double baseCpu = 0.10, baseMem = 0.20, baseIoRead = 0.35, baseIoWrite = 0.35;
+        final double baseNet = 0.25, baseIops = 0.25;
+        final double k = 0.50; // Confidence factor
+        final double ioSafetyHeadroom = config.getIoSafetyHeadroomRatio(); // Default 0.15
+
+        // Scalar confidence
+        double conf = Math.max(0.0, Math.min(1.0, pd.getConfidence()));
+
+        // Compute dimension-specific margins with confidence scaling
+        double mCpu = baseCpu + k * (1.0 - conf);
+        double mMem = baseMem + k * (1.0 - conf);
+        double mIoRead = baseIoRead + k * (1.0 - conf);
+        double mIoWrite = baseIoWrite + k * (1.0 - conf);
+        double mNet = baseNet + k * (1.0 - conf);
+        double mIops = baseIops + k * (1.0 - conf);
+
+        // Get current reserved utilization from tracker
+        UtilizationSnapshot reserved = runningTestTracker.getCurrentUtilization();
+
+        // Convert predicted demand to legacy units for comparison
+        // Refactored: use millicores directly
+        double reqCpuMillicores = pd.getCpuMillicores(); 
+        double reqMemMb = pd.getMemBytes() / (1024.0 * 1024.0); // bytes → MB
+        double reqIoReadMbPerSec = pd.getIoReadBytesPerSec() / (1024.0 * 1024.0);
+        double reqIoWriteMbPerSec = pd.getIoWriteBytesPerSec() / (1024.0 * 1024.0);
+        double reqNetMbPerSec = pd.getNetBytesPerSec() / (1024.0 * 1024.0);
+        long reqIops = pd.getIops();
+
+        // Apply margins to required resources
+        double requiredCpu = reqCpuMillicores * (1.0 + mCpu);
+        double requiredMem = reqMemMb + Math.max(reqMemMb * mMem, 100.0); // +100MB floor
+        double requiredIoRead = reqIoReadMbPerSec * (1.0 + mIoRead);
+        double requiredIoWrite = reqIoWriteMbPerSec * (1.0 + mIoWrite);
+        double requiredIops = reqIops * (1.0 + mIops);
+        double requiredNet = reqNetMbPerSec * (1.0 + mNet);
+
+        // Compute free capacity with OVERCOMMIT factors
+        double overcommitCpu = config.getSchedulingOvercommitCpu();
+        double overcommitMem = config.getSchedulingOvercommitMem();
+
+        // Effective Capacity = Physical Capacity * Overcommit Factor
+        // CPU is now in millicores
+        double effectiveCpuCap = nodeCapacity.getCpuMillicores() * overcommitCpu;
+        double effectiveMemCap = nodeCapacity.getMemMb() * overcommitMem;
+
+        double freeCpuPct = effectiveCpuCap - (reserved.getTotalCpuMillicores());
+        double freeMem = effectiveMemCap - (reserved.getTotalMemBytes() / (1024.0 * 1024.0));
+        
+        // I/O and Network are hard physical limits, so we generally don't overcommit them as aggressively
+        // or at all, to prevent thrashing/saturation. Kept at 1.0 (no overcommit) by default logic here.
+        double freeIoRead = nodeCapacity.getIoReadMbPerSec() - reserved.getTotalIoReadBytesPerSec() / (1024.0 * 1024.0);
+        double freeIoWrite = nodeCapacity.getIoWriteMbPerSec() - reserved.getTotalIoWriteBytesPerSec() / (1024.0 * 1024.0);
+        double freeIops = nodeCapacity.getIops() - reserved.getTotalIops();
+        double freeNet = nodeCapacity.getNetMbPerSec() - reserved.getTotalNetBytesPerSec() / (1024.0 * 1024.0);
+
+        // Get safety headroom
+        double keepFreeRead = nodeCapacity.getIoReadMbPerSec() * ioSafetyHeadroom;
+        double keepFreeWrite = nodeCapacity.getIoWriteMbPerSec() * ioSafetyHeadroom;
+
+        // Check all dimensions
+        return freeCpuPct >= requiredCpu
+                && freeMem >= requiredMem
+                && (requiredIoRead <= 0 || (freeIoRead - keepFreeRead >= requiredIoRead))
+                && (requiredIoWrite <= 0 || (freeIoWrite - keepFreeWrite >= requiredIoWrite))
+                && freeIops >= requiredIops
+                && freeNet >= requiredNet;
+    }
+
+    private boolean isHeavyTest(PredictedDemand pd) {
+        if (pd == null) {
+            return false;
+        }
+        if (!pd.hasExplicitPrediction()) {
+            return false;
+        }
+        long durationMs = pd.getDurationMs();
+        if (durationMs < config.getSchedulingMiceThresholdMs()) {
+            return false;
+        }
+        double totalIoMb = (Math.max(0, pd.getIoReadBytesPerSec()) + Math.max(0, pd.getIoWriteBytesPerSec()))
+                / (1024.0 * 1024.0);
+        return totalIoMb >= config.getSchedulingIoHeavyThreshold();
+    }
+
     private String firstNonEmpty(String... values) {
         if (values == null) {
             return null;
@@ -609,6 +828,10 @@ public class TestOrchestrator {
         return heavyInFlight.get();
     }
 
+    public int getQueuedTestCount() {
+        return queuedTestCount.get();
+    }
+
     public int getActiveConcurrencyLimit() {
         return heavyInFlight.get() > 0 ? maxConcurrencyHeavy : maxConcurrencyPostHeavy;
     }
@@ -644,7 +867,7 @@ public class TestOrchestrator {
                 .iopsUsed(reserved.getTotalIops())
                 .netUsedMbPerSec(reserved.getTotalNetBytesPerSec() / BYTES_PER_MB)
                 .runningTests(runningTestCount.get())
-                .queuedTests(0)
+                .queuedTests(queuedTestCount.get())
                 .build();
     }
 

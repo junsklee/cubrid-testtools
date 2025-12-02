@@ -40,6 +40,7 @@ public class ReadyQueue {
 
         // Mice comparator: sort by effective duration (predicted - age boost)
         this.miceQueue = new PriorityQueue<>(Comparator.comparingLong(this::effectiveDuration));
+//        this.miceQueue = new PriorityQueue<>(Comparator.comparingLong(this::effectiveDuration).reversed());
 
         // Elephants comparator: sort by predicted duration (descending - longest first)
         this.elephantsQueue = new PriorityQueue<>(

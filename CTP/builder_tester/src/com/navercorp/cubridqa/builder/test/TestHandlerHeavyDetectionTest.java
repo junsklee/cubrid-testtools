@@ -38,9 +38,9 @@ public class TestHandlerHeavyDetectionTest {
         Config config = new Config(cfgFile.toString());
         NodeCapacity capacity = NodeCapacity.measure(config.getWorkDir(), config);
         TestOrchestrator orchestrator = new TestOrchestrator(
-                config, null, null, null, false, null, null, null, null);
+                config, null, null, null, false, null, null, null, null, capacity, null);
         Logger logger = Logger.getLogger(TestHandlerHeavyDetectionTest.class.getName());
-        TestHandler handler = new TestHandler(config, orchestrator, capacity, logger);
+        TestHandler handler = new TestHandler(config, orchestrator, logger);
 
         Method isHeavy = TestHandler.class.getDeclaredMethod("isHeavyTest", PredictedDemand.class);
         isHeavy.setAccessible(true);

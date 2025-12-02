@@ -378,8 +378,8 @@ Node C:
 │                    TESTER NODE                                  │
 │                                                                 │
 │  1. Receive test request                                       │
-│     ├─ Check capacity (fast-fail if no resources)             │
-│     └─ Return 409 Conflict if oversubscribed                  │
+│     ├─ Check capacity (wait/queue if no resources)            │
+│     └─ Block until resources free up (up to 60s)              │
 │                                                                 │
 │  2. Execute test                                               │
 │     ├─ Check Docker image cache                                │
@@ -435,12 +435,12 @@ Currently running: 5 tests
 → Rejects if already at limit
 ```
 
-**3. Fast-Fail Admission:**
+**3. Tester-Side Queueing:**
 ```
 Tester receives test request:
   - Quick check: "Do I have resources?"
-  - If no: Return 409 Conflict immediately
-  - Builder retries on different node
+  - If no: Enqueue and wait (blocking) until resources free up
+  - Timeout: Reject after 60s if still unavailable
 ```
 
 **4. Confidence-Aware Margins:**
@@ -2555,23 +2555,25 @@ This enables precise reservation timing (reserve only when container actually st
 - `CTP/builder_tester/src/com/navercorp/cubridqa/builder/exec/OptimizedDockerExecutor.java`
 - `CTP/builder_tester/src/com/navercorp/cubridqa/builder/BuilderConfig.java`
 
-#### 6. TOCTOU Race Mitigation (409 Fast-Fail)
+#### 6. TOCTOU Race Mitigation (Tester-Side Queueing)
 
 **Problem:** Race condition between Builder polling `/health` (sees capacity) and sending `/test` (admission). Another test could be admitted in between, causing oversubscription during concurrent assignment storms.
 
-**Solution:** Fast-fail admission check in `TestHandler` before expensive Docker setup:
-- Check capacity using same margin policy as `NodeDirectory.hasResourceHeadroom()`
-- Return `409 Conflict` immediately if insufficient capacity
-- Builder retries on other nodes
+**Solution:** **Blocking Admission Queue** in `TestOrchestrator`:
+- Incoming tests are enqueued if resources are insufficient
+- Request blocks until resources (headroom + concurrency slot) become available
+- Uses `reservationLock.wait()` loop with 60s timeout
+- Prevents oversubscription while maximizing utilization
 
 **Implementation:**
-- `TestHandler.hasLocalHeadroom()` validates capacity before Docker operations
-- Uses dimension-specific margins matching scheduler policy
-- Returns `409` with error message: "No capacity - node oversubscribed"
+- `TestOrchestrator.waitForReservation()` manages the queue
+- `HealthHandler` reports `queued` count so Builder can avoid saturated nodes
+- Eliminated 409 Conflict retries in favor of backpressure
 
 **Files Changed:**
+- `CTP/builder_tester/src/com/navercorp/cubridqa/builder/tester/TestOrchestrator.java`
+- `CTP/builder_tester/src/com/navercorp/cubridqa/builder/tester/HealthHandler.java`
 - `CTP/builder_tester/src/com/navercorp/cubridqa/builder/tester/TestHandler.java`
-- `CTP/builder_tester/src/com/navercorp/cubridqa/builder/Tester.java`
 
 #### 7. Phase-Based Reservations (Setup vs Run)
 

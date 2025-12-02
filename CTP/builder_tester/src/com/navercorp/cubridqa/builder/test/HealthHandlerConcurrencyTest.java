@@ -52,7 +52,9 @@ public class HealthHandlerConcurrencyTest {
                 null,
                 null,
                 null,
-                null
+                null,
+                capacity,
+                sampler
         );
 
         HealthHandler handler = new HealthHandler(config, new HttpResponseWriter(), capacity, orchestrator, sampler);

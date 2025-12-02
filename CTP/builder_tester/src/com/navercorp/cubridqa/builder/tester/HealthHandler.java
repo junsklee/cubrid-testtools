@@ -84,7 +84,7 @@ public class HealthHandler implements HttpHandler {
             concurrency.put("heavyRunning", Math.max(0, testOrchestrator.getHeavyInFlightCount()));
         }
         concurrency.put("running", runningTests);
-        concurrency.put("queued", 0); // Not implemented yet
+        concurrency.put("queued", testOrchestrator != null ? testOrchestrator.getQueuedTestCount() : 0);
         response.put("concurrency", concurrency);
 
         // Back-compat: expose current limit at top level for legacy builders
@@ -133,8 +133,9 @@ public class HealthHandler implements HttpHandler {
         response.put("utilization_reserved", utilizationReserved);
 
         // Utilization Actual (sampled from Docker stats)
+        // Uses cached snapshot to prevent blocking the health check on slow docker calls
         UtilizationSnapshot actual = actualSampler != null
-            ? actualSampler.sampleCurrentUtilization()
+            ? actualSampler.getLatestSnapshot()
             : UtilizationSnapshot.empty();
 
         JSONObject utilizationActual = new JSONObject();
@@ -176,8 +177,9 @@ public class HealthHandler implements HttpHandler {
         response.put("safety_headroom", safety);
 
         // Docker images
+        // Uses a simple cache mechanism to prevent slow docker image listing on every health check
         JSONObject images = new JSONObject();
-        List<String> imageList = listDockerImages();
+        List<String> imageList = getCachedDockerImages();
         images.put("present", new JSONArray(imageList));
         images.put("cache_size", imageList.size());
         response.put("images", images);
@@ -204,6 +206,23 @@ public class HealthHandler implements HttpHandler {
         } catch (Exception e) {
             return "unknown:" + config.getTesterPort();
         }
+    }
+
+    private volatile List<String> cachedImages = new ArrayList<>();
+    private volatile long lastImageCacheTime = 0;
+    private static final long IMAGE_CACHE_TTL_MS = 30000; // Cache image list for 30 seconds
+
+    private List<String> getCachedDockerImages() {
+        long now = System.currentTimeMillis();
+        if (now - lastImageCacheTime < IMAGE_CACHE_TTL_MS) {
+            return cachedImages;
+        }
+        
+        // Update cache
+        List<String> images = listDockerImages();
+        cachedImages = images;
+        lastImageCacheTime = now;
+        return images;
     }
 
     private List<String> listDockerImages() {
