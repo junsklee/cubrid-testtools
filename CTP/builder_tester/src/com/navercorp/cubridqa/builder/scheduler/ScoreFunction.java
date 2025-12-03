@@ -9,6 +9,7 @@ package com.navercorp.cubridqa.builder.scheduler;
  *   <li>Test duration (relative to reference)</li>
  *   <li>Cache locality (image and package presence)</li>
  *   <li>Queue aging (fairness boost for waiting tests)</li>
+ *   <li>Heavy test penalty (avoids placing heavy tests on constrained nodes)</li>
  * </ul>
  * </p>
  *
@@ -22,6 +23,7 @@ public class ScoreFunction {
     private final double w3; // Image cache penalty weight
     private final double w4; // Package cache penalty weight
     private final double w5; // Age boost weight (negative)
+    private final double w6; // Heavy test penalty weight
     
     // Per-dimension weights for pressure computation (IO-first)
     private final double wIO;  // IO weight multiplier (default 2.50)
@@ -38,7 +40,7 @@ public class ScoreFunction {
      * Creates a ScoreFunction with default weights.
      */
     public ScoreFunction() {
-        this(0.45, 0.25, 0.15, 0.05, 0.10, NodeLoadProvider.NOOP);
+        this(0.45, 0.25, 0.15, 0.05, 0.10, 0.10, NodeLoadProvider.NOOP);
     }
 
     /**
@@ -51,7 +53,7 @@ public class ScoreFunction {
      * @param w5 Age boost weight (applied as negative)
      */
     public ScoreFunction(double w1, double w2, double w3, double w4, double w5) {
-        this(w1, w2, w3, w4, w5, NodeLoadProvider.NOOP);
+        this(w1, w2, w3, w4, w5, 0.10, NodeLoadProvider.NOOP);
     }
 
     /**
@@ -59,7 +61,23 @@ public class ScoreFunction {
      * in-flight assignments.
      */
     public ScoreFunction(double w1, double w2, double w3, double w4, double w5, NodeLoadProvider loadProvider) {
-        this(w1, w2, w3, w4, w5, 2.50, 1.00, 1.10, 0.80, loadProvider);
+        this(w1, w2, w3, w4, w5, 0.10, loadProvider);
+    }
+
+    /**
+     * Creates a ScoreFunction with custom weights including heavy penalty weight.
+     *
+     * @param w1 Resource pressure weight
+     * @param w2 Duration weight
+     * @param w3 Image cache penalty weight
+     * @param w4 Package cache penalty weight
+     * @param w5 Age boost weight (applied as negative)
+     * @param w6 Heavy test penalty weight
+     * @param loadProvider Provider for in-flight load penalties
+     */
+    public ScoreFunction(double w1, double w2, double w3, double w4, double w5, double w6,
+                        NodeLoadProvider loadProvider) {
+        this(w1, w2, w3, w4, w5, w6, 2.50, 1.00, 1.10, 0.80, loadProvider);
     }
 
     /**
@@ -68,11 +86,33 @@ public class ScoreFunction {
     public ScoreFunction(double w1, double w2, double w3, double w4, double w5,
                         double wIO, double wCPU, double wMEM, double wNET,
                         NodeLoadProvider loadProvider) {
+        this(w1, w2, w3, w4, w5, 0.10, wIO, wCPU, wMEM, wNET, loadProvider);
+    }
+
+    /**
+     * Creates a ScoreFunction with all configurable weights.
+     *
+     * @param w1 Resource pressure weight
+     * @param w2 Duration weight
+     * @param w3 Image cache penalty weight
+     * @param w4 Package cache penalty weight
+     * @param w5 Age boost weight (applied as negative)
+     * @param w6 Heavy test penalty weight
+     * @param wIO I/O dimension weight
+     * @param wCPU CPU dimension weight
+     * @param wMEM Memory dimension weight
+     * @param wNET Network dimension weight
+     * @param loadProvider Provider for in-flight load penalties
+     */
+    public ScoreFunction(double w1, double w2, double w3, double w4, double w5, double w6,
+                        double wIO, double wCPU, double wMEM, double wNET,
+                        NodeLoadProvider loadProvider) {
         this.w1 = w1;
         this.w2 = w2;
         this.w3 = w3;
         this.w4 = w4;
         this.w5 = w5;
+        this.w6 = w6;
         this.wIO = wIO;
         this.wCPU = wCPU;
         this.wMEM = wMEM;
@@ -101,7 +141,11 @@ public class ScoreFunction {
         // 4. Age boost (fairness for long-waiting tests)
         double ageBoost = computeAgeBoost(test);
 
-        double baseScore = w1 * pressure + w2 * durScore + w3 * imagePenalty + w4 * pkgPenalty - w5 * ageBoost;
+        // 5. Heavy test penalty (avoid placing heavy tests on constrained nodes)
+        double heavyPenalty = computeHeavyPenalty(test, node);
+
+        double baseScore = w1 * pressure + w2 * durScore + w3 * imagePenalty + w4 * pkgPenalty 
+                         - w5 * ageBoost + w6 * heavyPenalty;
         double loadPenalty = nodeLoadProvider.getLoadPenalty(node.getNodeId());
 
         return baseScore + loadPenalty;
@@ -184,6 +228,55 @@ public class ScoreFunction {
     }
 
     /**
+     * Computes a penalty for placing heavy tests on constrained nodes.
+     *
+     * <p>This is a SOFT preference, not a blocker. Heavy tests will still run even
+     * on constrained nodes if that's the only option (e.g., single-tester scenario).
+     * The penalty is a small nudge to prefer less-loaded nodes when multiple are available.</p>
+     *
+     * <p>For HEAVY and EXTREME tests, this penalty slightly prefers nodes that:
+     * <ul>
+     *   <li>Are not under disk pressure</li>
+     *   <li>Have more free I/O headroom</li>
+     * </ul>
+     * </p>
+     *
+     * @param test The test instance
+     * @param node The candidate node
+     * @return Penalty value (0 for NORMAL tests, small values for heavy tests to nudge spreading)
+     */
+    private double computeHeavyPenalty(TestInstance test, NodeSnapshot node) {
+        // No penalty for normal tests
+        if (!test.isHeavy()) {
+            return 0.0;
+        }
+
+        double penalty = 0.0;
+
+        // Small penalty if node is under disk pressure - prefer other nodes but don't block
+        if (node.isDiskPressure()) {
+            penalty += 2.0;  // Small nudge, not a blocker
+        }
+
+        // Penalty based on current I/O utilization - prefer less busy nodes
+        double freeIoReadFrac = safeRatio(node.getFreeIoReadMbPerSec(), node.getIoReadMbPerSec());
+        double freeIoWriteFrac = safeRatio(node.getFreeIoWriteMbPerSec(), node.getIoWriteMbPerSec());
+        double freeIoFrac = Math.min(freeIoReadFrac, freeIoWriteFrac);
+
+        // Linear penalty: 0 when node is idle (freeIoFrac=1), up to 1.0 when fully loaded (freeIoFrac=0)
+        double utilization = 1.0 - freeIoFrac;
+        penalty += utilization;  // Range: 0.0 to 1.0
+
+        // Additional small penalty for EXTREME tests on nodes with other running tests
+        // This gently encourages spreading EXTREME tests across nodes
+        if (test.isExtreme() && utilization > 0.1) {
+            penalty += 0.5;  // Small additional nudge
+        }
+
+        return penalty;
+    }
+
+    /**
      * Returns a human-readable explanation of the score breakdown.
      */
     public String explainScore(TestInstance test, NodeSnapshot node, double totalScore) {
@@ -192,15 +285,21 @@ public class ScoreFunction {
         double imagePenalty = computeImagePenalty(test, node);
         double pkgPenalty = computePackagePenalty(test, node);
         double ageBoost = computeAgeBoost(test);
+        double heavyPenalty = computeHeavyPenalty(test, node);
+
+        String heavyInfo = test.isHeavy() 
+            ? String.format(", heavy=%.2f(%.2f)", heavyPenalty, w6 * heavyPenalty)
+            : "";
 
         return String.format(
-            "Score=%.3f [pressure=%.3f(%.2f), dur=%.3f(%.2f), img=%.1f(%.2f), pkg=%.1f(%.2f), age=%.3f(-%.2f)]",
+            "Score=%.3f [pressure=%.3f(%.2f), dur=%.3f(%.2f), img=%.1f(%.2f), pkg=%.1f(%.2f), age=%.3f(-%.2f)%s]",
             totalScore,
             pressure, w1 * pressure,
             durScore, w2 * durScore,
             imagePenalty, w3 * imagePenalty,
             pkgPenalty, w4 * pkgPenalty,
-            ageBoost, w5 * ageBoost
+            ageBoost, w5 * ageBoost,
+            heavyInfo
         );
     }
 

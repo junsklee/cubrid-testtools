@@ -638,20 +638,27 @@ public class TestOrchestrator {
     private boolean hasLocalHeadroom(PredictedDemand pd) {
         // 1. Circuit Breaker: Check Real-Time System Load
         // If the system is actually sweating (regardless of what our bookkeeping says), stop admitting.
+        // IMPORTANT: Use EFFECTIVE capacity (with overcommit) for circuit breaker thresholds
+        // This ensures circuit breaker trips when actual usage exceeds what we've committed to allow
+        double overcommitCpuCB = config.getSchedulingOvercommitCpu();
+        double overcommitMemCB = config.getSchedulingOvercommitMem();
+        double effectiveCpuCapCB = nodeCapacity.getCpuMillicores() * overcommitCpuCB;
+        double effectiveMemCapCB = nodeCapacity.getMemMb() * overcommitMemCB;
+        
         if (actualSampler != null) {
             UtilizationSnapshot actual = actualSampler.getLatestSnapshot();
-            // Calculate actual utilization percentages
+            // Calculate actual utilization percentages against EFFECTIVE capacity
             // Note: actual.getTotalCpuMillicores() is already millicores. 
-            // nodeCapacity.getCpuMillicores() is now millicores.
-            // So (actual / capacity) * 100.0 gives %.
-            double actualCpuPct = (actual.getTotalCpuMillicores()) / nodeCapacity.getCpuMillicores() * 100.0;
-            double actualMemPct = (actual.getTotalMemBytes() / (1024.0 * 1024.0)) / nodeCapacity.getMemMb() * 100.0;
+            double actualCpuPct = (actual.getTotalCpuMillicores()) / effectiveCpuCapCB * 100.0;
+            double actualMemPct = (actual.getTotalMemBytes() / (1024.0 * 1024.0)) / effectiveMemCapCB * 100.0;
 
             double maxCpu = config.getSchedulingCircuitBreakerCpu();
             double maxMem = config.getSchedulingCircuitBreakerMem();
 
             if (actualCpuPct > maxCpu || actualMemPct > maxMem) {
                 // Circuit Breaker Tripped!
+                System.err.printf("[CircuitBreaker] Tripped: CPU %.1f%% (max %.1f%%), MEM %.1f%% (max %.1f%%) of effective capacity%n",
+                    actualCpuPct, maxCpu, actualMemPct, maxMem);
                 return false;
             }
         }

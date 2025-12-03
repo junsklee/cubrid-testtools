@@ -90,11 +90,18 @@ public class HealthHandler implements HttpHandler {
         // Back-compat: expose current limit at top level for legacy builders
         response.put("maxConcurrentTests", activeLimit);
 
-        // Capacity (canonical units)
+        // Capacity (canonical units) - EFFECTIVE capacity with overcommit factors applied
+        // This ensures builder sees the same capacity that tester uses for admission control
+        double overcommitCpu = config.getSchedulingOvercommitCpu();
+        double overcommitMem = config.getSchedulingOvercommitMem();
+        
         JSONObject capacity = new JSONObject();
         // NodeCapacity.getCpuPct() is cores×100, so divide by 100 to get cores, then multiply by 1000 for millicores
-        capacity.put("cpu_millicores", (int) (nodeCapacity.getCpuPct() / 100.0 * 1000.0));
-        capacity.put("mem_bytes", (long) (nodeCapacity.getMemMb() * 1024 * 1024)); // Convert MB to bytes
+        // Apply CPU overcommit factor
+        capacity.put("cpu_millicores", (int) (nodeCapacity.getCpuPct() / 100.0 * 1000.0 * overcommitCpu));
+        // Apply MEM overcommit factor
+        capacity.put("mem_bytes", (long) (nodeCapacity.getMemMb() * 1024 * 1024 * overcommitMem));
+        // I/O and Network are NOT overcommitted (hard physical limits)
         capacity.put("io_read_bytes_per_sec", nodeCapacity.getIoReadCapacityBytesPerSec());
         capacity.put("io_write_bytes_per_sec", nodeCapacity.getIoWriteCapacityBytesPerSec());
         capacity.put("iops", (long) nodeCapacity.getIops());

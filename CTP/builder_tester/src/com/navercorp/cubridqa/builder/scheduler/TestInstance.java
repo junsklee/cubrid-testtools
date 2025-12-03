@@ -7,7 +7,7 @@ import java.util.Objects;
  * Represents a test instance waiting to be scheduled.
  *
  * <p>Includes test identification (key, commit, baseline), submission time
- * for aging calculations, and predicted resource demands.</p>
+ * for aging calculations, predicted resource demands, and heavy test classification.</p>
  */
 public class TestInstance {
 
@@ -26,6 +26,10 @@ public class TestInstance {
     private final double predictedIops;
     private final double predictedNetMbPerSec;
     private final double confidence;
+    
+    // Heavy test classification
+    private final TestProfile.HeavyClass heavyClass;
+    private final TestProfile.DominantDimension dominantDim;
 
     private TestInstance(Builder builder) {
         this.testKey = builder.testKey;
@@ -43,6 +47,8 @@ public class TestInstance {
         this.predictedIops = builder.predictedIops;
         this.predictedNetMbPerSec = builder.predictedNetMbPerSec;
         this.confidence = builder.confidence;
+        this.heavyClass = builder.heavyClass;
+        this.dominantDim = builder.dominantDim;
     }
 
     public static Builder builder() {
@@ -110,6 +116,36 @@ public class TestInstance {
     }
 
     /**
+     * Returns the heavy classification for this test.
+     * @return heavy class (NORMAL, HEAVY, or EXTREME)
+     */
+    public TestProfile.HeavyClass getHeavyClass() {
+        return heavyClass;
+    }
+
+    /**
+     * Returns the dominant resource dimension for this test.
+     * @return dominant dimension (CPU, MEM, IO, IOPS, or NONE)
+     */
+    public TestProfile.DominantDimension getDominantDim() {
+        return dominantDim;
+    }
+
+    /**
+     * Returns true if this test is classified as HEAVY or EXTREME.
+     */
+    public boolean isHeavy() {
+        return heavyClass != null && heavyClass != TestProfile.HeavyClass.NORMAL;
+    }
+
+    /**
+     * Returns true if this test is classified as EXTREME.
+     */
+    public boolean isExtreme() {
+        return heavyClass == TestProfile.HeavyClass.EXTREME;
+    }
+
+    /**
      * Returns wait time in seconds since submission.
      */
     public long getWaitTimeSeconds() {
@@ -131,7 +167,10 @@ public class TestInstance {
 
     @Override
     public String toString() {
-        return "TestInstance{test=" + testKey + ", commit=" + commit.substring(0, Math.min(7, commit.length())) + ", tpred=" + predictedDurationMs + "ms}";
+        String heavyInfo = (heavyClass != null && heavyClass != TestProfile.HeavyClass.NORMAL) 
+                ? ", heavy=" + heavyClass : "";
+        return "TestInstance{test=" + testKey + ", commit=" + commit.substring(0, Math.min(7, commit.length())) 
+                + ", tpred=" + predictedDurationMs + "ms" + heavyInfo + "}";
     }
 
     public static final class Builder {
@@ -150,6 +189,8 @@ public class TestInstance {
         private double predictedIops = 0.0;
         private double predictedNetMbPerSec = 5.0;
         private double confidence = 0.0;
+        private TestProfile.HeavyClass heavyClass = TestProfile.HeavyClass.NORMAL;
+        private TestProfile.DominantDimension dominantDim = TestProfile.DominantDimension.NONE;
 
         private Builder() {
         }
@@ -231,6 +272,27 @@ public class TestInstance {
 
         public Builder confidence(double val) {
             this.confidence = val;
+            return this;
+        }
+
+        public Builder heavyClass(TestProfile.HeavyClass val) {
+            this.heavyClass = val != null ? val : TestProfile.HeavyClass.NORMAL;
+            return this;
+        }
+
+        public Builder dominantDim(TestProfile.DominantDimension val) {
+            this.dominantDim = val != null ? val : TestProfile.DominantDimension.NONE;
+            return this;
+        }
+
+        /**
+         * Convenience method to set heavy classification from a TestProfile.
+         */
+        public Builder fromProfile(TestProfile profile) {
+            if (profile != null) {
+                this.heavyClass = profile.getHeavyClass();
+                this.dominantDim = profile.getDominantDim();
+            }
             return this;
         }
 

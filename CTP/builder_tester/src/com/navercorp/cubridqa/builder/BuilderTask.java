@@ -2359,6 +2359,27 @@ public class BuilderTask {
                                                      Set<String> testersUsed) {
         taskLogger.info("[Smart Scheduling] Initializing scheduler...");
 
+        // Load test profiles for heavy test classification
+        String profilesPath = config.getTestProfilesPath();
+        TestProfileLoader profileLoader = new TestProfileLoader(
+            java.nio.file.Paths.get(profilesPath),
+            java.nio.file.Paths.get(config.getWorkDir(), "latest.json.gz")
+        );
+        Map<String, TestProfile> testProfiles = profileLoader.load();
+        taskLogger.info("[Smart Scheduling] Loaded " + testProfiles.size() + " test profiles");
+        taskLogger.info("[Smart Scheduling] " + HeavyProfiler.summarize(testProfiles));
+
+        // Compute elephant threshold from profiles (P75 of durations, min 60s)
+        long elephantThresholdMs = ElephantThresholdCalculator.computeFromProfiles(
+            testProfiles.values(), 
+            config.getElephantMinMs()
+        );
+        taskLogger.info("[Smart Scheduling] Elephant threshold: " + elephantThresholdMs + "ms");
+
+        // NOTE: Demand inflation is DISABLED - it kills throughput by artificially inflating
+        // resource predictions and causing hasResourceHeadroom() to reject test placements.
+        // Heavy classification is used ONLY for queue ordering and soft scoring preference.
+
         // Initialize scheduler components
         List<String> schedulerNodes = normalizeTesterNodes(workerIps);
         Map<String, AtomicInteger> nodeInflight = new ConcurrentHashMap<>();
@@ -2414,6 +2435,7 @@ public class BuilderTask {
             config.getSchedulingWeightImageCache(),
             config.getSchedulingWeightPackageCache(),
             config.getSchedulingWeightAgeBoost(),
+            config.getSchedulingWeightHeavy(),  // w6: heavy test penalty
             config.getSchedulingWeightIo(),
             config.getSchedulingWeightCpu(),
             config.getSchedulingWeightMem(),
@@ -2421,7 +2443,8 @@ public class BuilderTask {
             loadProvider
         );
 
-        ReadyQueue readyQueue = new ReadyQueue(config.getSchedulingMiceThresholdMs());
+        // Use computed elephant threshold for queue separation
+        ReadyQueue readyQueue = new ReadyQueue(elephantThresholdMs);
         SchedulerService scheduler = new SchedulerService(nodeDirectory, scoreFunction, readyQueue, config.getSchedulingElephantWeight(), config);
 
         // Normalize tests once for scoring and instance creation
@@ -2501,25 +2524,38 @@ public class BuilderTask {
                     }
                 }
 
+                // Apply heavy test classification from profile (for queue ordering and soft scoring only)
+                // NOTE: We do NOT inflate demands - that kills throughput by making hasResourceHeadroom()
+                // think nodes are more loaded than they are. Heavy classification is used only for:
+                // 1. Queue ordering: HEAVY/EXTREME tests go to elephant queue (start early)
+                // 2. Soft scoring: small nudge to spread heavy tests across nodes when possible
+                TestProfile profile = TestProfileLoader.getOrDefault(testProfiles, testPath);
+                tib.fromProfile(profile);
+
                 TestInstance instance = tib.build();
                 testInstances.add(instance);
             }
         }
 
-        // Log how many tests are expected to trigger heavy mode on testers
+        // Log how many tests are classified as heavy (HEAVY or EXTREME)
         int heavyCandidates = 0;
+        int extremeCandidates = 0;
         for (TestInstance ti : testInstances) {
-            if (isHeavyCandidate(ti)) {
+            if (ti.isHeavy()) {
                 heavyCandidates++;
+                if (ti.isExtreme()) {
+                    extremeCandidates++;
+                }
             }
         }
         final AtomicInteger heavyAssigned = new AtomicInteger(0);
         taskLogger.info(String.format(
-                "[Smart Scheduling] Heavy candidates before dispatch: %d/%d (duration>=%.0fms, io>=%.1f MB/s total)",
+                "[Smart Scheduling] Heavy tests: %d HEAVY + %d EXTREME = %d/%d total (threshold=%dms)",
+                heavyCandidates - extremeCandidates,
+                extremeCandidates,
                 heavyCandidates,
                 testInstances.size(),
-                (double) config.getSchedulingMiceThresholdMs(),
-                config.getSchedulingIoHeavyThreshold()));
+                elephantThresholdMs));
 
         taskLogger.info("[Smart Scheduling] Offering " + testInstances.size() + " tests to scheduler");
         scheduler.offer(testInstances);

@@ -40,6 +40,26 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
   - Transparent fallback on failures
   - See docs/DOCKER_OPTIMIZATION.md for details
 
+## Smart Scheduling Features
+
+- **Smart Scheduling System**: Intelligent multi-resource-aware test distribution
+  - Replaces round-robin with filter→score→bind algorithm
+  - Per-node test history and resource demand prediction
+  - Cache locality optimization (Docker images, build packages)
+  - Mice/elephants queue separation for optimal throughput
+  - See docs/SMART_SCHEDULING_ARCHITECTURE.md for details
+- **I/O-First Scheduling**: Prioritizes I/O capacity in scheduling decisions
+  - Separate read/write bandwidth tracking
+  - I/O-dominant scoring with configurable weights
+  - Prevents disk saturation on I/O-bound tests
+- **Heavy Test Scheduling**: Automatic classification and isolation of resource-intensive tests
+  - NORMAL/HEAVY/EXTREME classification based on historical usage
+  - Heavy tests route to elephant queue for early scheduling
+  - Soft penalty spreads heavy tests across nodes
+  - Effective capacity reporting with overcommit factors
+  - Circuit breaker protection against memory overload
+  - See docs/SMART_SCHEDULING_CONFIG.md for configuration
+
 ## Quick start
 
 Prerequisites:

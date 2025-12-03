@@ -104,6 +104,15 @@ public class BuilderConfig {
     private static final String SCHEDULING_CIRCUIT_BREAKER_CPU = "scheduling_circuit_breaker_cpu";
     private static final String SCHEDULING_CIRCUIT_BREAKER_MEM = "scheduling_circuit_breaker_mem";
 
+    // Heavy Test Scheduling Configuration
+    private static final String TEST_PROFILES_PATH = "test_profiles_path";
+    private static final String ELEPHANT_MIN_MS = "elephant_min_ms";
+    private static final String SCHEDULING_WEIGHT_HEAVY = "scheduling_weight_heavy";
+    private static final String HEAVY_CPU_FACTOR = "heavy_cpu_factor";
+    private static final String HEAVY_MEM_FACTOR = "heavy_mem_factor";
+    private static final String HEAVY_IO_FACTOR = "heavy_io_factor";
+    private static final String EXTREME_IO_CAPACITY_FRACTION = "extreme_io_capacity_fraction";
+
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
     private static final Object SHELL_TC_OVERLAY_LOCK = new Object();
@@ -1055,6 +1064,68 @@ public class BuilderConfig {
 
     public double getSchedulingCircuitBreakerMem() {
         return Double.parseDouble(properties.getProperty(SCHEDULING_CIRCUIT_BREAKER_MEM, "90.0"));
+    }
+
+    // Heavy Test Scheduling Getters
+
+    /**
+     * Path to the pre-computed test profiles JSON file.
+     * Default is "conf/test_profiles.json".
+     */
+    public String getTestProfilesPath() {
+        return properties.getProperty(TEST_PROFILES_PATH, "conf/test_profiles.json");
+    }
+
+    /**
+     * Minimum threshold in milliseconds for the elephant queue.
+     * Tests shorter than this will go to the mice queue unless they are HEAVY/EXTREME.
+     * Default is 60000 (60 seconds).
+     */
+    public long getElephantMinMs() {
+        return Long.parseLong(properties.getProperty(ELEPHANT_MIN_MS, "60000"));
+    }
+
+    /**
+     * Weight for heavy test penalty in the scoring function.
+     * This is a soft preference for spreading heavy tests across nodes.
+     * With a single tester, this has no effect since there's only one node.
+     * Default is 0.05 (conservative - small nudge, not a blocker).
+     */
+    public double getSchedulingWeightHeavy() {
+        return Double.parseDouble(properties.getProperty(SCHEDULING_WEIGHT_HEAVY, "0.05"));
+    }
+
+    /**
+     * CPU inflation factor for HEAVY tests.
+     * Default is 1.15 (15% inflation - conservative to avoid over-reserving).
+     */
+    public double getHeavyCpuFactor() {
+        return Double.parseDouble(properties.getProperty(HEAVY_CPU_FACTOR, "1.15"));
+    }
+
+    /**
+     * Memory inflation factor for HEAVY tests.
+     * Default is 1.15 (15% inflation - conservative to avoid over-reserving).
+     */
+    public double getHeavyMemFactor() {
+        return Double.parseDouble(properties.getProperty(HEAVY_MEM_FACTOR, "1.15"));
+    }
+
+    /**
+     * I/O and IOPS inflation factor for HEAVY tests.
+     * Default is 1.25 (25% inflation - conservative to avoid over-reserving).
+     */
+    public double getHeavyIoFactor() {
+        return Double.parseDouble(properties.getProperty(HEAVY_IO_FACTOR, "1.25"));
+    }
+
+    /**
+     * Fraction of node I/O capacity to claim for EXTREME tests.
+     * Lower values allow more EXTREME tests to coexist on the same node.
+     * Default is 0.5 (allows ~2 EXTREME tests per node).
+     */
+    public double getExtremeIoCapacityFraction() {
+        return Double.parseDouble(properties.getProperty(EXTREME_IO_CAPACITY_FRACTION, "0.5"));
     }
 
     @Override

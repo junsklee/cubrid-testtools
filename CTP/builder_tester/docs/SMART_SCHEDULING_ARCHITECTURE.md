@@ -2753,6 +2753,301 @@ This enables precise reservation timing (reserve only when container actually st
 
 ---
 
+## Heavy Test Scheduling (December 2025)
+
+### Problem Statement
+
+Analysis of production data revealed that ~100 "heavy" tests (3-6% of total) consume disproportionate resources:
+- **Memory outliers**: 27-82 tests using 2-6.5× average memory (up to 2.1 GB per test)
+- **I/O outliers**: 57-94 tests using 2-6× average I/O bandwidth
+- **IOPS outliers**: 49-161 tests with extremely high IOPS requirements
+
+When multiple heavy tests run concurrently, they cause:
+- Memory contention leading to OOM kills
+- I/O saturation causing test flakiness
+- Overall system instability
+
+### Solution: Heavy Test Classification
+
+#### Test Classification (TestProfile)
+
+Tests are classified into three bands based on resource usage ratios:
+
+```java
+public enum HeavyClass {
+    NORMAL,   // ratio < 2.0 (typical tests)
+    HEAVY,    // 2.0 ≤ ratio < 4.0 (above average)
+    EXTREME   // ratio ≥ 4.0 (resource hogs)
+}
+
+public enum DominantDimension {
+    CPU, MEM, IO, IOPS, NONE
+}
+```
+
+**Classification Formula:**
+```
+r_dim(test) = test_avg_dim / global_mean_dim
+
+heavyClass = max_band over all dimensions
+dominantDim = argmax_dim r_dim
+```
+
+**Example Classification:**
+```
+Test: bug_bts_10218
+  avgMemMb: 2101 MB (global mean: 322 MB)
+  memRatio: 2101 / 322 = 6.53
+  → HeavyClass: EXTREME (ratio ≥ 4.0)
+  → DominantDim: MEM
+```
+
+#### New Components
+
+**1. TestProfile.java** - Data class for classification results:
+```java
+public final class TestProfile {
+    private final String testKey;
+    private final HeavyClass heavyClass;
+    private final DominantDimension dominantDim;
+    private final double cpuRatio, memRatio, ioRatio, iopsRatio;
+}
+```
+
+**2. HeavyProfiler.java** - Computes TestProfile from TestStats:
+```java
+public TestProfile classify(TestStats stats, GlobalStats global) {
+    double cpuRatio = stats.getCpuPctAvg() / global.getMeanCpuPct();
+    double memRatio = stats.getMemMbAvg() / global.getMeanMemMb();
+    // ... compute all ratios
+    
+    HeavyClass band = computeBand(cpuRatio, memRatio, ioRatio, iopsRatio);
+    DominantDimension dominant = findDominant(cpuRatio, memRatio, ioRatio, iopsRatio);
+    
+    return new TestProfile(testKey, band, dominant, ...);
+}
+```
+
+**3. TestProfileLoader.java** - Loads profiles from `test_profiles.json`:
+```java
+public Map<String, TestProfile> load() {
+    // Load pre-computed profiles from JSON
+    // Falls back to computing from latest.json if missing
+}
+```
+
+**4. ElephantThresholdCalculator.java** - Dynamic threshold computation:
+```java
+public static long computeP75(Collection<TestInstance> tests, long minMs) {
+    // Compute P75 of predicted durations
+    // Return max(P75, minMs) for adaptive thresholds
+}
+```
+
+**5. generate_test_profiles.py** - Offline profile generation script:
+```bash
+python3 scripts/generate_test_profiles.py \
+    --input todelete/latest.json \
+    --output conf/test_profiles.json
+```
+
+#### Queue Routing Enhancement
+
+Heavy tests are automatically routed to the elephant queue:
+
+```java
+// In ReadyQueue.offer()
+public void offer(TestInstance test) {
+    boolean isElephantByDuration = test.getPredictedDurationMs() > elephantThresholdMs;
+    boolean isElephantByHeavy = test.getHeavyClass() != HeavyClass.NORMAL;
+    
+    if (isElephantByDuration || isElephantByHeavy) {
+        elephantsQueue.offer(test);  // Schedule early in critical path
+    } else {
+        miceQueue.offer(test);
+    }
+}
+```
+
+**Rationale:** Heavy tests should start early (80% weight) to maximize throughput, even if their duration is short.
+
+#### Scoring Function Enhancement
+
+A soft penalty spreads heavy tests across nodes:
+
+```java
+private double computeHeavyPenalty(TestInstance test, NodeSnapshot node) {
+    if (test.getHeavyClass() == HeavyClass.NORMAL) {
+        return 0.0;
+    }
+    
+    double penalty = 0.0;
+    
+    // Soft penalty for disk pressure
+    if (node.isDiskPressure()) {
+        penalty += 0.2;
+    }
+    
+    // Linear penalty for low I/O headroom
+    double freeIoFrac = Math.min(
+        node.getFreeIoReadMbPerSec() / node.getIoReadMbPerSec(),
+        node.getFreeIoWriteMbPerSec() / node.getIoWriteMbPerSec()
+    );
+    if (freeIoFrac < 0.3) {
+        penalty += (0.3 - freeIoFrac) * 0.5;  // Max 0.15
+    }
+    
+    return penalty;
+}
+```
+
+**Updated Score Formula:**
+```
+Score(T, N) = w1 × pressure + w2 × duration + w3 × imagePenalty 
+            + w4 × packagePenalty - w5 × ageBoost + w6 × heavyPenalty
+```
+
+Where `w6` defaults to `0.10` (configurable via `scheduling_weight_heavy`).
+
+### Effective Capacity and Circuit Breaker Fix
+
+#### Problem
+
+The tester's circuit breaker was checking actual memory usage against **raw physical capacity**, while admission control used **effective capacity** (with overcommit). This mismatch caused:
+- Builder sees capacity X
+- Tester uses effective capacity X × overcommit
+- Circuit breaker uses raw capacity X
+- Result: Over-admission when overcommit < 1.0
+
+#### Solution
+
+**1. HealthHandler reports effective capacity:**
+```java
+// Apply overcommit factors to reported capacity
+double overcommitMem = config.getSchedulingOvercommitMem();  // e.g., 0.9
+capacity.put("mem_bytes", (long)(nodeCapacity.getMemMb() * 1024 * 1024 * overcommitMem));
+```
+
+**2. Circuit breaker uses effective capacity:**
+```java
+// Check actual usage against EFFECTIVE capacity
+double effectiveMemCap = nodeCapacity.getMemMb() * overcommitMem;
+double actualMemPct = actualUsageMb / effectiveMemCap * 100.0;
+
+if (actualMemPct > config.getSchedulingCircuitBreakerMem()) {  // e.g., 90%
+    return false;  // Circuit breaker tripped
+}
+```
+
+**Effect:** With `scheduling_overcommit_mem=0.9`:
+- Physical capacity: 16.5 GB
+- Effective capacity: 14.85 GB
+- Circuit breaker trips at: 14.85 × 0.9 = 13.4 GB actual usage
+
+### Configuration
+
+**New builder.conf options:**
+```properties
+# Path to pre-computed test profiles
+test_profiles_path=conf/test_profiles.json
+
+# Minimum elephant threshold (ms)
+elephant_min_ms=60000
+
+# Heavy test scoring weight (soft penalty)
+scheduling_weight_heavy=0.10
+```
+
+**New tester.conf options:**
+```properties
+# Memory overcommit factor (effective = physical × factor)
+scheduling_overcommit_mem=0.9
+
+# CPU overcommit factor
+scheduling_overcommit_cpu=1.0
+
+# Circuit breaker thresholds (% of effective capacity)
+scheduling_circuit_breaker_cpu=95.0
+scheduling_circuit_breaker_mem=90.0
+```
+
+### Generated Files
+
+**conf/test_profiles.json** - Pre-computed test classifications:
+```json
+{
+  "version": 1,
+  "generated": "2025-12-03T10:04:36Z",
+  "testCount": 3192,
+  "globalStats": {
+    "meanCpuPct": 22.4,
+    "meanMemMb": 321.73,
+    "meanIoMbPerSec": 49.17,
+    "meanIops": 9038.22
+  },
+  "thresholds": {
+    "heavyRatio": 2.0,
+    "extremeRatio": 4.0
+  },
+  "summary": {
+    "normal": 2589,
+    "heavy": 527,
+    "extreme": 76
+  },
+  "profiles": [
+    {
+      "testKey": "shell/_06_issues/_13_1h/bug_bts_10234/cases/bug_bts_10234.sh",
+      "heavyClass": "NORMAL",
+      "dominantDim": "NONE",
+      "cpuRatio": 0.716,
+      "memRatio": 0.813,
+      "ioRatio": 0.949,
+      "iopsRatio": 0.782
+    },
+    {
+      "testKey": "shell/_08_shard/_50_cubridsus/bug_bts_10218/cases/bug_bts_10218.sh",
+      "heavyClass": "EXTREME",
+      "dominantDim": "MEM",
+      "cpuRatio": 0.992,
+      "memRatio": 6.531,
+      "ioRatio": 0.291,
+      "iopsRatio": 0.458
+    }
+  ]
+}
+```
+
+### Expected Behavior
+
+1. **~76 EXTREME tests** get near-exclusive treatment (high memory/I/O)
+2. **~527 HEAVY tests** get 1.3-1.5× priority (above average resources)
+3. **All heavy tests** route to elephant queue (start early)
+4. **Soft scoring penalty** spreads heavy tests across nodes
+5. **Circuit breaker** properly trips when effective capacity exceeded
+6. **Result:** Reduced memory contention, fewer flaky tests from resource pressure
+
+### Regenerating Profiles
+
+When test characteristics change, regenerate profiles:
+
+```bash
+# Generate profiles from latest test statistics
+python3 scripts/generate_test_profiles.py \
+    --input todelete/latest.json \
+    --output conf/test_profiles.json \
+    --heavy-threshold 2.0 \
+    --extreme-threshold 4.0
+
+# Verify profile counts
+jq '.summary' conf/test_profiles.json
+# {"normal": 2589, "heavy": 527, "extreme": 76}
+
+# Restart builder to pick up new profiles
+cd bin && sh stop_builder.sh && sh start_builder.sh
+```
+
+---
+
 ## References
 
 1. **Kubernetes Node Scoring**: MostAllocated, RequestedToCapacityRatio strategies
@@ -2766,10 +3061,15 @@ This enables precise reservation timing (reserve only when container actually st
 
 ## Document Metadata
 
-- **Version:** 2.0
-- **Last Updated:** November 2025
+- **Version:** 3.0
+- **Last Updated:** December 2025
 - **Authors:** Claude (Anthropic)
 - **Status:** Production-ready
+- **Recent Changes (v3.0):**
+  - Added Heavy Test Scheduling section (NORMAL/HEAVY/EXTREME classification)
+  - Added TestProfile, HeavyProfiler, ElephantThresholdCalculator components
+  - Added effective capacity reporting and circuit breaker fixes
+  - Added generate_test_profiles.py script documentation
 - **Related Docs:**
   - [SMART_SCHEDULING_TESTING_GUIDE.md](SMART_SCHEDULING_TESTING_GUIDE.md)
   - [SMART_SCHEDULING_CONFIG.md](SMART_SCHEDULING_CONFIG.md)

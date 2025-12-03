@@ -334,6 +334,85 @@ Caps at 1.0 after ~3 minutes of waiting.
 
 ---
 
+### Heavy Test Scheduling Parameters (December 2025)
+
+#### `test_profiles_path`
+
+**Type:** String (file path)
+**Default:** `conf/test_profiles.json`
+**Since:** December 2025
+
+**Description:**
+Path to the pre-computed test profiles JSON file. This file contains NORMAL/HEAVY/EXTREME classifications for each test based on historical resource usage.
+
+**Example:**
+```properties
+test_profiles_path=conf/test_profiles.json
+```
+
+**Notes:**
+- Generate using `scripts/generate_test_profiles.py`
+- If file doesn't exist, all tests are treated as NORMAL
+- Relative paths are resolved from the builder working directory
+
+---
+
+#### `elephant_min_ms`
+
+**Type:** Long (milliseconds)
+**Default:** `60000` (60 seconds)
+**Since:** December 2025
+
+**Description:**
+Minimum elephant threshold in milliseconds. The actual elephant threshold is `max(P75_duration, elephant_min_ms)`. This ensures elephants are always at least 60 seconds even if P75 is lower.
+
+**Example:**
+```properties
+# Conservative (60s minimum)
+elephant_min_ms=60000
+
+# Lower minimum for smaller test suites
+elephant_min_ms=30000
+```
+
+---
+
+#### `scheduling_weight_heavy`
+
+**Type:** Double (0.0 to 1.0 recommended)
+**Default:** `0.10`
+**Since:** December 2025
+
+**Description:**
+Weight for heavy test penalty in scoring. Heavy (and EXTREME) tests receive a soft penalty when scheduled on nodes with low I/O headroom or disk pressure. This spreads heavy tests across nodes without hard blocking.
+
+**Example:**
+```properties
+# Stronger heavy spreading (more conservative)
+scheduling_weight_heavy=0.20
+
+# Weaker heavy spreading (more aggressive packing)
+scheduling_weight_heavy=0.05
+
+# Default balanced
+scheduling_weight_heavy=0.10
+```
+
+**Tuning Guidelines:**
+- **Increase** if heavy tests are causing resource contention on nodes
+- **Decrease** if throughput is too low (too conservative)
+- Monitor flaky test rates: if heavy tests become flaky, increase weight
+
+**Heavy Penalty Formula:**
+```java
+penalty = 0.0
+if (node.isDiskPressure()) penalty += 0.2
+if (freeIoFrac < 0.3) penalty += (0.3 - freeIoFrac) * 0.5  // max 0.15
+// Total max penalty: 0.35
+```
+
+---
+
 ### Node Polling and Staleness
 
 #### `scheduling_poll_interval_ms`
@@ -680,6 +759,112 @@ Upper bound once all heavy tests finish. After the heavy backlog clears, the tes
 
 **Description:**
 Original single-limit knob. When the dual-mode parameters are omitted, both heavy and post-heavy limits fall back to this value. Keep it around for older automation or as a sane default, but prefer the dedicated knobs above for new deployments.
+
+---
+
+### Overcommit and Circuit Breaker (December 2025)
+
+#### `scheduling_overcommit_cpu`
+
+**Type:** Double (0.5 to 2.0)
+**Default:** `1.0` (no overcommit)
+**Since:** December 2025
+
+**Description:**
+CPU overcommit factor. Effective CPU capacity = Physical CPU × overcommit factor. Values >1.0 allow oversubscription (risky), values <1.0 are conservative.
+
+**Example:**
+```properties
+# No overcommit (default, safe)
+scheduling_overcommit_cpu=1.0
+
+# Conservative (reserve 10% for system)
+scheduling_overcommit_cpu=0.9
+
+# Aggressive overcommit (risky)
+scheduling_overcommit_cpu=1.3
+```
+
+---
+
+#### `scheduling_overcommit_mem`
+
+**Type:** Double (0.5 to 2.0)
+**Default:** `1.0` (no overcommit)
+**Since:** December 2025
+
+**Description:**
+Memory overcommit factor. Effective memory capacity = Physical memory × overcommit factor. This value is critical for preventing OOM conditions.
+
+**Example:**
+```properties
+# No overcommit (default)
+scheduling_overcommit_mem=1.0
+
+# Conservative (reserve 10% for system) - RECOMMENDED
+scheduling_overcommit_mem=0.9
+
+# Very conservative (reserve 20%)
+scheduling_overcommit_mem=0.8
+```
+
+**Effect on Capacity Reporting:**
+With 16 GB physical RAM and `scheduling_overcommit_mem=0.9`:
+- Effective capacity: 14.4 GB
+- `/health` endpoint reports: 14.4 GB
+- Builder sees: 14.4 GB available
+- Circuit breaker threshold (90%): trips at 13.0 GB actual usage
+
+**Important:** This value affects both:
+1. Capacity reported in `/health` endpoint
+2. Circuit breaker threshold calculation
+
+---
+
+#### `scheduling_circuit_breaker_cpu`
+
+**Type:** Double (percentage, 0.0 to 100.0)
+**Default:** `95.0` (95% of effective capacity)
+**Since:** December 2025
+
+**Description:**
+CPU circuit breaker threshold. When actual CPU usage exceeds this percentage of **effective** CPU capacity, the tester stops accepting new tests.
+
+**Example:**
+```properties
+# Conservative (stop at 90%)
+scheduling_circuit_breaker_cpu=90.0
+
+# Default (stop at 95%)
+scheduling_circuit_breaker_cpu=95.0
+```
+
+---
+
+#### `scheduling_circuit_breaker_mem`
+
+**Type:** Double (percentage, 0.0 to 100.0)
+**Default:** `90.0` (90% of effective capacity)
+**Since:** December 2025
+
+**Description:**
+Memory circuit breaker threshold. When actual memory usage exceeds this percentage of **effective** memory capacity, the tester stops accepting new tests. This is the primary OOM prevention mechanism.
+
+**Example:**
+```properties
+# Conservative (stop at 85%)
+scheduling_circuit_breaker_mem=85.0
+
+# Default (stop at 90%)
+scheduling_circuit_breaker_mem=90.0
+```
+
+**Calculation Example:**
+With 16 GB physical RAM, `scheduling_overcommit_mem=0.9`, and `scheduling_circuit_breaker_mem=90.0`:
+- Effective capacity: 16 × 0.9 = 14.4 GB
+- Circuit breaker trips at: 14.4 × 0.90 = 13.0 GB actual usage
+
+**Important:** The circuit breaker uses **actual** sampled memory usage, not reserved predictions. This catches runaway tests that exceed their predictions.
 
 ---
 
@@ -1729,9 +1914,14 @@ scheduling_mice_routing=cluster_a_url
 
 ## Document Metadata
 
-- **Version:** 1.1
-- **Last Updated:** 2025-11-19
-- **Recent Changes:**
+- **Version:** 1.2
+- **Last Updated:** 2025-12-03
+- **Recent Changes (v1.2):**
+  - Added Heavy Test Scheduling parameters (`test_profiles_path`, `elephant_min_ms`, `scheduling_weight_heavy`)
+  - Added Overcommit and Circuit Breaker parameters (`scheduling_overcommit_cpu`, `scheduling_overcommit_mem`, `scheduling_circuit_breaker_cpu`, `scheduling_circuit_breaker_mem`)
+  - Documented effective capacity calculation and reporting
+  - Added memory contention prevention guidance
+- **Previous Changes (v1.1):**
   - Added `use_iops_predictions` configuration parameter (builder.conf)
   - Added `node_iops_capacity` configuration parameter (tester.conf)
   - Added Scenario 5: IOPS-Aware Scheduling
@@ -1774,15 +1964,22 @@ All other parameters will use sensible defaults.
 | `scheduling_weight_image` | `0.15` | builder.conf |
 | `scheduling_weight_package` | `0.05` | builder.conf |
 | `scheduling_weight_age` | `0.10` | builder.conf |
+| `scheduling_weight_heavy` | `0.10` | builder.conf |
 | `scheduling_poll_interval_ms` | `5000` | builder.conf |
 | `scheduling_stale_threshold_ms` | `30000` | builder.conf |
+| `test_profiles_path` | `conf/test_profiles.json` | builder.conf |
+| `elephant_min_ms` | `60000` | builder.conf |
+| `use_iops_predictions` | `false` | builder.conf |
+| `scheduling_margin_iops_base` | `0.25` | builder.conf |
 | `stats_enabled` | `true` | tester.conf |
 | `stats_snapshot_interval_seconds` | `300` | tester.conf |
 | `heartbeat_interval_seconds` | `5` | tester.conf |
 | `score_endpoint_enabled` | `true` | tester.conf |
 | `node_iops_capacity` | `25000` | tester.conf |
-| `use_iops_predictions` | `false` | builder.conf |
-| `scheduling_margin_iops_base` | `0.25` (0.05 when predictions enabled) | builder.conf |
+| `scheduling_overcommit_cpu` | `1.0` | tester.conf |
+| `scheduling_overcommit_mem` | `1.0` | tester.conf |
+| `scheduling_circuit_breaker_cpu` | `95.0` | tester.conf |
+| `scheduling_circuit_breaker_mem` | `90.0` | tester.conf |
 
 ---
 

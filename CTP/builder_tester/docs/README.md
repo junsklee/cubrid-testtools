@@ -8,7 +8,19 @@ Complete documentation for the CUBRID Builder-Tester system.
 - [MULTI_NODE_TESTING.md](MULTI_NODE_TESTING.md) - Multi-node testing setup and usage
 - **[IO_FIRST_SCHEDULING_IMPLEMENTATION.md](IO_FIRST_SCHEDULING_IMPLEMENTATION.md)** - Complete context for I/O-first scheduling implementation (November 2025)
 
-## New Features (Nov 2024)
+## New Features (Nov 2024 - Dec 2025)
+
+### Heavy Test Scheduling Enhancement (December 2025)
+**Key improvements:**
+- **NORMAL/HEAVY/EXTREME test classification** based on historical resource usage ratios
+- **Test profiling system** - Offline analysis of `latest.json` generates `test_profiles.json`
+- **Heavy-aware queue routing** - Heavy tests auto-route to elephant queue for early scheduling
+- **Memory contention prevention** - Identifies tests using 2-6x average memory (up to 2.1GB)
+- **Soft scoring penalty** for heavy tests on already-loaded nodes
+- **Effective capacity reporting** - Tester reports capacity with overcommit factor applied
+- **Enhanced circuit breaker** - Uses effective capacity for actual usage checks
+
+See [SMART_SCHEDULING_ARCHITECTURE.md#heavy-test-scheduling](SMART_SCHEDULING_ARCHITECTURE.md#heavy-test-scheduling-december-2025) for details.
 
 ### Smart Scheduling System (November 2024)
 - **[SMART_SCHEDULING_ARCHITECTURE.md](SMART_SCHEDULING_ARCHITECTURE.md)** - Complete architecture and design documentation
@@ -110,6 +122,24 @@ See usage README for:
 
 ## Recent Changes
 
+### December 2025 - Heavy Test Scheduling Enhancement
+- ✅ NORMAL/HEAVY/EXTREME test classification (ratios: <2x normal, 2-4x heavy, ≥4x extreme)
+- ✅ `TestProfile` and `HeavyProfiler` for resource-based classification
+- ✅ `test_profiles.json` generation from historical data via `scripts/generate_test_profiles.py`
+- ✅ Heavy tests auto-route to elephant queue (regardless of duration)
+- ✅ Dynamic P75 elephant threshold calculation
+- ✅ Soft heavy penalty in scoring (spreads heavy tests across nodes)
+- ✅ Effective capacity reporting with overcommit factors
+- ✅ Circuit breaker uses effective capacity for accurate tripping
+- ✅ Prevents memory contention from heavy tests (up to 6.5x average memory)
+
+### November 2025 - I/O-First Scheduling Enhancement
+- ✅ Separate read/write I/O bandwidth tracking and prediction
+- ✅ I/O-dominant scoring with configurable weights
+- ✅ Dimension-specific safety margins for read/write I/O
+- ✅ Enhanced /health endpoint with read/write capacity/utilization
+- ✅ Backward compatible with legacy `ioMbPerSec` (splits 50/50)
+
 ### November 2024 - Smart Scheduling System
 - ✅ Intelligent multi-resource-aware test scheduling
 - ✅ Per-node test history and prediction (WAL + snapshot persistence)
@@ -118,13 +148,6 @@ See usage README for:
 - ✅ Mice/elephants queue separation (SJF + bin-packing)
 - ✅ BuilderTask integration with config toggle
 - ✅ 10-30% throughput improvement, 15-25% faster mean completion
-
-### November 2025 - I/O-First Scheduling Enhancement
-- ✅ Separate read/write I/O bandwidth tracking and prediction
-- ✅ I/O-dominant scoring with configurable weights
-- ✅ Dimension-specific safety margins for read/write I/O
-- ✅ Enhanced /health endpoint with read/write capacity/utilization
-- ✅ Backward compatible with legacy `ioMbPerSec` (splits 50/50)
 
 See [SMART_SCHEDULING_ARCHITECTURE.md](SMART_SCHEDULING_ARCHITECTURE.md) for details.
 
@@ -182,6 +205,7 @@ For issues or questions:
 
 ## Version History
 
+- **v4.2** (Dec 2025) - Heavy test scheduling with NORMAL/HEAVY/EXTREME classification
 - **v4.1** (Nov 2025) - I/O-first scheduling with separate read/write tracking
 - **v4.0** (Nov 2024) - Smart scheduling system with multi-resource awareness
 - **v3.0** (Nov 2024) - Sequential builds with workload distribution

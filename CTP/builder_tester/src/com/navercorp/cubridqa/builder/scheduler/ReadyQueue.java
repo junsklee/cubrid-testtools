@@ -8,14 +8,22 @@ import java.util.Set;
 /**
  * Two-tier ready queue for test scheduling with makespan optimization.
  *
- * <p>Separates tests into "mice" (short tests) and "elephants" (long tests)
- * based on predicted duration threshold. Mice are prioritized using a min-heap
- * by predicted duration with aging boost (shortest first). Elephants are prioritized
- * using a max-heap by predicted duration (longest first) to minimize overall makespan.</p>
+ * <p>Separates tests into "mice" (short tests) and "elephants" (long/heavy tests)
+ * based on predicted duration threshold and heavy classification. Tests are classified
+ * as elephants if either:
+ * <ul>
+ *   <li>Duration exceeds the threshold (default 60s, configurable)</li>
+ *   <li>Test is classified as HEAVY or EXTREME in its {@link TestProfile}</li>
+ * </ul>
+ * </p>
+ *
+ * <p>Mice are prioritized using a min-heap by predicted duration with aging boost
+ * (shortest first). Elephants are prioritized using a max-heap by predicted duration
+ * (longest first) to minimize overall makespan.</p>
  *
  * <p><b>Key Optimization:</b> Elephants use longest-job-first (LJF) scheduling to ensure
- * the critical path (longest tests) starts early in parallel execution, minimizing the
- * time for all tests to complete.</p>
+ * the critical path (longest and heaviest tests) starts early in parallel execution,
+ * minimizing the time for all tests to complete.</p>
  *
  * <p>Thread-safety: Caller must synchronize access.</p>
  */
@@ -50,12 +58,22 @@ public class ReadyQueue {
 
     /**
      * Adds a test to the appropriate queue (mice or elephants).
+     *
+     * <p>A test goes to the elephants queue if either:
+     * <ul>
+     *   <li>Its predicted duration exceeds the threshold</li>
+     *   <li>It is classified as HEAVY or EXTREME (regardless of duration)</li>
+     * </ul>
+     * All other tests go to the mice queue.</p>
      */
     public void offer(TestInstance test) {
-        if (test.getPredictedDurationMs() <= miceThresholdMs) {
-            miceQueue.offer(test);
-        } else {
+        boolean isElephantByDuration = test.getPredictedDurationMs() > miceThresholdMs;
+        boolean isElephantByHeavy = test.isHeavy();  // HEAVY or EXTREME
+        
+        if (isElephantByDuration || isElephantByHeavy) {
             elephantsQueue.offer(test);
+        } else {
+            miceQueue.offer(test);
         }
     }
 
@@ -134,6 +152,27 @@ public class ReadyQueue {
     }
 
     /**
+     * Returns the number of heavy tests (HEAVY or EXTREME) in the elephants queue.
+     */
+    public int getHeavyCount() {
+        return (int) elephantsQueue.stream().filter(TestInstance::isHeavy).count();
+    }
+
+    /**
+     * Returns the number of EXTREME tests in the elephants queue.
+     */
+    public int getExtremeCount() {
+        return (int) elephantsQueue.stream().filter(TestInstance::isExtreme).count();
+    }
+
+    /**
+     * Returns the configured threshold for mice/elephants classification.
+     */
+    public long getMiceThresholdMs() {
+        return miceThresholdMs;
+    }
+
+    /**
      * Computes effective duration for mice queue ordering.
      * Applies age boost to reduce effective duration for long-waiting tests.
      */
@@ -149,6 +188,9 @@ public class ReadyQueue {
 
     @Override
     public String toString() {
-        return "ReadyQueue{mice=" + miceQueue.size() + ", elephants=" + elephantsQueue.size() + "}";
+        int heavy = getHeavyCount();
+        int extreme = getExtremeCount();
+        String heavyInfo = (heavy > 0) ? ", heavy=" + heavy + " (extreme=" + extreme + ")" : "";
+        return "ReadyQueue{mice=" + miceQueue.size() + ", elephants=" + elephantsQueue.size() + heavyInfo + "}";
     }
 }
