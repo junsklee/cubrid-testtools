@@ -336,24 +336,47 @@ Caps at 1.0 after ~3 minutes of waiting.
 
 ### Heavy Test Scheduling Parameters (December 2025)
 
-#### `test_profiles_path`
+#### `tester_profiles_dir`
 
-**Type:** String (file path)
-**Default:** `conf/test_profiles.json`
+**Type:** String (directory path)
+**Default:** `~/tmp/tester_work/profiles`
 **Since:** December 2025
 
 **Description:**
-Path to the pre-computed test profiles JSON file. This file contains NORMAL/HEAVY/EXTREME classifications for each test based on historical resource usage.
+Directory containing the Tester's WAL-exported statistics (`latest.json.gz`). The Builder loads this file and dynamically computes NORMAL/HEAVY/EXTREME classifications using the `HeavyProfiler`.
+
+**Integration with Tester's WAL System:**
+The Tester maintains a crash-safe Write-Ahead Log (WAL) that records test execution metrics. After each snapshot cycle (default 5 minutes), it exports aggregated statistics to `latest.json.gz`. This enables:
+- **Auto-updating profiles**: No manual regeneration needed; stats update every 5 minutes
+- **Hardware-portable**: Ratios computed locally reflect actual tester performance
+- **New tests handled**: Automatically included after first test run
+- **Fresh node bootstrap**: New testers can import statistics without full WAL replay
+
+**Classification Algorithm:**
+1. Compute global means for CPU, memory, I/O, and IOPS across all tests
+2. For each test, compute ratios: `test_metric / global_mean`
+3. Classify based on max ratio:
+   - `ratio < 2.0` → NORMAL
+   - `2.0 ≤ ratio < 4.0` → HEAVY
+   - `ratio ≥ 4.0` → EXTREME
 
 **Example:**
 ```properties
-test_profiles_path=conf/test_profiles.json
+# Default: same host as Builder
+tester_profiles_dir=~/tmp/tester_work/profiles
+
+# Remote Tester (mounted via NFS/SSHFS)
+tester_profiles_dir=/mnt/tester1/profiles
+
+# Local copy (if synced separately)
+tester_profiles_dir=/home/user/tester_profiles
 ```
 
 **Notes:**
-- Generate using `scripts/generate_test_profiles.py`
-- If file doesn't exist, all tests are treated as NORMAL
-- Relative paths are resolved from the builder working directory
+- The directory should contain `latest.json.gz` exported by the Tester's WAL system
+- Home directory expansion (`~`) is supported
+- If file not found, all tests default to NORMAL classification
+- For debugging/analysis, use `scripts/generate_test_profiles.py` to inspect classifications
 
 ---
 
@@ -1914,10 +1937,14 @@ scheduling_mice_routing=cluster_a_url
 
 ## Document Metadata
 
-- **Version:** 1.2
-- **Last Updated:** 2025-12-03
-- **Recent Changes (v1.2):**
-  - Added Heavy Test Scheduling parameters (`test_profiles_path`, `elephant_min_ms`, `scheduling_weight_heavy`)
+- **Version:** 1.3
+- **Last Updated:** 2025-12-04
+- **Recent Changes (v1.3):**
+  - Removed `test_profiles_path` - profiles now loaded exclusively from WAL system
+  - Simplified `tester_profiles_dir` as the single profile source
+  - Profiles computed dynamically from WAL stats (no manual regeneration needed)
+- **Previous Changes (v1.2):**
+  - Added Heavy Test Scheduling parameters (`elephant_min_ms`, `scheduling_weight_heavy`)
   - Added Overcommit and Circuit Breaker parameters (`scheduling_overcommit_cpu`, `scheduling_overcommit_mem`, `scheduling_circuit_breaker_cpu`, `scheduling_circuit_breaker_mem`)
   - Documented effective capacity calculation and reporting
   - Added memory contention prevention guidance
@@ -1967,7 +1994,7 @@ All other parameters will use sensible defaults.
 | `scheduling_weight_heavy` | `0.10` | builder.conf |
 | `scheduling_poll_interval_ms` | `5000` | builder.conf |
 | `scheduling_stale_threshold_ms` | `30000` | builder.conf |
-| `test_profiles_path` | `conf/test_profiles.json` | builder.conf |
+| `tester_profiles_dir` | `~/tmp/tester_work/profiles` | builder.conf |
 | `elephant_min_ms` | `60000` | builder.conf |
 | `use_iops_predictions` | `false` | builder.conf |
 | `scheduling_margin_iops_base` | `0.25` | builder.conf |

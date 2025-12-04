@@ -217,7 +217,9 @@ public class HeavyProfiler {
      */
     public RawTestStats parseFromJson(String testKey, JSONObject json) {
         try {
-            int observationCount = json.optInt("observation_count", json.optInt("counts", 0));
+            // WAL format uses "runs", others may use "observation_count" or "counts"
+            int observationCount = json.optInt("runs", 
+                    json.optInt("observation_count", json.optInt("counts", 0)));
             
             // Duration
             long durationEwmaMs = 0L;

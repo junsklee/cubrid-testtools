@@ -69,6 +69,7 @@ public class BuilderConfig {
     private static final String CCACHE_SLOPPINESS = "ccache_sloppiness";
     private static final String PARALLEL_JOBS = "parallel_jobs";
     private static final String SHELL_TC_SYNC_INTERVAL_SECONDS = "shell_tc_sync_interval_seconds";
+    private static final String SHELL_TC_SYNC_MODE = "shell_tc_sync_mode";
 
     // Smart scheduling configuration
     private static final String SMART_SCHEDULING_ENABLED = "smart_scheduling_enabled";
@@ -105,7 +106,6 @@ public class BuilderConfig {
     private static final String SCHEDULING_CIRCUIT_BREAKER_MEM = "scheduling_circuit_breaker_mem";
 
     // Heavy Test Scheduling Configuration
-    private static final String TEST_PROFILES_PATH = "test_profiles_path";
     private static final String ELEPHANT_MIN_MS = "elephant_min_ms";
     private static final String SCHEDULING_WEIGHT_HEAVY = "scheduling_weight_heavy";
     private static final String HEAVY_CPU_FACTOR = "heavy_cpu_factor";
@@ -121,6 +121,9 @@ public class BuilderConfig {
     private Path shellTcEffectiveDir;
     private Path shellTcOverlayDir;
     private ShellTcOverlayMode shellTcOverlayMode;
+    
+    // Base directory for resolving relative paths (parent of config file)
+    private Path configBaseDir;
 
     public BuilderConfig(String configFile) throws IOException {
         this.properties = new Properties();
@@ -135,12 +138,38 @@ public class BuilderConfig {
             throw new FileNotFoundException("Configuration file not found: " + configFile);
         }
         
+        // Store the config file's parent directory for resolving relative paths
+        this.configBaseDir = file.getAbsoluteFile().getParentFile().getParentFile().toPath();
+        
         try (FileInputStream fis = new FileInputStream(file)) {
             properties.load(fis);
         }
         
         // Expand environment variables in property values
         expandEnvironmentVariables();
+    }
+    
+    /**
+     * Returns the base directory for the builder (parent of conf/).
+     * Used for resolving relative paths in configuration.
+     */
+    public Path getConfigBaseDir() {
+        return configBaseDir;
+    }
+    
+    /**
+     * Resolves a path relative to the config base directory.
+     * If the path is already absolute, returns it unchanged.
+     */
+    public Path resolveConfigPath(String path) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        Path p = Paths.get(expandEnvironmentVariables(path));
+        if (p.isAbsolute()) {
+            return p;
+        }
+        return configBaseDir.resolve(p);
     }
     
     private void expandEnvironmentVariables() {
@@ -539,6 +568,25 @@ public class BuilderConfig {
 
     public long getShellTcSyncIntervalSeconds() {
         return Long.parseLong(properties.getProperty(SHELL_TC_SYNC_INTERVAL_SECONDS, "300"));
+    }
+    
+    /**
+     * Get the shell testcases sync mode.
+     * @return SyncMode - one of PER_REQUEST (default), PER_TEST, or DISABLED
+     */
+    public com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode getShellTcSyncMode() {
+        String raw = properties.getProperty(SHELL_TC_SYNC_MODE, "per_request").toLowerCase().trim();
+        switch (raw) {
+            case "per_request":
+                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.PER_REQUEST;
+            case "per_test":
+                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.PER_TEST;
+            case "disabled":
+                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.DISABLED;
+            default:
+                // Unknown value, default to per_request
+                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.PER_REQUEST;
+        }
     }
 
     public boolean usePrebuiltDockerImages() {
@@ -1069,11 +1117,14 @@ public class BuilderConfig {
     // Heavy Test Scheduling Getters
 
     /**
-     * Path to the pre-computed test profiles JSON file.
-     * Default is "conf/test_profiles.json".
+     * Path to the Tester's WAL profiles directory containing latest.json.gz.
+     * This is the primary source for test profile data, updated automatically
+     * by the Tester's WAL system every 5 minutes.
+     * Default is "~/tmp/tester_work/profiles".
      */
-    public String getTestProfilesPath() {
-        return properties.getProperty(TEST_PROFILES_PATH, "conf/test_profiles.json");
+    public Path getTesterProfilesDir() {
+        String path = properties.getProperty("tester_profiles_dir", "~/tmp/tester_work/profiles");
+        return Paths.get(expandEnvironmentVariables(path));
     }
 
     /**

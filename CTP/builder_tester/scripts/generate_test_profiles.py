@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-Generate test_profiles.json from latest.json test statistics.
+DEBUG/ANALYSIS TOOL: Generate test profile report from WAL statistics.
 
-This script analyzes historical test statistics and classifies tests into
-NORMAL, HEAVY, or EXTREME categories based on their resource consumption
-ratios relative to global means.
+NOTE: This script is NOT required for production use. The Builder automatically
+loads profiles from the Tester's WAL system (latest.json.gz) and computes
+NORMAL/HEAVY/EXTREME classifications dynamically using HeavyProfiler.java.
+
+Use this script for:
+- Debugging: Inspect which tests are classified as HEAVY/EXTREME
+- Analysis: Validate classification thresholds before deployment
+- One-time reports: Generate human-readable classification summaries
+
+The Builder does NOT use the output file - it reads WAL stats directly.
 
 Classification Algorithm:
 - Compute global means for CPU, memory, I/O, and IOPS
@@ -18,7 +25,13 @@ Usage:
     python generate_test_profiles.py [--input latest.json] [--output test_profiles.json]
 
 Example:
-    python scripts/generate_test_profiles.py --input todelete/latest.json --output conf/test_profiles.json
+    # Analyze current WAL stats
+    python scripts/generate_test_profiles.py \\
+        --input ~/tmp/tester_work/profiles/latest.json.gz \\
+        --output /tmp/profile_report.json
+    
+    # Inspect EXTREME tests
+    cat /tmp/profile_report.json | jq '.profiles[] | select(.heavyClass == "EXTREME")'
 """
 
 import argparse

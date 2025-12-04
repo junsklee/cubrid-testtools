@@ -2359,12 +2359,12 @@ public class BuilderTask {
                                                      Set<String> testersUsed) {
         taskLogger.info("[Smart Scheduling] Initializing scheduler...");
 
-        // Load test profiles for heavy test classification
-        String profilesPath = config.getTestProfilesPath();
-        TestProfileLoader profileLoader = new TestProfileLoader(
-            java.nio.file.Paths.get(profilesPath),
-            java.nio.file.Paths.get(config.getWorkDir(), "latest.json.gz")
-        );
+        // Load test profiles for heavy test classification from Tester's WAL system
+        // The WAL system exports latest.json.gz every 5 minutes with all test statistics
+        java.nio.file.Path walStatsPath = config.getTesterProfilesDir().resolve("latest.json.gz");
+        taskLogger.info("[Smart Scheduling] Loading profiles from WAL stats: " + walStatsPath);
+        
+        TestProfileLoader profileLoader = new TestProfileLoader(walStatsPath);
         Map<String, TestProfile> testProfiles = profileLoader.load();
         taskLogger.info("[Smart Scheduling] Loaded " + testProfiles.size() + " test profiles");
         taskLogger.info("[Smart Scheduling] " + HeavyProfiler.summarize(testProfiles));

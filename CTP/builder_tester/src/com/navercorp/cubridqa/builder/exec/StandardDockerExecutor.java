@@ -91,9 +91,10 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 metricsBuilder, startNs, "docker", null);
         }
 
-        // Ensure shell testcases repository is on the requested branch from preferred remote
+        // Ensure shell testcases repository is on the requested branch (once per request)
         try {
-            shellTcSync.sync(testLogger);
+            String requestId = RequestContext.getRequestId();
+            shellTcSync.syncOncePerRequest(testLogger, requestId);
         } catch (Exception e) {
             testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
         }

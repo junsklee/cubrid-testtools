@@ -159,9 +159,10 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             throw e;  // Let the calling method handle fallback
         }
         
-        // Ensure shell testcases repository is on the requested branch
+        // Ensure shell testcases repository is on the requested branch (once per request)
         try {
-            shellTcSync.sync(testLogger);
+            String requestId = RequestContext.getRequestId();
+            shellTcSync.syncOncePerRequest(testLogger, requestId);
         } catch (Exception e) {
             testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
         }
