@@ -147,7 +147,7 @@ public class Tester {
         
         // Initialize TestStatsStore for prediction and scheduling
         long snapshotIntervalSeconds = config.getLongOrDefault("stats.snapshot_interval_seconds", 300L);
-        this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds, walWriter, manifest, walDir);
+        this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds, walWriter, manifest, walDir, config);
 
         // Measure node capacity for health endpoint (with config for customizable IOPS)
         // Moved up before TestOrchestrator so it can be passed in

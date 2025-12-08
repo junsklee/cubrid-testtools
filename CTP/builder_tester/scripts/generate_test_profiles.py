@@ -14,8 +14,8 @@ Use this script for:
 The Builder does NOT use the output file - it reads WAL stats directly.
 
 Classification Algorithm:
-- Compute global means for CPU, memory, I/O, and IOPS
-- For each test, compute ratios: test_metric / global_mean
+- Compute global means for CPU, memory, I/O, and IOPS.
+- For each test, compute ratios: avg_metric / global_mean
 - Classify based on max ratio across all dimensions:
   - ratio < 2.0 → NORMAL
   - 2.0 <= ratio < 4.0 → HEAVY
@@ -38,6 +38,7 @@ import argparse
 import gzip
 import json
 import sys
+import os
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -48,6 +49,14 @@ EXTREME_THRESHOLD = 4.0
 
 # Minimum observations for reliable classification
 MIN_OBSERVATIONS = 3
+
+# Default peak blending weights (set to 0 to classify on means; peaks still parsed/output)
+DEFAULT_PEAK_WEIGHTS = {
+    "cpu": 0.0,
+    "mem": 0.0,
+    "io": 0.0,
+    "iops": 0.0,
+}
 
 
 class TestStats:
@@ -64,18 +73,22 @@ class TestStats:
         # CPU
         cpu_data = data.get('cpu_pct', {})
         self.cpu_pct_avg = cpu_data.get('avg', cpu_data.get('mean', 50.0))
+        self.cpu_pct_peak = cpu_data.get('peak', cpu_data.get('p95', self.cpu_pct_avg))
         
         # Memory
         mem_data = data.get('mem_mb', {})
         self.mem_mb_avg = mem_data.get('avg', mem_data.get('mean', 512.0))
+        self.mem_mb_peak = mem_data.get('peak', mem_data.get('p95', self.mem_mb_avg))
         
         # I/O
         io_data = data.get('io_mb_s', {})
         self.io_mb_s_avg = io_data.get('avg', io_data.get('mean', 10.0))
+        self.io_mb_s_peak = io_data.get('peak', self.io_mb_s_avg)
         
         # IOPS
         iops_data = data.get('iops', {})
         self.iops_avg = iops_data.get('avg', iops_data.get('mean', 200.0))
+        self.iops_peak = iops_data.get('peak', self.iops_avg)
 
 
 class GlobalStats:
@@ -95,7 +108,9 @@ class TestProfile:
     def __init__(self, test_key: str, heavy_class: str, dominant_dim: str,
                  cpu_ratio: float, mem_ratio: float, io_ratio: float, iops_ratio: float,
                  predicted_duration_ms: int, avg_cpu_pct: float, avg_mem_mb: float,
-                 avg_io_mb_s: float, avg_iops: float):
+                 avg_io_mb_s: float, avg_iops: float,
+                 eff_cpu_pct: float, eff_mem_mb: float, eff_io_mb_s: float, eff_iops: float,
+                 peak_cpu_pct: float, peak_mem_mb: float, peak_io_mb_s: float, peak_iops: float):
         self.test_key = test_key
         self.heavy_class = heavy_class
         self.dominant_dim = dominant_dim
@@ -108,6 +123,14 @@ class TestProfile:
         self.avg_mem_mb = avg_mem_mb
         self.avg_io_mb_s = avg_io_mb_s
         self.avg_iops = avg_iops
+        self.eff_cpu_pct = eff_cpu_pct
+        self.eff_mem_mb = eff_mem_mb
+        self.eff_io_mb_s = eff_io_mb_s
+        self.eff_iops = eff_iops
+        self.peak_cpu_pct = peak_cpu_pct
+        self.peak_mem_mb = peak_mem_mb
+        self.peak_io_mb_s = peak_io_mb_s
+        self.peak_iops = peak_iops
     
     def to_dict(self) -> dict:
         return {
@@ -122,17 +145,29 @@ class TestProfile:
             "avgCpuPct": round(self.avg_cpu_pct, 2),
             "avgMemMb": round(self.avg_mem_mb, 2),
             "avgIoMbPerSec": round(self.avg_io_mb_s, 2),
-            "avgIops": round(self.avg_iops, 2)
+            "avgIops": round(self.avg_iops, 2),
+            "effectiveCpuPct": round(self.eff_cpu_pct, 2),
+            "effectiveMemMb": round(self.eff_mem_mb, 2),
+            "effectiveIoMbPerSec": round(self.eff_io_mb_s, 2),
+            "effectiveIops": round(self.eff_iops, 2),
+            "peakCpuPct": round(self.peak_cpu_pct, 2),
+            "peakMemMb": round(self.peak_mem_mb, 2),
+            "peakIoMbPerSec": round(self.peak_io_mb_s, 2),
+            "peakIops": round(self.peak_iops, 2)
         }
 
 
 def load_json(filepath: str) -> dict:
     """Load JSON file, handling gzip compression."""
-    if filepath.endswith('.gz'):
-        with gzip.open(filepath, 'rt', encoding='utf-8') as f:
+    path = filepath
+    # If caller passed latest.json but a .gz exists beside it, prefer the fresher .gz
+    if not filepath.endswith('.gz') and os.path.exists(filepath + '.gz'):
+        path = filepath + '.gz'
+    if path.endswith('.gz'):
+        with gzip.open(path, 'rt', encoding='utf-8') as f:
             return json.load(f)
     else:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
 
@@ -161,8 +196,13 @@ def parse_test_stats(data: dict) -> List[TestStats]:
     return stats
 
 
-def compute_global_stats(all_stats: List[TestStats], min_obs: int = MIN_OBSERVATIONS) -> GlobalStats:
-    """Compute global means from test statistics."""
+def blend_with_peak(avg: float, peak: float, weight: float) -> float:
+    """Blend average with peak using a configurable weight."""
+    return avg + weight * max(0.0, peak - avg)
+
+
+def compute_global_stats(all_stats: List[TestStats], peak_weights: dict, min_obs: int = MIN_OBSERVATIONS) -> GlobalStats:
+    """Compute global effective means from test statistics."""
     if not all_stats:
         print("Warning: No test stats provided, using defaults", file=sys.stderr)
         return GlobalStats(50.0, 512.0, 10.0, 200.0, 0)
@@ -174,10 +214,10 @@ def compute_global_stats(all_stats: List[TestStats], min_obs: int = MIN_OBSERVAT
         print(f"Warning: No tests with >= {min_obs} observations, using all tests", file=sys.stderr)
         valid_stats = all_stats
     
-    sum_cpu = sum(s.cpu_pct_avg for s in valid_stats)
-    sum_mem = sum(s.mem_mb_avg for s in valid_stats)
-    sum_io = sum(s.io_mb_s_avg for s in valid_stats)
-    sum_iops = sum(s.iops_avg for s in valid_stats)
+    sum_cpu = sum(blend_with_peak(s.cpu_pct_avg, s.cpu_pct_peak, peak_weights["cpu"]) for s in valid_stats)
+    sum_mem = sum(blend_with_peak(s.mem_mb_avg, s.mem_mb_peak, peak_weights["mem"]) for s in valid_stats)
+    sum_io = sum(blend_with_peak(s.io_mb_s_avg, s.io_mb_s_peak, peak_weights["io"]) for s in valid_stats)
+    sum_iops = sum(blend_with_peak(s.iops_avg, s.iops_peak, peak_weights["iops"]) for s in valid_stats)
     count = len(valid_stats)
     
     return GlobalStats(
@@ -211,14 +251,19 @@ def get_dominant_dimension(cpu_r: float, mem_r: float, io_r: float, iops_r: floa
     return max_dim if max_ratio >= HEAVY_THRESHOLD else "NONE", max_ratio
 
 
-def compute_profile(stats: TestStats, global_stats: GlobalStats) -> TestProfile:
+def compute_profile(stats: TestStats, global_stats: GlobalStats, peak_weights: dict) -> TestProfile:
     """Compute a test profile from stats."""
     EPSILON = 0.001
     
-    cpu_ratio = stats.cpu_pct_avg / max(EPSILON, global_stats.mean_cpu)
-    mem_ratio = stats.mem_mb_avg / max(EPSILON, global_stats.mean_mem)
-    io_ratio = stats.io_mb_s_avg / max(EPSILON, global_stats.mean_io)
-    iops_ratio = stats.iops_avg / max(EPSILON, global_stats.mean_iops)
+    eff_cpu = blend_with_peak(stats.cpu_pct_avg, stats.cpu_pct_peak, peak_weights["cpu"])
+    eff_mem = blend_with_peak(stats.mem_mb_avg, stats.mem_mb_peak, peak_weights["mem"])
+    eff_io = blend_with_peak(stats.io_mb_s_avg, stats.io_mb_s_peak, peak_weights["io"])
+    eff_iops = blend_with_peak(stats.iops_avg, stats.iops_peak, peak_weights["iops"])
+
+    cpu_ratio = eff_cpu / max(EPSILON, global_stats.mean_cpu)
+    mem_ratio = eff_mem / max(EPSILON, global_stats.mean_mem)
+    io_ratio = eff_io / max(EPSILON, global_stats.mean_io)
+    iops_ratio = eff_iops / max(EPSILON, global_stats.mean_iops)
     
     dominant_dim, max_ratio = get_dominant_dimension(cpu_ratio, mem_ratio, io_ratio, iops_ratio)
     heavy_class = classify_ratio(max_ratio)
@@ -235,14 +280,23 @@ def compute_profile(stats: TestStats, global_stats: GlobalStats) -> TestProfile:
         avg_cpu_pct=stats.cpu_pct_avg,
         avg_mem_mb=stats.mem_mb_avg,
         avg_io_mb_s=stats.io_mb_s_avg,
-        avg_iops=stats.iops_avg
+        avg_iops=stats.iops_avg,
+        eff_cpu_pct=eff_cpu,
+        eff_mem_mb=eff_mem,
+        eff_io_mb_s=eff_io,
+        eff_iops=eff_iops,
+        peak_cpu_pct=stats.cpu_pct_peak,
+        peak_mem_mb=stats.mem_mb_peak,
+        peak_io_mb_s=stats.io_mb_s_peak,
+        peak_iops=stats.iops_peak
     )
 
 
 def generate_profiles(input_path: str, output_path: str, verbose: bool = True,
                       heavy_threshold: float = HEAVY_THRESHOLD,
                       extreme_threshold: float = EXTREME_THRESHOLD,
-                      min_observations: int = MIN_OBSERVATIONS):
+                      min_observations: int = MIN_OBSERVATIONS,
+                      peak_weights: dict = DEFAULT_PEAK_WEIGHTS):
     """Generate test profiles from statistics file."""
     
     # Use function-local thresholds
@@ -261,7 +315,7 @@ def generate_profiles(input_path: str, output_path: str, verbose: bool = True,
         print(f"Parsed {len(all_stats)} test statistics")
     
     # Compute global stats
-    global_stats = compute_global_stats(all_stats, local_min_obs)
+    global_stats = compute_global_stats(all_stats, peak_weights, local_min_obs)
     
     if verbose:
         print(f"\nGlobal statistics (from {global_stats.test_count} tests with >= {local_min_obs} observations):")
@@ -271,7 +325,7 @@ def generate_profiles(input_path: str, output_path: str, verbose: bool = True,
         print(f"  Mean IOPS: {global_stats.mean_iops:.2f}")
     
     # Compute profiles
-    profiles = [compute_profile(stats, global_stats) for stats in all_stats]
+    profiles = [compute_profile(stats, global_stats, peak_weights) for stats in all_stats]
     
     # Count classifications
     counts = defaultdict(int)
@@ -306,7 +360,8 @@ def generate_profiles(input_path: str, output_path: str, verbose: bool = True,
         "thresholds": {
             "heavyRatio": local_heavy,
             "extremeRatio": local_extreme,
-            "minObservations": local_min_obs
+            "minObservations": local_min_obs,
+            "peakWeights": peak_weights
         },
         "summary": {
             "normal": counts["NORMAL"],
@@ -372,6 +427,30 @@ def main():
         default=MIN_OBSERVATIONS,
         help=f'Minimum observations for reliable classification (default: {MIN_OBSERVATIONS})'
     )
+    parser.add_argument(
+        '--peak-weight-cpu',
+        type=float,
+        default=DEFAULT_PEAK_WEIGHTS["cpu"],
+        help=f'Peak blend weight for CPU (default: {DEFAULT_PEAK_WEIGHTS["cpu"]})'
+    )
+    parser.add_argument(
+        '--peak-weight-mem',
+        type=float,
+        default=DEFAULT_PEAK_WEIGHTS["mem"],
+        help=f'Peak blend weight for memory (default: {DEFAULT_PEAK_WEIGHTS["mem"]})'
+    )
+    parser.add_argument(
+        '--peak-weight-io',
+        type=float,
+        default=DEFAULT_PEAK_WEIGHTS["io"],
+        help=f'Peak blend weight for IO MB/s (default: {DEFAULT_PEAK_WEIGHTS["io"]})'
+    )
+    parser.add_argument(
+        '--peak-weight-iops',
+        type=float,
+        default=DEFAULT_PEAK_WEIGHTS["iops"],
+        help=f'Peak blend weight for IOPS (default: {DEFAULT_PEAK_WEIGHTS["iops"]})'
+    )
     
     args = parser.parse_args()
     
@@ -382,7 +461,13 @@ def main():
             verbose=not args.quiet,
             heavy_threshold=args.heavy_threshold,
             extreme_threshold=args.extreme_threshold,
-            min_observations=args.min_observations
+            min_observations=args.min_observations,
+            peak_weights={
+                "cpu": max(0.0, args.peak_weight_cpu),
+                "mem": max(0.0, args.peak_weight_mem),
+                "io": max(0.0, args.peak_weight_io),
+                "iops": max(0.0, args.peak_weight_iops),
+            }
         )
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -397,4 +482,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

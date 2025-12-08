@@ -28,6 +28,13 @@ public class PredictorTest {
         .netMbPerSec(125.0)
         .build();
 
+    // Mirror Predictor's blending weights for peak-aware estimates
+    private static final double PEAK_BLEND_CPU_MAX = 0.40;
+    private static final double PEAK_BLEND_MEM_MAX = 0.60;
+    private static final double PEAK_BLEND_IO_MAX = 0.50;
+    private static final double PEAK_BLEND_IOPS_MAX = 0.50;
+    private static final double PEAK_BLEND_NET_MAX = 0.40;
+
     public static void main(String[] args) {
         System.out.println("=== PredictorTest Suite ===\n");
 
@@ -51,9 +58,19 @@ public class PredictorTest {
 
         PredictedDemand demand = predictor.predict(TEST_KEY, stats, CONTEXT, HARDWARE);
 
+        double confidence = confidence(stats.getObservationCount());
+        double expectedCpu = blend(120.0, 144.0, confidence, PEAK_BLEND_CPU_MAX);
+        double expectedMem = blend(2048.0, 2048.0 * 1.4, confidence, PEAK_BLEND_MEM_MAX);
+        double expectedIo = blend(12.0, 12.0, confidence, PEAK_BLEND_IO_MAX);
+        double expectedIops = blend(250.0, 250.0, confidence, PEAK_BLEND_IOPS_MAX);
+        double expectedNet = blend(5.5, 5.5, confidence, PEAK_BLEND_NET_MAX);
+
         assert Math.abs(demand.getTpredMs() - 40_000) <= 1 : "EWMA should be 40s without inflation";
-        assert Math.abs(demand.getCpuPct() - 120.0) < 0.001 : "CPU mean should be preserved";
-        assert Math.abs(demand.getMemMb() - 2048.0) < 0.001 : "Memory mean should be preserved";
+        assert Math.abs(demand.getCpuPct() - expectedCpu) < 0.001 : "CPU blend with peak should be applied";
+        assert Math.abs(demand.getMemMb() - expectedMem) < 0.001 : "Memory blend with peak should be applied";
+        assert Math.abs(demand.getIoMbPerSec() - expectedIo) < 0.001 : "IO should honor peak blend";
+        assert Math.abs(demand.getIops() - expectedIops) < 0.001 : "IOPS should honor peak blend";
+        assert Math.abs(demand.getNetMbPerSec() - expectedNet) < 0.001 : "Net should honor peak blend";
         assert demand.getConfidence() > 0.9 : "Confidence should be high after 60 observations";
 
         System.out.println("  ✓ Duration=" + demand.getTpredMs() + " ms, CPU=" + demand.getCpuPct()
@@ -70,16 +87,19 @@ public class PredictorTest {
         stats.addObservation(observation(TEST_KEY, 10_000, 60.0, 1024.0, Instant.now().minusSeconds(10)));
         stats.addObservation(observation(TEST_KEY, 20_000, 60.0, 1024.0, Instant.now().minusSeconds(5)));
 
-        // Expected EWMA after two observations (alpha=0.3): ~13,000 ms
+        double conf = confidence(stats.getObservationCount());
+        double margin = 1.0 + 0.25 * (1.0 - conf);
         double baseEwma = stats.getDurationEwmaMs();
-        double confidence = 1.0 - Math.exp(-stats.getObservationCount() / 20.0);
-        double margin = 1.0 + 0.25 * (1.0 - confidence);
-        long expectedDuration = Math.round(baseEwma * margin);
+
+        double expectedDuration = Math.round(baseEwma * margin);
+        double expectedCpu = blend(60.0, 72.0, conf, PEAK_BLEND_CPU_MAX) * margin;
+        double expectedMem = blend(1024.0, 1024.0 * 1.4, conf, PEAK_BLEND_MEM_MAX) * margin;
 
         PredictedDemand demand = predictor.predict(TEST_KEY, stats, CONTEXT, HARDWARE);
-        assert demand.getTpredMs() == expectedDuration :
+        assert demand.getTpredMs() == (long) expectedDuration :
             "Duration should include safety margin (" + expectedDuration + "ms)";
-        assert demand.getCpuPct() > 60.0 : "CPU should be inflated when confidence is low";
+        assert Math.abs(demand.getCpuPct() - expectedCpu) < 0.001 : "CPU should include peak blend and safety margin";
+        assert Math.abs(demand.getMemMb() - expectedMem) < 0.001 : "Mem should include peak blend and safety margin";
         assert demand.getConfidence() < 0.2 : "Confidence should be low with only two observations";
 
         System.out.println("  ✓ Base EWMA=" + Math.round(baseEwma) + " ms → Inflated=" + demand.getTpredMs() + " ms");
@@ -125,5 +145,20 @@ public class PredictorTest {
             .metricsComplete(true)
             .timestamp(timestamp)
             .build();
+    }
+
+    private static double blend(double mean, double peak, double confidence, double maxBlend) {
+        if (peak <= 0.0 || peak <= mean) {
+            return mean;
+        }
+        double weight = Math.max(0.0, Math.min(maxBlend, (1.0 - confidence) * maxBlend));
+        return mean + (peak - mean) * weight;
+    }
+
+    private static double confidence(int count) {
+        if (count <= 0) {
+            return 0.0;
+        }
+        return 1.0 - Math.exp(-count / 20.0);
     }
 }

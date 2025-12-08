@@ -11,10 +11,10 @@ import java.util.logging.Logger;
  * <p>The profiler analyzes test stats to classify tests into NORMAL, HEAVY, or EXTREME
  * categories based on their resource consumption ratios relative to global means.</p>
  *
- * <p>Classification algorithm:
+ * <p>Classification algorithm (mean-based):
  * <ol>
- *   <li>Compute global means for CPU, memory, I/O, and IOPS across all tests</li>
- *   <li>For each test, compute ratios: test_metric / global_mean</li>
+ *   <li>Compute global means for CPU, memory, I/O, and IOPS across all tests.</li>
+ *   <li>For each test, compute ratios: avg_metric / global_mean.</li>
  *   <li>Classify based on max ratio:
  *       <ul>
  *         <li>ratio &lt; 2.0 → NORMAL</li>
@@ -22,7 +22,7 @@ import java.util.logging.Logger;
  *         <li>ratio ≥ 4.0 → EXTREME</li>
  *       </ul>
  *   </li>
- *   <li>Identify dominant dimension (argmax of ratios)</li>
+ *   <li>Identify dominant dimension (argmax of ratios).</li>
  * </ol>
  * </p>
  */
@@ -32,6 +32,12 @@ public class HeavyProfiler {
 
     // Minimum value to avoid division by zero
     private static final double EPSILON = 0.001;
+
+    // Peak blending weights (set to zero to classify on means only; peaks still parsed/stored)
+    private static final double PEAK_WEIGHT_CPU = 0.0;
+    private static final double PEAK_WEIGHT_MEM = 0.0;
+    private static final double PEAK_WEIGHT_IO = 0.0;
+    private static final double PEAK_WEIGHT_IOPS = 0.0;
 
     /**
      * Global statistics computed from all test data.
@@ -65,19 +71,28 @@ public class HeavyProfiler {
         public final String testKey;
         public final long durationEwmaMs;
         public final double cpuPctAvg;
+        public final double cpuPctPeak;
         public final double memMbAvg;
+        public final double memMbPeak;
         public final double ioMbPerSecAvg;
+        public final double ioMbPerSecPeak;
         public final double iopsAvg;
+        public final double iopsPeak;
         public final int observationCount;
 
         public RawTestStats(String testKey, long durationEwmaMs, double cpuPctAvg, double memMbAvg,
-                           double ioMbPerSecAvg, double iopsAvg, int observationCount) {
+                           double ioMbPerSecAvg, double iopsAvg, int observationCount,
+                           double cpuPctPeak, double memMbPeak, double ioMbPerSecPeak, double iopsPeak) {
             this.testKey = testKey;
             this.durationEwmaMs = durationEwmaMs;
             this.cpuPctAvg = cpuPctAvg;
+            this.cpuPctPeak = cpuPctPeak;
             this.memMbAvg = memMbAvg;
+            this.memMbPeak = memMbPeak;
             this.ioMbPerSecAvg = ioMbPerSecAvg;
+            this.ioMbPerSecPeak = ioMbPerSecPeak;
             this.iopsAvg = iopsAvg;
+            this.iopsPeak = iopsPeak;
             this.observationCount = observationCount;
         }
     }
@@ -194,6 +209,16 @@ public class HeavyProfiler {
                 .build();
     }
 
+    private double blend(double mean, double peak, double weight) {
+        if (weight <= 0.0) {
+            return mean;
+        }
+        if (peak <= 0.0 || peak <= mean) {
+            return mean;
+        }
+        return mean + weight * (peak - mean);
+    }
+
     /**
      * Parses raw test stats from a JSON object (latest.json format).
      *
@@ -230,33 +255,42 @@ public class HeavyProfiler {
 
             // CPU
             double cpuPctAvg = 0.0;
+            double cpuPctPeak = 0.0;
             if (json.has("cpu_pct")) {
                 JSONObject cpu = json.getJSONObject("cpu_pct");
                 cpuPctAvg = cpu.optDouble("avg", cpu.optDouble("mean", 50.0));
+                cpuPctPeak = cpu.optDouble("peak", cpu.optDouble("p95", cpuPctAvg));
             }
 
             // Memory
             double memMbAvg = 0.0;
+            double memMbPeak = 0.0;
             if (json.has("mem_mb")) {
                 JSONObject mem = json.getJSONObject("mem_mb");
                 memMbAvg = mem.optDouble("avg", mem.optDouble("mean", 512.0));
+                memMbPeak = mem.optDouble("peak", mem.optDouble("p95", memMbAvg));
             }
 
             // I/O
             double ioMbPerSecAvg = 0.0;
+            double ioMbPerSecPeak = 0.0;
             if (json.has("io_mb_s")) {
                 JSONObject io = json.getJSONObject("io_mb_s");
                 ioMbPerSecAvg = io.optDouble("avg", io.optDouble("mean", 10.0));
+                ioMbPerSecPeak = io.optDouble("peak", ioMbPerSecAvg);
             }
 
             // IOPS
             double iopsAvg = 0.0;
+            double iopsPeak = 0.0;
             if (json.has("iops")) {
                 JSONObject iops = json.getJSONObject("iops");
                 iopsAvg = iops.optDouble("avg", iops.optDouble("mean", 200.0));
+                iopsPeak = iops.optDouble("peak", iopsAvg);
             }
 
-            return new RawTestStats(testKey, durationEwmaMs, cpuPctAvg, memMbAvg, ioMbPerSecAvg, iopsAvg, observationCount);
+            return new RawTestStats(testKey, durationEwmaMs, cpuPctAvg, memMbAvg, ioMbPerSecAvg, iopsAvg, observationCount,
+                    cpuPctPeak, memMbPeak, ioMbPerSecPeak, iopsPeak);
 
         } catch (Exception e) {
             logger.warning("Failed to parse test stats for " + testKey + ": " + e.getMessage());
@@ -356,6 +390,3 @@ public class HeavyProfiler {
         );
     }
 }
-
-
-

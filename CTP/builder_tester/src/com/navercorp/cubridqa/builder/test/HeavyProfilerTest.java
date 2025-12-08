@@ -132,9 +132,9 @@ public class HeavyProfilerTest {
         HeavyProfiler profiler = new HeavyProfiler();
 
         List<HeavyProfiler.RawTestStats> stats = Arrays.asList(
-                new HeavyProfiler.RawTestStats("test1", 30000, 50.0, 500.0, 20.0, 5000.0, 10),
-                new HeavyProfiler.RawTestStats("test2", 60000, 100.0, 1000.0, 40.0, 10000.0, 10),
-                new HeavyProfiler.RawTestStats("test3", 45000, 75.0, 750.0, 30.0, 7500.0, 10)
+                new HeavyProfiler.RawTestStats("test1", 30000, 50.0, 500.0, 20.0, 5000.0, 10, 60.0, 700.0, 35.0, 6000.0),
+                new HeavyProfiler.RawTestStats("test2", 60000, 100.0, 1000.0, 40.0, 10000.0, 10, 120.0, 1400.0, 80.0, 12000.0),
+                new HeavyProfiler.RawTestStats("test3", 45000, 75.0, 750.0, 30.0, 7500.0, 10, 90.0, 900.0, 50.0, 9000.0)
         );
 
         HeavyProfiler.GlobalStats global = profiler.computeGlobalStats(stats);
@@ -157,7 +157,8 @@ public class HeavyProfilerTest {
         
         // Test that uses 2x CPU relative to mean -> HEAVY, CPU dominant
         HeavyProfiler.RawTestStats stats = new HeavyProfiler.RawTestStats(
-                "shell/test/heavy.sh", 45000, 100.0, 500.0, 20.0, 5000.0, 10);
+                "shell/test/heavy.sh", 45000, 100.0, 500.0, 20.0, 5000.0, 10,
+                120.0, 600.0, 30.0, 6000.0);
 
         TestProfile profile = profiler.profileTest(stats, global);
 
@@ -175,9 +176,9 @@ public class HeavyProfilerTest {
         HeavyProfiler profiler = new HeavyProfiler();
 
         List<HeavyProfiler.RawTestStats> stats = Arrays.asList(
-                new HeavyProfiler.RawTestStats("normal", 30000, 50.0, 500.0, 10.0, 200.0, 10),   // All ratios ~1.0
-                new HeavyProfiler.RawTestStats("heavy_io", 60000, 50.0, 500.0, 60.0, 200.0, 10), // IO = 6x mean
-                new HeavyProfiler.RawTestStats("extreme_cpu", 90000, 250.0, 500.0, 10.0, 200.0, 10) // CPU = 5x mean
+                new HeavyProfiler.RawTestStats("normal", 30000, 50.0, 500.0, 10.0, 200.0, 10, 60.0, 600.0, 15.0, 250.0),   // All ratios ~1.0
+                new HeavyProfiler.RawTestStats("heavy_io", 60000, 50.0, 500.0, 60.0, 200.0, 10, 55.0, 520.0, 120.0, 220.0), // IO = ~6x mean effective
+                new HeavyProfiler.RawTestStats("extreme_cpu", 90000, 250.0, 500.0, 10.0, 200.0, 10, 300.0, 520.0, 15.0, 210.0) // CPU = 5x mean
         );
 
         Map<String, TestProfile> profiles = profiler.profileAll(stats);

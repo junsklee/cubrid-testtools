@@ -36,6 +36,7 @@ public class TestStatsStoreTest {
         testSnapshotRoundTrip();
         testWalReplayWithoutSnapshot();
         testWalReplaySkipsOldEntries();
+        testLatestJsonCarriesPeaks();
 
         System.out.println("\n=== All TestStatsStore tests passed! ===");
     }
@@ -53,10 +54,20 @@ public class TestStatsStoreTest {
             store.start();
             try {
                 for (int i = 0; i < 3; i++) {
+                    double cpuPeak = 90.0 + (i * 5);
+                    double memPeak = 700.0 + (i * 25);
+                    double ioMean = 10.0 + i;
+                    double iopsMean = 200.0 + (i * 10);
+                    double netMean = 4.0 + (0.5 * i);
                     store.recordObservation(createObservation(
                         testKey,
                         10_000 + i * 1_000L,
-                        Instant.now().plusMillis(i * 100)
+                        Instant.now().plusMillis(i * 100),
+                        cpuPeak,
+                        memPeak,
+                        ioMean,
+                        iopsMean,
+                        netMean
                     ), null);
                 }
 
@@ -66,6 +77,11 @@ public class TestStatsStoreTest {
                 assert store.getTestCount() == 1 : "Unexpected number of tracked tests";
                 assert store.getTotalObservations() == 3 : "Total observations mismatch";
                 assert stats.getDurationEwmaMs() > 0.0 : "EWMA should be populated";
+                assert Math.abs(stats.getMaxCpuPctPeak() - 100.0) < 0.001 : "Max CPU peak not tracked";
+                assert Math.abs(stats.getMaxMemMbPeak() - 750.0) < 0.001 : "Max mem peak not tracked";
+                assert Math.abs(stats.getMaxIoMbPerSec() - 12.0) < 0.001 : "Max IO peak not tracked";
+                assert Math.abs(stats.getMaxIops() - 220.0) < 0.001 : "Max IOPS peak not tracked";
+                assert Math.abs(stats.getMaxNetMbPerSec() - 5.0) < 0.001 : "Max net peak not tracked";
 
                 System.out.println("  ✓ Aggregated 3 observations (EWMA=" + stats.getDurationEwmaMs() + " ms)");
             } finally {
@@ -109,6 +125,9 @@ public class TestStatsStoreTest {
                 TestStats restored = readerStore.getStats(testKey);
                 assert restored != null : "Snapshot data not restored";
                 assert restored.getObservationCount() == 1 : "Restored observation count mismatch";
+                assert restored.getMaxCpuPctPeak() == 110.0 : "Snapshot lost CPU peak";
+                assert restored.getMaxMemMbPeak() == 768.0 : "Snapshot lost mem peak";
+                assert restored.getMaxIoMbPerSec() == 12.0 : "Snapshot lost IO peak";
             } finally {
                 readerStore.stop();
                 walWriter2.stop();
@@ -204,7 +223,45 @@ public class TestStatsStoreTest {
         System.out.println();
     }
 
+    private static void testLatestJsonCarriesPeaks() {
+        System.out.println("Test 5: latest.json peak preservation");
+
+        String testKey = "shell/sql/export/test_peaks.sh";
+        TestStats stats = new TestStats(testKey);
+        stats.addObservation(createObservation(testKey, 5_000, Instant.now().minusSeconds(5), 75.0, 640.0, 8.0, 180.0, 3.5));
+        stats.addObservation(createObservation(testKey, 7_500, Instant.now(), 120.0, 1024.0, 14.0, 260.0, 6.5));
+
+        JSONObject latest = stats.toLatestJSON();
+        JSONObject cpu = latest.getJSONObject("cpu_pct");
+        JSONObject mem = latest.getJSONObject("mem_mb");
+        JSONObject io = latest.getJSONObject("io_mb_s");
+        JSONObject iops = latest.getJSONObject("iops");
+        JSONObject net = latest.getJSONObject("net_mb_s");
+
+        assert cpu.getDouble("peak") == 120.0 : "CPU peak missing from latest.json";
+        assert mem.getDouble("peak") == 1024.0 : "Mem peak missing from latest.json";
+        assert io.getDouble("peak") == 14.0 : "IO peak missing from latest.json";
+        assert iops.getDouble("peak") == 260.0 : "IOPS peak missing from latest.json";
+        assert net.getDouble("peak") == 6.5 : "Net peak missing from latest.json";
+
+        TestStats imported = TestStats.fromLatestJSON(testKey, latest);
+        assert imported.getMaxCpuPctPeak() == 120.0 : "CPU peak not restored from latest.json";
+        assert imported.getMaxMemMbPeak() == 1024.0 : "Mem peak not restored from latest.json";
+        assert imported.getMaxIoMbPerSec() == 14.0 : "IO peak not restored from latest.json";
+        assert imported.getMaxIops() == 260.0 : "IOPS peak not restored from latest.json";
+        assert imported.getMaxNetMbPerSec() == 6.5 : "Net peak not restored from latest.json";
+
+        System.out.println("  ✓ latest.json carries peak metrics round-trip");
+        System.out.println();
+    }
+
     private static TestObservation createObservation(String testKey, long durationMs, Instant timestamp) {
+        return createObservation(testKey, durationMs, timestamp, 110.0, 768.0, 12.0, 220.0, 5.0);
+    }
+
+    private static TestObservation createObservation(String testKey, long durationMs, Instant timestamp,
+                                                     double cpuPeak, double memPeak,
+                                                     double ioMean, double iopsMean, double netMean) {
         return TestObservation.builder()
             .testKey(testKey)
             .commit("commit-" + durationMs)
@@ -214,12 +271,12 @@ public class TestStatsStoreTest {
             .attempts(1)
             .durationMs(durationMs)
             .cpuPctMean(50.0)
-            .cpuPctPeak(110.0)
+            .cpuPctPeak(cpuPeak)
             .memMbMean(512.0)
-            .memMbPeak(768.0)
-            .ioMbPerSecMean(12.0)
-            .iopsMean(220.0)
-            .netMbPerSecMean(5.0)
+            .memMbPeak(memPeak)
+            .ioMbPerSecMean(ioMean)
+            .iopsMean(iopsMean)
+            .netMbPerSecMean(netMean)
             .bytesReadMb(64)
             .bytesWriteMb(32)
             .dockerImageCached(true)

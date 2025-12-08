@@ -40,6 +40,13 @@ public class TestStats {
     private double avgIopsMean;
     private double avgNetMbPerSecMean;
 
+    // Resource peaks (max observed across runs)
+    private double maxCpuPctPeak;
+    private double maxMemMbPeak;
+    private double maxIoMbPerSec;
+    private double maxIops;
+    private double maxNetMbPerSec;
+
     // Resource percentiles (P95)
     private final List<Double> cpuPeakWindow;
     private final List<Double> memPeakWindow;
@@ -66,6 +73,11 @@ public class TestStats {
         this.avgIoMbPerSecMean = 0.0;
         this.avgIopsMean = 0.0;
         this.avgNetMbPerSecMean = 0.0;
+        this.maxCpuPctPeak = 0.0;
+        this.maxMemMbPeak = 0.0;
+        this.maxIoMbPerSec = 0.0;
+        this.maxIops = 0.0;
+        this.maxNetMbPerSec = 0.0;
         this.cpuPeakWindow = new ArrayList<>();
         this.memPeakWindow = new ArrayList<>();
         this.failCount = 0;
@@ -104,6 +116,13 @@ public class TestStats {
         addToWindow(cpuPeakWindow, obs.getCpuPctPeak());
         addToWindow(memPeakWindow, obs.getMemMbPeak());
 
+        // Track absolute peaks (ignore sentinel/unknown values)
+        maxCpuPctPeak = updatePeak(maxCpuPctPeak, obs.getCpuPctPeak());
+        maxMemMbPeak = updatePeak(maxMemMbPeak, obs.getMemMbPeak());
+        maxIoMbPerSec = updatePeak(maxIoMbPerSec, obs.getIoMbPerSecMean());
+        maxIops = updatePeak(maxIops, obs.getIopsMean());
+        maxNetMbPerSec = updatePeak(maxNetMbPerSec, obs.getNetMbPerSecMean());
+
         // Update flakiness metrics
         totalAttempts += obs.getAttempts();
         if ("pass".equalsIgnoreCase(obs.getStatus())) {
@@ -129,6 +148,13 @@ public class TestStats {
             return newValue;
         }
         return ((observationCount - 1) * currentAvg + newValue) / observationCount;
+    }
+
+    private double updatePeak(double currentPeak, double newValue) {
+        if (newValue < 0.0) {
+            return currentPeak;
+        }
+        return Math.max(currentPeak, newValue);
     }
 
     private <T extends Number> void addToWindow(List<T> window, T value) {
@@ -200,6 +226,26 @@ public class TestStats {
         return avgNetMbPerSecMean;
     }
 
+    public double getMaxCpuPctPeak() {
+        return maxCpuPctPeak;
+    }
+
+    public double getMaxMemMbPeak() {
+        return maxMemMbPeak;
+    }
+
+    public double getMaxIoMbPerSec() {
+        return maxIoMbPerSec;
+    }
+
+    public double getMaxIops() {
+        return maxIops;
+    }
+
+    public double getMaxNetMbPerSec() {
+        return maxNetMbPerSec;
+    }
+
     public double getFailRate() {
         int total = passCount + failCount;
         return total == 0 ? 0.0 : (double) failCount / total;
@@ -256,6 +302,11 @@ public class TestStats {
         obj.put("avgIoMbPerSecMean", avgIoMbPerSecMean);
         obj.put("avgIopsMean", avgIopsMean);
         obj.put("avgNetMbPerSecMean", avgNetMbPerSecMean);
+        obj.put("maxCpuPctPeak", maxCpuPctPeak);
+        obj.put("maxMemMbPeak", maxMemMbPeak);
+        obj.put("maxIoMbPerSec", maxIoMbPerSec);
+        obj.put("maxIops", maxIops);
+        obj.put("maxNetMbPerSec", maxNetMbPerSec);
         obj.put("failCount", failCount);
         obj.put("passCount", passCount);
         obj.put("totalAttempts", totalAttempts);
@@ -280,11 +331,17 @@ public class TestStats {
         stats.avgIoMbPerSecMean = obj.getDouble("avgIoMbPerSecMean");
         stats.avgIopsMean = obj.getDouble("avgIopsMean");
         stats.avgNetMbPerSecMean = obj.getDouble("avgNetMbPerSecMean");
+        stats.maxCpuPctPeak = obj.optDouble("maxCpuPctPeak", 0.0);
+        stats.maxMemMbPeak = obj.optDouble("maxMemMbPeak", 0.0);
+        stats.maxIoMbPerSec = obj.optDouble("maxIoMbPerSec", 0.0);
+        stats.maxIops = obj.optDouble("maxIops", 0.0);
+        stats.maxNetMbPerSec = obj.optDouble("maxNetMbPerSec", 0.0);
         stats.failCount = obj.getInt("failCount");
         stats.passCount = obj.getInt("passCount");
         stats.totalAttempts = obj.getInt("totalAttempts");
         stats.dockerImageCachedCount = obj.getInt("dockerImageCachedCount");
         stats.packageCachedCount = obj.getInt("packageCachedCount");
+        stats.backfillPeaksIfMissing();
         return stats;
     }
 
@@ -310,27 +367,32 @@ public class TestStats {
         JSONObject cpu = new JSONObject();
         cpu.put("avg", avgCpuPctMean);
         cpu.put("p95", getCpuPctP95());
+        cpu.put("peak", bestPeak(maxCpuPctPeak, getCpuPctP95(), avgCpuPctMean));
         obj.put("cpu_pct", cpu);
 
         // Memory stats
         JSONObject mem = new JSONObject();
         mem.put("avg", avgMemMbMean);
         mem.put("p95", getMemMbP95());
+        mem.put("peak", bestPeak(maxMemMbPeak, getMemMbP95(), avgMemMbMean));
         obj.put("mem_mb", mem);
 
         // I/O stats
         JSONObject io = new JSONObject();
         io.put("avg", avgIoMbPerSecMean);
+        io.put("peak", bestPeak(maxIoMbPerSec, avgIoMbPerSecMean, 0.0));
         obj.put("io_mb_s", io);
 
         // IOPS stats
         JSONObject iops = new JSONObject();
         iops.put("avg", avgIopsMean);
+        iops.put("peak", bestPeak(maxIops, avgIopsMean, 0.0));
         obj.put("iops", iops);
 
         // Network stats
         JSONObject net = new JSONObject();
         net.put("avg", avgNetMbPerSecMean);
+        net.put("peak", bestPeak(maxNetMbPerSec, avgNetMbPerSecMean, 0.0));
         obj.put("net_mb_s", net);
 
         // Flakiness stats
@@ -361,30 +423,35 @@ public class TestStats {
         if (obj.has("cpu_pct")) {
             JSONObject cpu = obj.getJSONObject("cpu_pct");
             stats.avgCpuPctMean = cpu.optDouble("avg", 0.0);
+            stats.maxCpuPctPeak = cpu.optDouble("peak", 0.0);
         }
 
         // Memory stats
         if (obj.has("mem_mb")) {
             JSONObject mem = obj.getJSONObject("mem_mb");
             stats.avgMemMbMean = mem.optDouble("avg", 0.0);
+            stats.maxMemMbPeak = mem.optDouble("peak", 0.0);
         }
 
         // I/O stats
         if (obj.has("io_mb_s")) {
             JSONObject io = obj.getJSONObject("io_mb_s");
             stats.avgIoMbPerSecMean = io.optDouble("avg", 0.0);
+            stats.maxIoMbPerSec = io.optDouble("peak", 0.0);
         }
 
         // IOPS stats
         if (obj.has("iops")) {
             JSONObject iops = obj.getJSONObject("iops");
             stats.avgIopsMean = iops.optDouble("avg", 0.0);
+            stats.maxIops = iops.optDouble("peak", 0.0);
         }
 
         // Network stats
         if (obj.has("net_mb_s")) {
             JSONObject net = obj.getJSONObject("net_mb_s");
             stats.avgNetMbPerSecMean = net.optDouble("avg", 0.0);
+            stats.maxNetMbPerSec = net.optDouble("peak", 0.0);
         }
 
         // Flakiness stats - reconstruct from ratios
@@ -399,6 +466,33 @@ public class TestStats {
             stats.totalAttempts = Math.max(0, (int) Math.round(stats.observationCount * retryMean));
         }
 
+        stats.backfillPeaksIfMissing();
         return stats;
+    }
+
+    private void backfillPeaksIfMissing() {
+        if (maxCpuPctPeak <= 0.0) {
+            maxCpuPctPeak = bestPeak(maxCpuPctPeak, getCpuPctP95(), Math.max(avgCpuPctPeak, avgCpuPctMean));
+        }
+        if (maxMemMbPeak <= 0.0) {
+            maxMemMbPeak = bestPeak(maxMemMbPeak, getMemMbP95(), Math.max(avgMemMbPeak, avgMemMbMean));
+        }
+        if (maxIoMbPerSec <= 0.0) {
+            maxIoMbPerSec = bestPeak(maxIoMbPerSec, avgIoMbPerSecMean, 0.0);
+        }
+        if (maxIops <= 0.0) {
+            maxIops = bestPeak(maxIops, avgIopsMean, 0.0);
+        }
+        if (maxNetMbPerSec <= 0.0) {
+            maxNetMbPerSec = bestPeak(maxNetMbPerSec, avgNetMbPerSecMean, 0.0);
+        }
+    }
+
+    private double bestPeak(double primary, double secondary, double fallback) {
+        double candidate = primary;
+        if (candidate <= 0.0) {
+            candidate = secondary > 0.0 ? secondary : fallback;
+        }
+        return Math.max(0.0, candidate);
     }
 }

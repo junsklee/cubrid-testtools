@@ -20,6 +20,15 @@ This document describes the **implemented** architecture for tracking predicted 
 - ✅ NodeDirectory validates resource headroom before scheduling (10% safety margin)
 - ✅ Multi-layer protection against node oversubscription
 
+## New: Peak Resource Telemetry (Implemented)
+
+- Test observations now persist **per-run peaks** for CPU%, memory MB, I/O MB/s, IOPS, and net MB/s alongside averages and percentiles.
+- Peaks are carried through WAL → snapshot (`test_stats.snapshot.json.gz`) → `latest.json.gz`, so new nodes importing stats keep the maxima.
+- Benefits: schedulers can conservatively gate elephant tests on peak footprints while still using averages to pack mice; operators can debug bursty tests without replaying raw logs.
+- Backward compatibility: peak fields are optional on import; legacy snapshots and `latest.json.gz` still load with zeroed peaks.
+- Tuning: peak blending into predictions is configurable via `predictor_peak_blend_*` in `conf/builder.conf` (defaults now: cpu=0.45, mem=0.55, io=0.45, iops=0.45, net=0.35). The value represents the max fraction of the gap between mean and peak to blend in (scaled down as confidence rises). Lower if peak bias slows runs or increases queueing; raise (<=1.0) if spikes still overload nodes.
+  - Verbose example: `cpu_mean=80%`, `cpu_peak=140%`, confidence=0.5, `predictor_peak_blend_cpu_max=0.45`. Gap = 60. Blended add = `0.45 * (1 - 0.5) * 60 = 13.5`. Predicted CPU ≈ 80 + 13.5 = 93.5%. If the blend were 0.0 → 80%; if 1.0 → 110% (half the gap added because confidence=0.5).
+
 ## Simple Explanation: How Predictive Demand Tracking Works
 
 ### The Problem: "How Busy is This Server?"

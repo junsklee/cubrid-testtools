@@ -152,6 +152,10 @@ final class DockerStatsCollector {
         }
     }
 
+    private int sampleCount() {
+        return accumulator.snapshot().getSampleCount();
+    }
+
     private double parseCpu(String raw) {
         String cleaned = raw.replace("%", "").trim();
         if (cleaned.isEmpty()) {
@@ -405,4 +409,3 @@ final class DockerStatsCollector {
         }
     }
 }
-

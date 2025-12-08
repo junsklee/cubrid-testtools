@@ -113,6 +113,12 @@ public class BuilderConfig {
     private static final String HEAVY_IO_FACTOR = "heavy_io_factor";
     private static final String EXTREME_IO_CAPACITY_FRACTION = "extreme_io_capacity_fraction";
 
+    // Predictor configuration
+    private static final String PREDICTOR_PEAK_BLEND_CPU_MAX = "predictor_peak_blend_cpu_max";
+    private static final String PREDICTOR_PEAK_BLEND_MEM_MAX = "predictor_peak_blend_mem_max";
+    private static final String PREDICTOR_PEAK_BLEND_IO_MAX = "predictor_peak_blend_io_max";
+    private static final String PREDICTOR_PEAK_BLEND_IOPS_MAX = "predictor_peak_blend_iops_max";
+    private static final String PREDICTOR_PEAK_BLEND_NET_MAX = "predictor_peak_blend_net_max";
     private enum ShellTcOverlayMode { AUTO, ENABLED, DISABLED }
 
     private static final Object SHELL_TC_OVERLAY_LOCK = new Object();
@@ -1177,6 +1183,27 @@ public class BuilderConfig {
      */
     public double getExtremeIoCapacityFraction() {
         return Double.parseDouble(properties.getProperty(EXTREME_IO_CAPACITY_FRACTION, "0.5"));
+    }
+
+    // Predictor peak blending (weight of peak over mean; 0..1 range recommended)
+    public double getPredictorPeakBlendCpuMax() {
+        return Double.parseDouble(properties.getProperty(PREDICTOR_PEAK_BLEND_CPU_MAX, "0.40"));
+    }
+
+    public double getPredictorPeakBlendMemMax() {
+        return Double.parseDouble(properties.getProperty(PREDICTOR_PEAK_BLEND_MEM_MAX, "0.60"));
+    }
+
+    public double getPredictorPeakBlendIoMax() {
+        return Double.parseDouble(properties.getProperty(PREDICTOR_PEAK_BLEND_IO_MAX, "0.50"));
+    }
+
+    public double getPredictorPeakBlendIopsMax() {
+        return Double.parseDouble(properties.getProperty(PREDICTOR_PEAK_BLEND_IOPS_MAX, "0.50"));
+    }
+
+    public double getPredictorPeakBlendNetMax() {
+        return Double.parseDouble(properties.getProperty(PREDICTOR_PEAK_BLEND_NET_MAX, "0.40"));
     }
 
     @Override

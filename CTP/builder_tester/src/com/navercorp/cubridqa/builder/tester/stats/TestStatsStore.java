@@ -77,11 +77,33 @@ public class TestStatsStore {
      */
     public TestStatsStore(Path profilesDir, long snapshotIntervalSeconds,
                          WALSegmentWriter walWriter, WALManifest manifest, Path walDir) {
+        this(profilesDir, snapshotIntervalSeconds, walWriter, manifest, walDir, null);
+    }
+
+    /**
+     * Constructs a TestStatsStore with default snapshot interval.
+     *
+     * @param profilesDir Directory containing snapshot and WAL files
+     * @param walWriter   WAL segment writer (must be started separately)
+     * @param manifest    WAL manifest manager
+     * @param walDir      Directory containing WAL segments
+     */
+    public TestStatsStore(Path profilesDir, WALSegmentWriter walWriter,
+                         WALManifest manifest, Path walDir) {
+        this(profilesDir, DEFAULT_SNAPSHOT_INTERVAL_SECONDS, walWriter, manifest, walDir, null);
+    }
+
+    /**
+     * Constructs a new TestStatsStore with the given configuration and optional builder config.
+     */
+    public TestStatsStore(Path profilesDir, long snapshotIntervalSeconds,
+                         WALSegmentWriter walWriter, WALManifest manifest, Path walDir,
+                         com.navercorp.cubridqa.builder.BuilderConfig builderConfig) {
         this.profilesDir = profilesDir;
         this.snapshotPath = profilesDir.resolve(SNAPSHOT_FILE);
         this.walPath = profilesDir.resolve(WAL_FILE); // Legacy path, kept for backward compatibility
         this.snapshotIntervalSeconds = snapshotIntervalSeconds;
-        this.predictor = new Predictor();
+        this.predictor = new Predictor(builderConfig);
         this.walWriter = walWriter;
         this.manifest = manifest;
         this.walDir = walDir;
@@ -93,19 +115,6 @@ public class TestStatsStore {
             t.setDaemon(true);
             return t;
         });
-    }
-
-    /**
-     * Constructs a TestStatsStore with default snapshot interval.
-     * 
-     * @param profilesDir Directory containing snapshot and WAL files
-     * @param walWriter   WAL segment writer (must be started separately)
-     * @param manifest    WAL manifest manager
-     * @param walDir      Directory containing WAL segments
-     */
-    public TestStatsStore(Path profilesDir, WALSegmentWriter walWriter,
-                         WALManifest manifest, Path walDir) {
-        this(profilesDir, DEFAULT_SNAPSHOT_INTERVAL_SECONDS, walWriter, manifest, walDir);
     }
 
     /**
