@@ -6,11 +6,13 @@ import com.navercorp.cubridqa.builder.tester.HealthHandler;
 import com.navercorp.cubridqa.builder.tester.NodeCapacity;
 import com.navercorp.cubridqa.builder.tester.TestOrchestrator;
 import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
+import com.navercorp.cubridqa.builder.ramdisk.RamdiskManager;
 import org.json.JSONObject;
 
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.logging.Logger;
 
 /**
  * Smoke test to ensure the tester advertises the correct concurrency cap
@@ -57,7 +59,13 @@ public class HealthHandlerConcurrencyTest {
                 sampler
         );
 
-        HealthHandler handler = new HealthHandler(config, new HttpResponseWriter(), capacity, orchestrator, sampler);
+        RamdiskManager ramdiskManager = new RamdiskManager(config, Logger.getLogger("ramdisk-test"));
+        RamdiskManager.Resolution ramdiskResolution = ramdiskManager.resolveForTester(
+                config.getWorkDir(),
+                "log",
+                config.getTesterProfilesDir());
+
+        HealthHandler handler = new HealthHandler(config, new HttpResponseWriter(), capacity, orchestrator, sampler, ramdiskManager, ramdiskResolution);
         Method buildHealth = HealthHandler.class.getDeclaredMethod("buildHealthResponse");
         buildHealth.setAccessible(true);
 

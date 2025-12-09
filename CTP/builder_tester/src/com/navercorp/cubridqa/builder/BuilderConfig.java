@@ -31,6 +31,7 @@ public class BuilderConfig {
     private static final String MAX_CONCURRENT_TESTS = "max_concurrent_tests"; // Only valid in tester.conf
     private static final String MAX_CONCURRENT_TESTS_HEAVY_QUEUE = "max_concurrent_tests_heavy_queue";
     private static final String MAX_CONCURRENT_TESTS_POST_HEAVY = "max_concurrent_tests_post_heavy";
+    private static final String TESTER_PROFILES_DIR_KEY = "tester_profiles_dir";
     private static final String USE_DOCKER = "use_docker";
     private static final String USE_PREBUILT_DOCKER_IMAGES = "use_prebuilt_docker_images";
     private static final String DOCKER_BUILD_IMAGE = "docker_build_image";
@@ -527,6 +528,16 @@ public class BuilderConfig {
     
     public String getWorkDir() {
         return properties.getProperty(WORK_DIR, "/tmp/builder_work");
+    }
+
+    /**
+     * Override the resolved work directory at runtime.
+     * Useful when remapping to ramdisk for tester-only flows.
+     */
+    public void overrideWorkDir(String workDir) {
+        if (workDir != null && !workDir.trim().isEmpty()) {
+            properties.setProperty(WORK_DIR, workDir);
+        }
     }
     
     public int getTesterPort() {
@@ -1103,6 +1114,55 @@ public class BuilderConfig {
         return Double.parseDouble(properties.getProperty("io_safety_headroom_ratio", "0.15"));
     }
 
+    // Ramdisk configuration (tester-oriented)
+
+    public boolean isRamdiskEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("ramdisk.enabled", "false"));
+    }
+
+    public boolean isRamdiskTesterWorkEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("ramdisk.tester_work", "true"));
+    }
+
+    public boolean isRamdiskLogsEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("ramdisk.logs", "true"));
+    }
+
+    public boolean isRamdiskProfilesEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("ramdisk.profiles", "false"));
+    }
+
+    public boolean isRamdiskRejectWhenLow() {
+        return Boolean.parseBoolean(properties.getProperty("ramdisk.reject_when_low", "true"));
+    }
+
+    public boolean isCleanupWorkdirsAfterTest() {
+        return Boolean.parseBoolean(properties.getProperty("cleanup_workdirs_after_test", "false"));
+    }
+
+    public String getRamdiskRoot() {
+        return expandEnvironmentVariables(properties.getProperty("ramdisk.root", "/mnt/ramdisk"));
+    }
+
+    public long getRamdiskMinFreeBytes() {
+        String raw = properties.getProperty("ramdisk.min_free_gb", "4");
+        try {
+            double gb = Double.parseDouble(raw.trim());
+            return (long) Math.max(0, gb * 1024 * 1024 * 1024L);
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid ramdisk.min_free_gb: " + raw + ", using 4GB default.");
+            return 4L * 1024 * 1024 * 1024L;
+        }
+    }
+
+    public String getRamdiskFallbackRoot() {
+        String raw = properties.getProperty("ramdisk.fallback_root", "").trim();
+        if (raw.isEmpty()) {
+            return "";
+        }
+        return expandEnvironmentVariables(raw);
+    }
+
     // Elastic Overcommit Getters
     public double getSchedulingOvercommitCpu() {
         return Double.parseDouble(properties.getProperty(SCHEDULING_OVERCOMMIT_CPU, "1.0"));
@@ -1129,8 +1189,36 @@ public class BuilderConfig {
      * Default is "~/tmp/tester_work/profiles".
      */
     public Path getTesterProfilesDir() {
-        String path = properties.getProperty("tester_profiles_dir", "~/tmp/tester_work/profiles");
-        return Paths.get(expandEnvironmentVariables(path));
+        String raw = properties.getProperty(TESTER_PROFILES_DIR_KEY);
+        String defaultRaw = "~/tmp/tester_work/profiles";
+
+        // If unset or left at the placeholder, align to the current work_dir
+        if (raw == null || raw.trim().isEmpty() || raw.trim().equals(defaultRaw)) {
+            return Paths.get(getWorkDir()).resolve("profiles");
+        }
+
+        return Paths.get(expandEnvironmentVariables(raw));
+    }
+
+    /**
+     * Optional alternate profiles directory to use when ramdisk mode is active.
+     * Keeps ramdisk-specific performance profiles separate from disk profiles.
+     */
+    public Path getTesterProfilesDirRamdisk() {
+        String raw = properties.getProperty("tester_profiles_dir_ramdisk", "").trim();
+        if (raw.isEmpty()) {
+            return null;
+        }
+        return Paths.get(expandEnvironmentVariables(raw));
+    }
+
+    /**
+     * Override tester profiles directory at runtime.
+     */
+    public void overrideTesterProfilesDir(String profilesDir) {
+        if (profilesDir != null && !profilesDir.trim().isEmpty()) {
+            properties.setProperty(TESTER_PROFILES_DIR_KEY, profilesDir);
+        }
     }
 
     /**

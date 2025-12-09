@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import com.navercorp.cubridqa.builder.BuilderConfig;
 import com.navercorp.cubridqa.builder.tester.demand.UtilizationSnapshot;
+import com.navercorp.cubridqa.builder.ramdisk.RamdiskManager;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import java.io.BufferedReader;
@@ -33,15 +34,20 @@ public class HealthHandler implements HttpHandler {
     private final NodeCapacity nodeCapacity;
     private final TestOrchestrator testOrchestrator; // For running test count
     private final ActualSampler actualSampler; // For actual resource sampling
+    private final RamdiskManager ramdiskManager;
+    private final RamdiskManager.Resolution ramdiskResolution;
 
     public HealthHandler(BuilderConfig config, HttpResponseWriter responseWriter,
                          NodeCapacity nodeCapacity, TestOrchestrator testOrchestrator,
-                         ActualSampler actualSampler) {
+                         ActualSampler actualSampler, RamdiskManager ramdiskManager,
+                         RamdiskManager.Resolution ramdiskResolution) {
         this.config = config;
         this.responseWriter = responseWriter;
         this.nodeCapacity = nodeCapacity;
         this.testOrchestrator = testOrchestrator;
         this.actualSampler = actualSampler;
+        this.ramdiskManager = ramdiskManager;
+        this.ramdiskResolution = ramdiskResolution;
     }
 
     @Override
@@ -196,6 +202,22 @@ public class HealthHandler implements HttpHandler {
         List<String> packageList = listBuildPackages();
         packages.put("present", new JSONArray(packageList));
         response.put("packages", packages);
+
+        // Ramdisk (tester-only) status
+        if (ramdiskManager != null && ramdiskResolution != null) {
+            RamdiskManager.RamdiskStatus rs = ramdiskManager.sampleStatus();
+            JSONObject ramdisk = new JSONObject();
+            ramdisk.put("enabled", rs.isEnabled());
+            ramdisk.put("active", rs.isActive());
+            ramdisk.put("root", rs.getRoot());
+            ramdisk.put("free_bytes", rs.getFreeBytes());
+            ramdisk.put("total_bytes", rs.getTotalBytes());
+            ramdisk.put("reason", rs.getReason());
+            ramdisk.put("work_on_ramdisk", ramdiskResolution.isWorkOnRamdisk());
+            ramdisk.put("logs_on_ramdisk", ramdiskResolution.isLogsOnRamdisk());
+            ramdisk.put("profiles_on_ramdisk", ramdiskResolution.isProfilesOnRamdisk());
+            response.put("ramdisk", ramdisk);
+        }
 
         // Health flags
         JSONObject flags = new JSONObject();

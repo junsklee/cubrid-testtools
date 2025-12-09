@@ -4,6 +4,7 @@ import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.http.HttpUtils;
+import com.navercorp.cubridqa.builder.ramdisk.RamdiskManager;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -23,12 +24,14 @@ public class TestHandler implements HttpHandler {
     private final TestOrchestrator orchestrator;
     private final Logger logger;
     private final HttpResponseWriter responseWriter;
+    private final RamdiskManager ramdiskManager;
 
-    public TestHandler(Config config, TestOrchestrator orchestrator, Logger logger) {
+    public TestHandler(Config config, TestOrchestrator orchestrator, Logger logger, RamdiskManager ramdiskManager) {
         this.config = config;
         this.orchestrator = orchestrator;
         this.logger = logger;
         this.responseWriter = new HttpResponseWriter();
+        this.ramdiskManager = ramdiskManager;
     }
 
     @Override
@@ -69,9 +72,27 @@ public class TestHandler implements HttpHandler {
                        (request.has("requestId") ? " [" + request.optString("requestId") + "]" : ""));
             requestLogger.info("Build package: " + request.getString("buildPackage"));
 
+            // Enforce ramdisk free-space guard to avoid OOM from tmpfs exhaustion
+            if (ramdiskManager != null && config.isRamdiskEnabled() && config.isRamdiskRejectWhenLow()) {
+                RamdiskManager.RamdiskStatus rs = ramdiskManager.sampleStatus();
+                long free = rs.getFreeBytes();
+                long minFree = config.getRamdiskMinFreeBytes();
+                if (rs.isActive() && free < minFree) {
+                    String reason = "Ramdisk low space: free=" + free + "B, required_min=" + minFree + "B (reason=" + rs.getReason() + ")";
+                    requestLogger.warning(reason);
+                    responsePayload = new JSONObject()
+                        .put("status", "rejected")
+                        .put("error", reason);
+                    httpStatus = 503;
+                    // fall through to response sending below
+                }
+            }
+
             // Run test with retry using request logger (handles queueing and resource reservation)
             // This blocks until resources are available (or timeout)
-            responsePayload = orchestrator.runTestWithRetry(request, requestLogger);
+            if (responsePayload == null) {
+                responsePayload = orchestrator.runTestWithRetry(request, requestLogger);
+            }
             
             // Check for rejection (timeout waiting for resources)
             if ("rejected".equals(responsePayload.optString("status"))) {

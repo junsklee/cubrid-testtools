@@ -22,6 +22,7 @@ import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
 import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
+import com.navercorp.cubridqa.builder.ramdisk.RamdiskManager;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservationWriter;
 import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
 import com.navercorp.cubridqa.builder.tester.stats.WALManifest;
@@ -83,36 +84,65 @@ public class Tester {
     // Statistics store
     private final TestStatsStore testStatsStore;
     private final WALSegmentWriter walWriter;
+    private final RamdiskManager ramdiskManager;
+    private final RamdiskManager.Resolution ramdiskResolution;
 
     public Tester(Config config) throws IOException {
         this.config = config;
         this.logger = Logger.getLogger(Tester.class.getName());
         
+        // Determine default log root before any remapping
+        String logRootDir = "log"; // Default fallback
+        String projectRoot = System.getProperty("tester.project.root");
+        if (projectRoot != null) {
+            logRootDir = new File(projectRoot, "log").getAbsolutePath();
+        } else {
+            // Fallback: try to derive from typical project structure
+            try {
+                String userHome = System.getProperty("user.home");
+                String defaultProjectRoot = userHome + "/cubrid-testtools/CTP/builder_tester";
+                File projectLogDir = new File(defaultProjectRoot, "log");
+                if (projectLogDir.getParentFile().exists()) {
+                    logRootDir = projectLogDir.getAbsolutePath();
+                }
+            } catch (Exception e) {
+                logger.warning("Could not determine project log directory, using relative path: " + e.getMessage());
+            }
+        }
+
+        // Resolve ramdisk paths (tester-only)
+        this.ramdiskManager = new RamdiskManager(config, logger);
+        this.ramdiskResolution = ramdiskManager.resolveForTester(
+                config.getWorkDir(),
+                logRootDir,
+                config.getTesterProfilesDir());
+
+        // Apply resolved paths to config so downstream components see the remapped directories.
+        // If ramdisk is active and a dedicated profiles dir is configured, use it to keep
+        // ramdisk performance stats separate from disk-backed profiles.
+        Path resolvedProfilesDir = ramdiskResolution.getProfilesDir();
+        RamdiskManager.RamdiskStatus ramdiskStatus = ramdiskResolution.getStatus();
+        Path ramdiskSpecificProfiles = ramdiskStatus.isActive() ? config.getTesterProfilesDirRamdisk() : null;
+        if (ramdiskSpecificProfiles != null) {
+            resolvedProfilesDir = ramdiskSpecificProfiles;
+        }
+
+        config.overrideWorkDir(ramdiskResolution.getWorkDir().toString());
+        config.overrideTesterProfilesDir(resolvedProfilesDir.toString());
+
+        logger.info(String.format(
+                "Ramdisk status: enabled=%s active=%s root=%s free=%d total=%d reason=%s",
+                ramdiskStatus.isEnabled(), ramdiskStatus.isActive(), ramdiskStatus.getRoot(),
+                ramdiskStatus.getFreeBytes(), ramdiskStatus.getTotalBytes(), ramdiskStatus.getReason()));
+        logger.info(String.format("Tester paths -> work_dir=%s, logs=%s, profiles=%s",
+                ramdiskResolution.getWorkDir(), ramdiskResolution.getLogRoot(), resolvedProfilesDir));
+
         // Initialize request logging
         try {
-            // Determine project root directory for logs
-            String logRootDir = "log"; // Default fallback
-            String projectRoot = System.getProperty("tester.project.root");
-            if (projectRoot != null) {
-                logRootDir = new File(projectRoot, "log").getAbsolutePath();
-            } else {
-                // Fallback: try to derive from typical project structure
-                try {
-                    String userHome = System.getProperty("user.home");
-                    String defaultProjectRoot = userHome + "/cubrid-testtools/CTP/builder_tester";
-                    File projectLogDir = new File(defaultProjectRoot, "log");
-                    if (projectLogDir.getParentFile().exists()) {
-                        logRootDir = projectLogDir.getAbsolutePath();
-                    }
-                } catch (Exception e) {
-                    logger.warning("Could not determine project log directory, using relative path: " + e.getMessage());
-                }
-            }
-            
             LogConfig logConfig = new LogConfig(
                 config.getMaxRequestLogs(),
                 5, // maxTarFiles 
-                logRootDir,
+                ramdiskResolution.getLogRoot().toString(),
                 config.isRequestGroupingEnabled()
             );
             RequestLogManager.initialize(logConfig);
@@ -136,7 +166,7 @@ public class Tester {
         this.standardDockerExecutor = new StandardDockerExecutor(config, buildCache, shellTcSync);
         this.optimizedDockerExecutor = new OptimizedDockerExecutor(config, buildCache, shellTcSync, imageBuilder);
         
-        Path profilesDir = Paths.get(config.getWorkDir()).resolve("profiles");
+        Path profilesDir = config.getTesterProfilesDir();
         Path observationWalPath = profilesDir.resolve("test_stats.jl.gz");
         TestObservationWriter observationWriter = new TestObservationWriter(observationWalPath, logger);
 
@@ -175,8 +205,8 @@ public class Tester {
         );
 
         // Create HTTP handlers
-        this.testHandler = new TestHandler(config, testOrchestrator, logger);
-        this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator, actualSampler);
+        this.testHandler = new TestHandler(config, testOrchestrator, logger, ramdiskManager);
+        this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator, actualSampler, ramdiskManager, ramdiskResolution);
         this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
         FinalizeRequestHandler finalizeRequestHandler = new FinalizeRequestHandler(testStatsStore);

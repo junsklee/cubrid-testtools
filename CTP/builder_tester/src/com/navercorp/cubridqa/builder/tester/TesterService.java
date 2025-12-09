@@ -6,6 +6,7 @@ import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
 import com.navercorp.cubridqa.builder.logging.LogConfig;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.logs.LogLocator;
+import com.navercorp.cubridqa.builder.ramdisk.RamdiskManager;
 import java.io.IOException;
 import java.io.File;
 import java.util.logging.Logger;
@@ -24,12 +25,22 @@ public class TesterService {
     public TesterService(BuilderConfig config) throws IOException {
         this.config = config;
         this.useDocker = config.useDockerForTester();
+
+        // Resolve ramdisk paths (tester-only)
+        String defaultLogRoot = System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log";
+        RamdiskManager ramdiskManager = new RamdiskManager(config, logger);
+        RamdiskManager.Resolution ramdiskResolution = ramdiskManager.resolveForTester(
+                config.getWorkDir(),
+                defaultLogRoot,
+                config.getTesterProfilesDir());
+        config.overrideWorkDir(ramdiskResolution.getWorkDir().toString());
+        config.overrideTesterProfilesDir(ramdiskResolution.getProfilesDir().toString());
         
         // Initialize logging infrastructure
         LogConfig logConfig = new LogConfig(
             config.getMaxRequestLogs(),
             10, // Tester doesn't manage tar files, but we need a value
-            System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log",
+            ramdiskResolution.getLogRoot().toString(),
             config.isRequestGroupingEnabled()
         );
         try {
@@ -55,7 +66,7 @@ public class TesterService {
         NodeCapacity dummyCapacity = NodeCapacity.measure(config.getWorkDir(), config);
         TestOrchestrator dummyOrchestrator = null; // TesterService doesn't have orchestrator
         ActualSampler actualSampler = new ActualSampler(config);
-        this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator, actualSampler));
+        this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator, actualSampler, ramdiskManager, ramdiskResolution));
         this.apiServer.registerHandler("/log/", new LogStreamHandler(logLocator, responseWriter));
         
         // Create work directory if it doesn't exist

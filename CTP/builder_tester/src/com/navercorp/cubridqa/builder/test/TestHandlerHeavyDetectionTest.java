@@ -5,6 +5,7 @@ import com.navercorp.cubridqa.builder.tester.NodeCapacity;
 import com.navercorp.cubridqa.builder.tester.TestHandler;
 import com.navercorp.cubridqa.builder.tester.TestOrchestrator;
 import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
+import com.navercorp.cubridqa.builder.ramdisk.RamdiskManager;
 import org.json.JSONObject;
 
 import java.lang.reflect.Method;
@@ -40,7 +41,8 @@ public class TestHandlerHeavyDetectionTest {
         TestOrchestrator orchestrator = new TestOrchestrator(
                 config, null, null, null, false, null, null, null, null, capacity, null);
         Logger logger = Logger.getLogger(TestHandlerHeavyDetectionTest.class.getName());
-        TestHandler handler = new TestHandler(config, orchestrator, logger);
+        RamdiskManager ramdiskManager = new RamdiskManager(config, logger);
+        TestHandler handler = new TestHandler(config, orchestrator, logger, ramdiskManager);
 
         Method isHeavy = TestHandler.class.getDeclaredMethod("isHeavyTest", PredictedDemand.class);
         isHeavy.setAccessible(true);

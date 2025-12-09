@@ -383,7 +383,9 @@ public class TestOrchestrator {
         } finally {
             // Cleanup unless keep-alive requested or a keep marker is present
             try {
-                if (!keepAliveRequested && !Files.exists(workDir.resolve("KEEP_WORKSPACE"))) {
+                boolean cleanupEnabled = config.isCleanupWorkdirsAfterTest();
+                boolean keepMarker = Files.exists(workDir.resolve("KEEP_WORKSPACE"));
+                if (cleanupEnabled || (!keepAliveRequested && !keepMarker)) {
                     deleteDirectory(workDir.toFile());
                 } else {
                     testLogger.info("Preserving workDir for debugging: " + workDir);
