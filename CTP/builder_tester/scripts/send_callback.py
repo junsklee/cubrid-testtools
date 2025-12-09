@@ -3,6 +3,7 @@
 Script to extract test results from builder.log and resend the callback
 """
 import argparse
+from collections import defaultdict, deque
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from datetime import datetime
 
 def load_test_paths_from_request_json(log_file):
     """Load test paths from request.json as a fallback"""
-    test_path_map = {}
+    test_path_map = defaultdict(deque)
     log_dir = os.path.dirname(log_file)
     request_json_path = os.path.join(log_dir, "request.json")
     
@@ -27,18 +28,19 @@ def load_test_paths_from_request_json(log_file):
                     test_name_match = re.search(r'/([^/]+)\.sh$', test_path)
                     if test_name_match:
                         test_name = test_name_match.group(1)
-                        test_path_map[test_name] = test_path
+                        test_path_map[test_name].append(test_path)
         except Exception as e:
             print(f"Warning: Could not load test paths from request.json: {e}", file=sys.stderr)
     
     return test_path_map
 
 def build_test_path_mapping(log_file):
-    """Build a mapping from test name to full test path from the log"""
-    test_path_map = {}
+    """Build a mapping from test name to a queue of full test paths from the log"""
+    test_path_map = defaultdict(deque)
     
     # Pattern 1: Match "Assignment{test=full/path/to/test.sh, ...}" from Smart Scheduling
     assignment_pattern = r"Assignment\{test=([^,]+\.sh)"
+    assignment_count = 0
     
     with open(log_file, 'r', encoding='utf-8') as f:
         for line in f:
@@ -50,14 +52,28 @@ def build_test_path_mapping(log_file):
                 test_name_match = re.search(r'/([^/]+)\.sh$', full_path)
                 if test_name_match:
                     test_name = test_name_match.group(1)
-                    test_path_map[test_name] = full_path
+                    test_path_map[test_name].append(full_path)
+                    assignment_count += 1
     
-    # Fallback: load from request.json if we don't have enough mappings
-    if len(test_path_map) == 0:
-        print("No test paths found in log, trying request.json...")
-        request_map = load_test_paths_from_request_json(log_file)
-        test_path_map.update(request_map)
-        print(f"Loaded {len(request_map)} test paths from request.json")
+    # Always load request.json to fill in any gaps or duplicate test names
+    request_map = load_test_paths_from_request_json(log_file)
+    added_count = 0
+    if request_map:
+        for test_name, paths in request_map.items():
+            existing_paths = test_path_map[test_name]
+            existing_len = len(existing_paths)
+            # If request.json lists the same test name multiple times (in different directories),
+            # append the missing occurrences so we can map every tester response.
+            for path in list(paths)[existing_len:]:
+                existing_paths.append(path)
+                added_count += 1
+    
+    total_paths = sum(len(paths) for paths in test_path_map.values())
+    if assignment_count == 0 and total_paths > 0:
+        print("No test paths found in log, using request.json entries...")
+    print(f"Built test path mapping with {total_paths} test entries across {len(test_path_map)} unique test names")
+    if added_count > 0 and assignment_count > 0:
+        print(f"Added {added_count} missing test paths from request.json to cover duplicates or missing assignments")
     
     return test_path_map
 
@@ -67,51 +83,10 @@ def extract_results_from_log(log_file, expected_commit=None):
     
     # First, build a mapping from test name to full path
     test_path_map = build_test_path_mapping(log_file)
-    print(f"Built test path mapping with {len(test_path_map)} entries")
+    total_test_paths = sum(len(paths) for paths in test_path_map.values())
+    print(f"Final test path mapping has {total_test_paths} entries across {len(test_path_map)} unique test names")
     
-    # Also build a mapping from "Sending test" lines to find test paths
-    # We'll process the log in two passes: first to build the mapping, then to extract results
-    sending_test_map = {}  # Maps test_name -> full_path from "Sending test" lines
-    
-    # First pass: build mapping from "Sending test" and "Assignment" lines
-    with open(log_file, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-        for i, line in enumerate(lines):
-            # Look for "Sending test 'testname' (commit ...)" lines
-            sending_match = re.search(r"Sending test '([^']+)' \(commit ([a-f0-9]+)\)", line)
-            if sending_match:
-                test_name = sending_match.group(1)
-                commit_short = sending_match.group(2)
-                
-                # Look backwards for the most recent Assignment line with this test name
-                # The Assignment line should be within a reasonable distance (e.g., 20 lines)
-                for j in range(max(0, i - 20), i):
-                    assignment_match = re.search(r"Assignment\{test=([^,]+\.sh)", lines[j])
-                    if assignment_match:
-                        full_path = assignment_match.group(1)
-                        # Check if this path matches the test name
-                        if test_name in full_path:
-                            sending_test_map[test_name] = full_path
-                            break
-    
-    # Merge the two mappings (Assignment-based takes precedence)
-    for test_name, full_path in sending_test_map.items():
-        if test_name not in test_path_map:
-            test_path_map[test_name] = full_path
-    
-    # Always load request.json to fill in any gaps (Assignment lines are most reliable, but request.json
-    # can help with tests that don't have Assignment lines or for legacy distribution mode)
-    request_map = load_test_paths_from_request_json(log_file)
-    if request_map:
-        added_count = 0
-        for test_name, full_path in request_map.items():
-            if test_name not in test_path_map:
-                test_path_map[test_name] = full_path
-                added_count += 1
-        if added_count > 0:
-            print(f"Added {added_count} additional test paths from request.json")
-    
-    print(f"Final test path mapping has {len(test_path_map)} entries")
+    missing_path_count = 0
     
     with open(log_file, 'r', encoding='utf-8') as f:
         for line in f:
@@ -140,19 +115,15 @@ def extract_results_from_log(log_file, expected_commit=None):
                             continue
                         
                         # Get full test path from mapping
-                        test_path = test_path_map.get(test_name)
-                        if not test_path:
-                            # Fallback: try to load from request.json if we haven't already
-                            if len(test_path_map) > 0:  # Only if we have some mappings (to avoid repeated warnings)
-                                request_map = load_test_paths_from_request_json(log_file)
-                                test_path = request_map.get(test_name)
-                                if test_path:
-                                    test_path_map[test_name] = test_path  # Cache it
-                            
-                            if not test_path:
-                                # Last resort: use test name (shouldn't happen, but be safe)
-                                print(f"Warning: No full path found for test '{test_name}', using test name as fallback", file=sys.stderr)
-                                test_path = test_name
+                        test_queue = test_path_map.get(test_name)
+                        test_path = None
+                        if test_queue and len(test_queue) > 0:
+                            test_path = test_queue.popleft()
+                        else:
+                            # Last resort: use test name (shouldn't happen, but be safe)
+                            missing_path_count += 1
+                            print(f"Warning: No full path found for test '{test_name}', using test name as fallback", file=sys.stderr)
+                            test_path = test_name
                         
                         # Transform to BuilderTask result format (matches Java code structure)
                         result = {
@@ -172,6 +143,12 @@ def extract_results_from_log(log_file, expected_commit=None):
                     except json.JSONDecodeError as e:
                         print(f"Warning: Failed to parse JSON for test {test_name}: {e}", file=sys.stderr)
                         continue
+    
+    leftover_paths = sum(len(paths) for paths in test_path_map.values())
+    if leftover_paths > 0:
+        print(f"Warning: {leftover_paths} test path mappings were not matched to a response line", file=sys.stderr)
+    if missing_path_count > 0:
+        print(f"Warning: {missing_path_count} tester responses did not have a mapped full path", file=sys.stderr)
     
     return results
 
