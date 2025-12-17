@@ -7,6 +7,8 @@ import java.io.*;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.logging.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
@@ -28,6 +30,7 @@ public class Builder {
     private final HttpServer server;
     private final ExecutorService buildExecutor;
     private final Map<String, BuilderTask> activeTasks;
+    private final BlockingQueue<QueuedBuildRequest> pendingRequests;
     private final DockerBuildManager dockerManager;
     private final LogRotationManager logRotationManager;
     
@@ -35,6 +38,7 @@ public class Builder {
         this.config = config;
         this.buildExecutor = Executors.newFixedThreadPool(config.getMaxConcurrentBuilds());
         this.activeTasks = new ConcurrentHashMap<>();
+        this.pendingRequests = new LinkedBlockingQueue<>();
         this.dockerManager = new DockerBuildManager(config);
         
         // Initialize logging infrastructure
@@ -211,6 +215,27 @@ public class Builder {
                     return;
                 }
                 
+                // Check if at capacity - queue the request
+                if (activeTasks.size() >= config.getMaxConcurrentBuilds()) {
+                    QueuedBuildRequest queuedRequest = new QueuedBuildRequest(taskId, request);
+                    pendingRequests.offer(queuedRequest);
+                    
+                    // Calculate queue position (1-based)
+                    int queuePosition = pendingRequests.size();
+                    
+                    logger.info(String.format("[%s] Build request queued at position %d (capacity: %d/%d)",
+                        requestId, queuePosition, activeTasks.size(), config.getMaxConcurrentBuilds()));
+                    
+                    JSONObject response = new JSONObject()
+                        .put("status", "queued")
+                        .put("taskId", taskId)
+                        .put("queuePosition", queuePosition)
+                        .put("message", "Build request queued - will start when capacity available");
+                    
+                    sendJsonResponse(exchange, 202, response);
+                    return;
+                }
+                
                 // Create and submit task
                 BuilderTask task = new BuilderTask(taskId, request, config, dockerManager);
                 activeTasks.put(taskId, task);
@@ -220,6 +245,7 @@ public class Builder {
                         task.run();
                     } finally {
                         activeTasks.remove(taskId);
+                        processNextQueuedRequest();
                     }
                 }, buildExecutor);
                 
@@ -307,14 +333,58 @@ public class Builder {
             }
             
             try {
+                // Check for requestId query parameter for queue position lookup
+                String query = exchange.getRequestURI().getQuery();
+                String requestId = null;
+                if (query != null) {
+                    for (String param : query.split("&")) {
+                        String[] pair = param.split("=");
+                        if (pair.length == 2 && "requestId".equals(pair[0])) {
+                            requestId = pair[1];
+                            break;
+                        }
+                    }
+                }
+                
                 JSONObject healthResponse = new JSONObject()
                     .put("status", "healthy")
                     .put("service", "Builder")
                     .put("timestamp", System.currentTimeMillis())
                     .put("activeTasks", activeTasks.size())
+                    .put("queuedRequests", pendingRequests.size())
+                    .put("maxConcurrentBuilds", config.getMaxConcurrentBuilds())
                     .put("workDir", config.getWorkDir())
-                    .put("dockerEnabled", config.useDocker())
-                    .put("maxConcurrentBuilds", config.getMaxConcurrentBuilds());
+                    .put("dockerEnabled", config.useDocker());
+                
+                // If requestId provided, check its position in queue
+                if (requestId != null) {
+                    int position = 0;
+                    boolean found = false;
+                    
+                    // Check if it's currently running
+                    if (activeTasks.containsKey(requestId)) {
+                        healthResponse.put("requestStatus", "running");
+                        found = true;
+                    } else {
+                        // Check queue position
+                        int pos = 1;
+                        for (QueuedBuildRequest qr : pendingRequests) {
+                            if (qr.getRequestId().equals(requestId)) {
+                                position = pos;
+                                found = true;
+                                break;
+                            }
+                            pos++;
+                        }
+                        
+                        if (found) {
+                            healthResponse.put("requestStatus", "queued");
+                            healthResponse.put("queuePosition", position);
+                        } else {
+                            healthResponse.put("requestStatus", "not_found");
+                        }
+                    }
+                }
                 
                 sendJsonResponse(exchange, 200, healthResponse);
                 
@@ -626,6 +696,44 @@ public class Builder {
         }
         p.waitFor();
         return lines;
+    }
+    
+    /**
+     * Process the next queued build request if capacity is available.
+     * Called automatically when a build task completes.
+     */
+    private void processNextQueuedRequest() {
+        // Check if we have capacity and pending requests
+        if (activeTasks.size() < config.getMaxConcurrentBuilds() && !pendingRequests.isEmpty()) {
+            QueuedBuildRequest queuedRequest = pendingRequests.poll();
+            if (queuedRequest != null) {
+                String taskId = queuedRequest.getRequestId();
+                JSONObject request = queuedRequest.getRequest();
+                
+                logger.info(String.format("[%s] Starting queued build request (waited %dms, remaining in queue: %d)",
+                    taskId, queuedRequest.getWaitTimeMs(), pendingRequests.size()));
+                
+                try {
+                    // Create and submit task
+                    BuilderTask task = new BuilderTask(taskId, request, config, dockerManager);
+                    activeTasks.put(taskId, task);
+                    
+                    CompletableFuture.runAsync(() -> {
+                        try {
+                            task.run();
+                        } finally {
+                            activeTasks.remove(taskId);
+                            processNextQueuedRequest();
+                        }
+                    }, buildExecutor);
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, String.format("[%s] Error processing queued request", taskId), e);
+                    activeTasks.remove(taskId);
+                    // Try to process next request even if this one failed
+                    processNextQueuedRequest();
+                }
+            }
+        }
     }
     
     public static void main(String[] args) {

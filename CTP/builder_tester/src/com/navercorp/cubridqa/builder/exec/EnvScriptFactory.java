@@ -491,6 +491,13 @@ public class EnvScriptFactory {
         script.append("  fi\n");
         script.append("  cp \"$RESULT_SRC\" /workspace/ 2>/dev/null || true\n");
         script.append("fi\n\n");
+        
+        // Fix ownership of workspace files to allow host cleanup without sudo
+        script.append("# Fix ownership of workspace files for host cleanup\n");
+        script.append("if [ -n \"$HOST_UID\" ] && [ -n \"$HOST_GID\" ]; then\n");
+        script.append("  chown -R \"$HOST_UID:$HOST_GID\" /workspace 2>/dev/null || true\n");
+        script.append("fi\n\n");
+        
         script.append("exit $TEST_EXIT\n");
     }
 

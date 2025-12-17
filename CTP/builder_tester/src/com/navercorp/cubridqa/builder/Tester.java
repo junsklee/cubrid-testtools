@@ -216,18 +216,22 @@ public class Tester {
     }
     
     public void start() {
-        // Start WAL writer first (acquires lock, opens segment)
-        try {
-            walWriter.start();
-            logger.info("WALSegmentWriter started");
-        } catch (IOException e) {
-            logger.severe("Failed to start WALSegmentWriter: " + e.getMessage());
-            throw new RuntimeException("WAL initialization failed", e);
+        if (config.isStatsEnabled()) {
+            // Start WAL writer first (acquires lock, opens segment)
+            try {
+                walWriter.start();
+                logger.info("WALSegmentWriter started");
+            } catch (IOException e) {
+                logger.severe("Failed to start WALSegmentWriter: " + e.getMessage());
+                throw new RuntimeException("WAL initialization failed", e);
+            }
+
+            // Start TestStatsStore (loads snapshot, replays WAL, starts coordinator)
+            testStatsStore.start();
+            logger.info("TestStatsStore started");
+        } else {
+            logger.info("Stats disabled (stats_enabled=false); skipping WAL/TestStatsStore startup");
         }
-        
-        // Start TestStatsStore (loads snapshot, replays WAL, starts coordinator)
-        testStatsStore.start();
-        logger.info("TestStatsStore started");
 
         server.start();
         logger.info("Tester started on port " + config.getTesterPort());
@@ -239,13 +243,15 @@ public class Tester {
     }
     
     public void stop() {
-        // Stop TestStatsStore (writes final snapshot and flushes request journals)
-        testStatsStore.stop();
-        logger.info("TestStatsStore stopped");
+        if (config.isStatsEnabled()) {
+            // Stop TestStatsStore (writes final snapshot and flushes request journals)
+            testStatsStore.stop();
+            logger.info("TestStatsStore stopped");
 
-        // Stop WAL writer (releases lock, closes segment)
-        walWriter.stop();
-        logger.info("WALSegmentWriter stopped");
+            // Stop WAL writer (releases lock, closes segment)
+            walWriter.stop();
+            logger.info("WALSegmentWriter stopped");
+        }
 
         server.stop(0);
         logger.info("Tester stopped");

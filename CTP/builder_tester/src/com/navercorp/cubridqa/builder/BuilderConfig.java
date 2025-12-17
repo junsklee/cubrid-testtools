@@ -49,6 +49,8 @@ public class BuilderConfig {
     private static final String LOG_FETCH_CONNECT_TIMEOUT_SECONDS = "log_fetch_connect_timeout_seconds";
     private static final String LOG_FETCH_READ_TIMEOUT_SECONDS = "log_fetch_read_timeout_seconds";
     private static final String LOG_FILE_VERIFICATION_TIMEOUT_SECONDS = "log_file_verification_timeout_seconds";
+    private static final String STATS_ENABLED = "stats_enabled"; // Tester: enable per-test metrics/WAL
+    private static final String DOCKER_STATS_INTERVAL_MS = "docker_stats_interval_ms"; // Tester: docker stats sampling interval
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String DOCKER_ENFORCE_MEMORY_LIMITS = "docker_enforce_memory_limits"; // Enforce Docker memory limits from predictions (default false)
     private static final String DOCKER_ENFORCE_CPU_LIMITS = "docker_enforce_cpu_limits"; // Enforce Docker CPU limits from predictions (default false)
@@ -898,6 +900,28 @@ public class BuilderConfig {
             value = 5;
         }
         return Math.max(1, value);
+    }
+
+    /**
+     * Enables per-test metrics collection and observation recording.
+     * Default is true.
+     */
+    public boolean isStatsEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(STATS_ENABLED, "true"));
+    }
+
+    /**
+     * Docker "stats --no-stream" polling interval (in milliseconds).
+     * Default is 600ms; clamped to 200ms minimum.
+     */
+    public long getDockerStatsIntervalMs() {
+        long value;
+        try {
+            value = Long.parseLong(properties.getProperty(DOCKER_STATS_INTERVAL_MS, "600"));
+        } catch (NumberFormatException e) {
+            value = 600L;
+        }
+        return Math.max(200L, value);
     }
     
     // Ccache configuration methods

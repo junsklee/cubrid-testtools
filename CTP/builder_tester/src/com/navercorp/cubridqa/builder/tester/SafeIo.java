@@ -4,6 +4,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.logging.Logger;
+import java.io.BufferedReader;
 
 public class SafeIo {
     private static final Logger logger = Logger.getLogger(SafeIo.class.getName());
@@ -60,6 +61,63 @@ public class SafeIo {
                 }
             }
             dir.delete();
+        }
+    }
+    
+    /**
+     * Delete a directory with privilege escalation fallback.
+     * First attempts normal deletion, then uses sudo if needed.
+     * 
+     * @param dir Directory to delete
+     * @param logger Logger for error reporting
+     */
+    public static void deleteDirectoryWithPrivileges(File dir, Logger logger) {
+        if (dir == null || !dir.exists()) {
+            return;
+        }
+        
+        // Try normal deletion first
+        deleteDirectory(dir);
+        
+        // If directory still exists after normal deletion, try with sudo
+        if (dir.exists()) {
+            logger.info("Normal deletion failed for " + dir.getAbsolutePath() + ", attempting privileged deletion");
+            
+            try {
+                // Validate path to prevent command injection
+                String path = dir.getAbsolutePath();
+                if (path.contains(";") || path.contains("|") || path.contains("&") || path.contains("`")) {
+                    logger.warning("Refusing to delete path with suspicious characters: " + path);
+                    return;
+                }
+                
+                ProcessBuilder pb = new ProcessBuilder("sudo", "-n", "rm", "-rf", path);
+                pb.redirectErrorStream(true);
+                Process p = pb.start();
+                
+                // Read output for logging
+                StringBuilder output = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        output.append(line).append("\n");
+                    }
+                }
+                
+                int exitCode = p.waitFor();
+                
+                if (exitCode == 0) {
+                    logger.info("Privileged deletion succeeded for: " + path);
+                } else {
+                    logger.warning("Privileged deletion failed (exit=" + exitCode + ") for: " + path + 
+                                 (output.length() > 0 ? "\nOutput: " + output.toString() : ""));
+                }
+            } catch (IOException e) {
+                logger.warning("Failed to execute privileged deletion for " + dir.getAbsolutePath() + ": " + e.getMessage());
+            } catch (InterruptedException e) {
+                logger.warning("Privileged deletion interrupted for " + dir.getAbsolutePath());
+                Thread.currentThread().interrupt();
+            }
         }
     }
     

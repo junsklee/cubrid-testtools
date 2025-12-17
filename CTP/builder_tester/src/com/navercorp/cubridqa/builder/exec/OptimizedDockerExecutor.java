@@ -377,6 +377,12 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         dockerCommand.add("CTP_HOME=" + ctpHomeInContainer);
         dockerCommand.add("-e");
         dockerCommand.add("init_path=" + ctpHomeInContainer + "/shell/init_path");
+        
+        // Pass host UID/GID for workspace ownership fix (allows cleanup without sudo)
+        dockerCommand.add("-e");
+        dockerCommand.add("HOST_UID=" + getHostUid());
+        dockerCommand.add("-e");
+        dockerCommand.add("HOST_GID=" + getHostGid());
 
         // Add secure environment file containing GITHUB_TOKEN
         dockerCommand.add("--env-file");
@@ -407,7 +413,9 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         ProcessBuilder pb = new ProcessBuilder(dockerCommand);
         pb.redirectErrorStream(true);
         Process process = pb.start();
-        DockerStatsCollector statsCollector = keepAlive ? null : new DockerStatsCollector(containerName, testLogger);
+        DockerStatsCollector statsCollector = (keepAlive || !config.isStatsEnabled())
+            ? null
+            : new DockerStatsCollector(containerName, testLogger, config.getDockerStatsIntervalMs());
         if (statsCollector != null) {
             statsCollector.start();
         }
@@ -642,5 +650,41 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             return null;
         }
         return collector.stopAndSummarize();
+    }
+    
+    /**
+     * Get the host user's UID for ownership fix inside container
+     */
+    private static String getHostUid() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("id", "-u");
+            Process p = pb.start();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream()))) {
+                String uid = reader.readLine();
+                p.waitFor();
+                return uid != null ? uid.trim() : "1000";
+            }
+        } catch (Exception e) {
+            return "1000"; // Default fallback
+        }
+    }
+    
+    /**
+     * Get the host user's GID for ownership fix inside container
+     */
+    private static String getHostGid() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("id", "-g");
+            Process p = pb.start();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream()))) {
+                String gid = reader.readLine();
+                p.waitFor();
+                return gid != null ? gid.trim() : "1000";
+            }
+        } catch (Exception e) {
+            return "1000"; // Default fallback
+        }
     }
 }

@@ -186,6 +186,12 @@ public class DockerBuildManager {
         // Add parallel jobs configuration
         baseDockerCmd.add("-e");
         baseDockerCmd.add("MAKEFLAGS=-j" + config.getParallelJobs());
+        
+        // Pass host UID/GID for output ownership fix (allows cleanup without sudo)
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("HOST_UID=" + getHostUid());
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("HOST_GID=" + getHostGid());
 
         // No per-build extra environment overrides (reverted)
         
@@ -638,6 +644,11 @@ public class DockerBuildManager {
             writer.println("cd " + config.getBuildDir(buildType));
             writer.println("create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
             writer.println();
+            writer.println("# Fix ownership of output files for host cleanup");
+            writer.println("if [ -n \"$HOST_UID\" ] && [ -n \"$HOST_GID\" ]; then");
+            writer.println("  chown -R \"$HOST_UID:$HOST_GID\" /output 2>/dev/null || true");
+            writer.println("fi");
+            writer.println();
             writer.println("# Cleanup");
             writer.println("cd \"$target/repo\"");
             writer.println("git checkout --detach || true");
@@ -988,6 +999,11 @@ public class DockerBuildManager {
             writer.println("  create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
             writer.println("fi");
             writer.println();
+            writer.println("# Fix ownership of output files for host cleanup");
+            writer.println("if [ -n \"$HOST_UID\" ] && [ -n \"$HOST_GID\" ]; then");
+            writer.println("  chown -R \"$HOST_UID:$HOST_GID\" /output 2>/dev/null || true");
+            writer.println("fi");
+            writer.println();
             writer.println("# Cleanup temporary branch and workspace");
             writer.println("cd \"$target/repo\"");
             writer.println("git checkout --detach || true");
@@ -1221,7 +1237,33 @@ public class DockerBuildManager {
                 for (File c : children) deleteRecursively(c);
             }
         }
-        try { f.delete(); } catch (Exception ignore) {}
+        
+        try {
+            boolean deleted = f.delete();
+            
+            // If deletion failed and file still exists, try privileged deletion
+            if (!deleted && f.exists()) {
+                String path = f.getAbsolutePath();
+                // Validate path to prevent command injection
+                if (path.contains(";") || path.contains("|") || path.contains("&") || path.contains("`")) {
+                    logger.warning("Refusing to delete path with suspicious characters: " + path);
+                    return;
+                }
+                
+                ProcessBuilder pb = new ProcessBuilder("sudo", "-n", "rm", "-rf", path);
+                pb.redirectErrorStream(true);
+                Process p = pb.start();
+                int exitCode = p.waitFor();
+                
+                if (exitCode == 0) {
+                    logger.fine("Privileged deletion succeeded for: " + path);
+                } else {
+                    logger.warning("Privileged deletion failed (exit=" + exitCode + ") for: " + path);
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("Failed deletion for " + f.getAbsolutePath() + ": " + e.getMessage());
+        }
     }
     
     public boolean isDockerAvailable() {
@@ -1328,5 +1370,39 @@ public class DockerBuildManager {
         List<String> out = new ArrayList<>(options);
         out.addAll(targets);
         return String.join(" ", out).trim();
+    }
+    
+    /**
+     * Get the host user's UID for output ownership fix inside container
+     */
+    private static String getHostUid() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("id", "-u");
+            Process p = pb.start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String uid = reader.readLine();
+                p.waitFor();
+                return uid != null ? uid.trim() : "1000";
+            }
+        } catch (Exception e) {
+            return "1000"; // Default fallback
+        }
+    }
+    
+    /**
+     * Get the host user's GID for output ownership fix inside container
+     */
+    private static String getHostGid() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("id", "-g");
+            Process p = pb.start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String gid = reader.readLine();
+                p.waitFor();
+                return gid != null ? gid.trim() : "1000";
+            }
+        } catch (Exception e) {
+            return "1000"; // Default fallback
+        }
     }
 }

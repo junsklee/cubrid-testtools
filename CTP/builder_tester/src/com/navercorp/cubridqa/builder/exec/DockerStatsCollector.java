@@ -3,7 +3,12 @@ package com.navercorp.cubridqa.builder.exec;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -11,17 +16,18 @@ import java.util.logging.Logger;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 
 final class DockerStatsCollector {
-    private static final String FORMAT = "{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}";
+    private static final String FORMAT = "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}";
     private static final long DEFAULT_INTERVAL_MS = 600L;
     private static final double BYTES_PER_MB = 1024d * 1024d;
     private static final long AVERAGE_BLOCK_SIZE_BYTES = 4096L; // 4KB average block size for IOPS estimation
+    private static final Logger MUX_LOGGER = Logger.getLogger(DockerStatsCollector.class.getName());
+    private static final DockerStatsMux MUX = new DockerStatsMux();
 
     private final String containerName;
     private final Logger logger;
     private final long intervalMs;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final StatsAccumulator accumulator = new StatsAccumulator();
-    private Thread workerThread;
 
     DockerStatsCollector(String containerName, Logger logger) {
         this(containerName, logger, DEFAULT_INTERVAL_MS);
@@ -35,20 +41,13 @@ final class DockerStatsCollector {
 
     public void start() {
         if (running.compareAndSet(false, true)) {
-            workerThread = new Thread(this::runLoop, "docker-stats-" + containerName);
-            workerThread.setDaemon(true);
-            workerThread.start();
+            MUX.register(containerName, this, intervalMs);
         }
     }
 
     public StatsSummary stopAndSummarize() {
-        running.set(false);
-        if (workerThread != null) {
-            try {
-                workerThread.join(1500L);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-            }
+        if (running.compareAndSet(true, false)) {
+            MUX.unregister(containerName, this);
         }
         StatsSummary summary = accumulator.snapshot();
         if (summary.hasSamples()) {
@@ -60,100 +59,45 @@ final class DockerStatsCollector {
         return summary;
     }
 
-    private void runLoop() {
-        int consecutiveFailures = 0;
-        int maxConsecutiveFailures = 5;  // Allow 5 failures before giving up (handles startup race)
+    private static final class ParsedSample {
+        final String containerName;
+        final Sample sample;
 
-        while (running.get()) {
-            boolean collected = collectSample();
-            if (!collected) {
-                consecutiveFailures++;
-                if (consecutiveFailures >= maxConsecutiveFailures) {
-                    logger.log(Level.FINE, "Stopping stats collection for {0} after {1} consecutive failures",
-                        new Object[]{containerName, consecutiveFailures});
-                    break;
-                }
-            } else {
-                consecutiveFailures = 0;  // Reset on success
-            }
-            try {
-                Thread.sleep(intervalMs);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        running.set(false);
-    }
-
-    private boolean collectSample() {
-        Process process = null;
-        try {
-            ProcessBuilder pb = new ProcessBuilder(
-                "docker", "stats", "--no-stream", "--format", FORMAT, containerName);
-            pb.redirectErrorStream(true);
-            process = pb.start();
-
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line = reader.readLine();
-                int exitCode = process.waitFor();
-
-                if (line == null || line.trim().isEmpty()) {
-                    return exitCode == 0;
-                }
-
-                Sample sample = parseSample(line.trim());
-                if (sample != null) {
-                    accumulator.add(sample);
-                    // Log first sample to confirm collection is working
-                    if (accumulator.samples == 1) {
-                        logger.log(Level.INFO, "Started collecting stats for container {0} (CPU: {1}%, Mem: {2} MB, I/O Read: {3} MB, Write: {4} MB)",
-                            new Object[]{containerName, String.format("%.1f", sample.cpuPercent),
-                                        String.format("%.1f", sample.memUsageMb),
-                                        String.format("%.1f", sample.blockReadBytes / (1024.0 * 1024.0)),
-                                        String.format("%.1f", sample.blockWriteBytes / (1024.0 * 1024.0))});
-                    }
-                }
-                return exitCode == 0;
-            }
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            logger.log(Level.FINE, "docker stats sampling failed for {0}: {1}",
-                new Object[]{containerName, e.getMessage()});
-            return false;
-        } finally {
-            if (process != null) {
-                process.destroyForcibly();
-            }
+        ParsedSample(String containerName, Sample sample) {
+            this.containerName = containerName;
+            this.sample = sample;
         }
     }
 
-    private Sample parseSample(String line) {
+    private ParsedSample parseMuxSample(String line) {
         try {
             String[] parts = line.split("\\|");
-            if (parts.length < 4) {
+            if (parts.length < 5) {
                 return null;
             }
 
-            double cpuPercent = parseCpu(parts[0]);
-            double memMb = parseMemUsage(parts[1]);
-            Pair net = parseIoPair(parts[2]);
-            Pair block = parseIoPair(parts[3]);
+            String name = parts[0].trim();
+            if (name.startsWith("/")) {
+                name = name.substring(1);
+            }
+            if (name.isEmpty()) {
+                return null;
+            }
+
+            double cpuPercent = parseCpu(parts[1]);
+            double memMb = parseMemUsage(parts[2]);
+            Pair net = parseIoPair(parts[3]);
+            Pair block = parseIoPair(parts[4]);
 
             long timestamp = System.nanoTime();
-            return new Sample(cpuPercent, memMb, net.firstBytes, net.secondBytes,
+            Sample sample = new Sample(cpuPercent, memMb, net.firstBytes, net.secondBytes,
                 block.firstBytes, block.secondBytes, timestamp);
+            return new ParsedSample(name, sample);
         } catch (Exception e) {
-            logger.log(Level.FINE, "Failed to parse docker stats output ''{0}'': {1}",
+            MUX_LOGGER.log(Level.FINE, "Failed to parse docker stats output ''{0}'': {1}",
                 new Object[]{line, e.getMessage()});
             return null;
         }
-    }
-
-    private int sampleCount() {
-        return accumulator.snapshot().getSampleCount();
     }
 
     private double parseCpu(String raw) {
@@ -406,6 +350,185 @@ final class DockerStatsCollector {
         Pair(long firstBytes, long secondBytes) {
             this.firstBytes = Math.max(0L, firstBytes);
             this.secondBytes = Math.max(0L, secondBytes);
+        }
+    }
+
+    private static final class DockerStatsMux implements Runnable {
+        private final Object lock = new Object();
+        private final Map<String, CollectorRegistration> collectors = new HashMap<>();
+        private final AtomicBoolean started = new AtomicBoolean(false);
+        private Thread worker;
+
+        void register(String containerName, DockerStatsCollector collector, long intervalMs) {
+            if (containerName == null || containerName.trim().isEmpty() || collector == null) {
+                return;
+            }
+            synchronized (lock) {
+                collectors.put(containerName, new CollectorRegistration(collector, intervalMs));
+                ensureStartedLocked();
+                lock.notifyAll();
+                if (worker != null) {
+                    worker.interrupt();
+                }
+            }
+        }
+
+        void unregister(String containerName, DockerStatsCollector collector) {
+            if (containerName == null || containerName.trim().isEmpty() || collector == null) {
+                return;
+            }
+            synchronized (lock) {
+                CollectorRegistration current = collectors.get(containerName);
+                if (current != null && current.collector == collector) {
+                    collectors.remove(containerName);
+                    if (worker != null) {
+                        worker.interrupt();
+                    }
+                }
+            }
+        }
+
+        private void ensureStartedLocked() {
+            if (started.compareAndSet(false, true)) {
+                worker = new Thread(this, "docker-stats-mux");
+                worker.setDaemon(true);
+                worker.start();
+            }
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                Snapshot snapshot = snapshotCollectors();
+                if (snapshot == null || snapshot.collectors.isEmpty()) {
+                    waitForCollectors();
+                    continue;
+                }
+                collectOnce(snapshot.collectors);
+                try {
+                    Thread.sleep(snapshot.intervalMs);
+                } catch (InterruptedException ignored) {
+                    // Re-check active collectors and interval promptly.
+                }
+            }
+        }
+
+        private void waitForCollectors() {
+            synchronized (lock) {
+                while (collectors.isEmpty()) {
+                    try {
+                        lock.wait(10_000L);
+                    } catch (InterruptedException ignored) {
+                        // Keep waiting; shutdown isn't supported (daemon thread).
+                    }
+                }
+            }
+        }
+
+        private Snapshot snapshotCollectors() {
+            synchronized (lock) {
+                if (collectors.isEmpty()) {
+                    return null;
+                }
+                Map<String, CollectorRegistration> copy = new HashMap<>(collectors);
+                long minInterval = DEFAULT_INTERVAL_MS;
+                for (CollectorRegistration reg : copy.values()) {
+                    if (reg.intervalMs > 0L) {
+                        minInterval = Math.min(minInterval, reg.intervalMs);
+                    }
+                }
+                return new Snapshot(copy, Math.max(200L, minInterval));
+            }
+        }
+
+        private void collectOnce(Map<String, CollectorRegistration> snapshot) {
+            if (snapshot == null || snapshot.isEmpty()) {
+                return;
+            }
+
+            List<String> cmd = new ArrayList<>(5 + snapshot.size());
+            cmd.add("docker");
+            cmd.add("stats");
+            cmd.add("--no-stream");
+            cmd.add("--format");
+            cmd.add(FORMAT);
+            cmd.addAll(snapshot.keySet());
+
+            Process process = null;
+            try {
+                ProcessBuilder pb = new ProcessBuilder(cmd);
+                pb.redirectErrorStream(true);
+                process = pb.start();
+
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        line = line.trim();
+                        if (line.isEmpty()) {
+                            continue;
+                        }
+
+                        // Any collector instance can parse lines; parsing is stateless.
+                        ParsedSample parsed = snapshot.values().iterator().next().collector.parseMuxSample(line);
+                        if (parsed == null || parsed.sample == null || parsed.containerName == null) {
+                            continue;
+                        }
+                        CollectorRegistration reg = snapshot.get(parsed.containerName);
+                        if (reg == null) {
+                            continue;
+                        }
+                        reg.collector.acceptSample(parsed.sample);
+                    }
+                }
+
+                if (!process.waitFor(3, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                }
+            } catch (Exception e) {
+                MUX_LOGGER.log(Level.FINE, "docker stats mux sampling failed: {0}", e.getMessage());
+            } finally {
+                if (process != null) {
+                    process.destroyForcibly();
+                }
+            }
+        }
+
+        private static final class Snapshot {
+            final Map<String, CollectorRegistration> collectors;
+            final long intervalMs;
+
+            Snapshot(Map<String, CollectorRegistration> collectors, long intervalMs) {
+                this.collectors = collectors;
+                this.intervalMs = intervalMs;
+            }
+        }
+
+        private static final class CollectorRegistration {
+            final DockerStatsCollector collector;
+            final long intervalMs;
+
+            CollectorRegistration(DockerStatsCollector collector, long intervalMs) {
+                this.collector = collector;
+                this.intervalMs = Math.max(200L, intervalMs);
+            }
+        }
+    }
+
+    private void acceptSample(Sample sample) {
+        if (!running.get() || sample == null) {
+            return;
+        }
+        accumulator.add(sample);
+        if (accumulator.samples == 1) {
+            logger.log(Level.INFO,
+                "Started collecting stats for container {0} (CPU: {1}%, Mem: {2} MB, I/O Read: {3} MB, Write: {4} MB)",
+                new Object[]{
+                    containerName,
+                    String.format("%.1f", sample.cpuPercent),
+                    String.format("%.1f", sample.memUsageMb),
+                    String.format("%.1f", sample.blockReadBytes / (1024.0 * 1024.0)),
+                    String.format("%.1f", sample.blockWriteBytes / (1024.0 * 1024.0))
+                });
         }
     }
 }

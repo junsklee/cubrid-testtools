@@ -105,8 +105,29 @@ public class LogRotationManager {
                 if (tarFiles[i].delete()) {
                     logger.info("Deleted old tar file: " + tarFiles[i].getName());
                 } else {
-                    logger.warning("Failed to delete tar file: " + tarFiles[i].getName() + 
-                                 " (may require elevated permissions)");
+                    // Try privileged deletion
+                    logger.info("Normal deletion failed for tar file: " + tarFiles[i].getName() + ", trying sudo");
+                    try {
+                        String path = tarFiles[i].getAbsolutePath();
+                        // Validate path to prevent command injection
+                        if (path.contains(";") || path.contains("|") || path.contains("&") || path.contains("`")) {
+                            logger.warning("Refusing to delete path with suspicious characters: " + path);
+                            continue;
+                        }
+                        
+                        ProcessBuilder pb = new ProcessBuilder("sudo", "-n", "rm", "-f", path);
+                        pb.redirectErrorStream(true);
+                        Process p = pb.start();
+                        int exitCode = p.waitFor();
+                        
+                        if (exitCode == 0) {
+                            logger.info("Privileged deletion succeeded for tar file: " + tarFiles[i].getName());
+                        } else {
+                            logger.warning("Privileged deletion failed for tar file: " + tarFiles[i].getName());
+                        }
+                    } catch (Exception privEx) {
+                        logger.warning("Failed privileged deletion for tar file " + tarFiles[i].getName() + ": " + privEx.getMessage());
+                    }
                 }
             } catch (SecurityException e) {
                 logger.warning("Permission denied deleting tar file: " + tarFiles[i].getName());
