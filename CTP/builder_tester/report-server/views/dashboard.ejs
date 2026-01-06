@@ -226,6 +226,10 @@
                     📋 View Builder Log
                 </button>
             </div>
+
+            <div id="statusMonitorHint" style="display: none; margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
+                Tip: press <b>Refresh Status</b> to switch the monitor to the currently running build from the queue.
+            </div>
             
             <div id="statusMonitor">
                 <p style="color: var(--text-secondary);">No active builds. Submit a request to start monitoring.</p>
@@ -248,10 +252,10 @@
         <div class="card">
             <h2 class="card-title">
                 <div class="card-title-icon">🧾</div>
-                Build Queue
+                Build Request Queue
             </h2>
             <div style="color: var(--text-secondary);" id="build-queue-summary">Loading...</div>
-            <pre id="build-queue-list" style="margin: 0.75rem 0 0 0; background: #1e1e1e; color: #d4d4d4; padding: 0.75rem; border-radius: 4px; max-height: 260px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.8rem; line-height: 1.35; white-space: pre-wrap; border: 1px solid #333;"></pre>
+            <div id="build-queue-items" class="queue-list"></div>
         </div>
 
         <!-- Recent Reports Card -->
