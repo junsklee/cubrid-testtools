@@ -1364,24 +1364,33 @@
                     // Adaptive backoff: if no content, wait longer
                     let delay = data.recommendedPollMs || 5000;
                     
-                    // Check if build is finished (rate-limited to once per minute)
+                    // Check if the request is finished (load-friendly: infrequent).
+                    // IMPORTANT: Do NOT use /report existence as a completion signal; the report can be created
+                    // by per-test callbacks while the request is still running.
+                    // Instead, consider the request finished only when Builder no longer reports it as running.
                     const now = Date.now();
-                    if (now - lastReportCheckMs >= 60000) {
+                    if (now - lastReportCheckMs >= 30000) {
                         lastReportCheckMs = now;
-                        const reportCheck = await fetch(`/report?id=${taskId}`, { method: 'HEAD' });
-                        if (reportCheck.ok) {
-                            console.log('Build completed (report found), stopping log tail.');
-                            area.textContent += '\n--- Build Finished (Monitoring Stopped) ---\n';
-                            area.scrollTop = area.scrollHeight;
-                            stopBuilderLogTail();
+                        try {
+                            const statusResp = await fetch(`/api/builder/status?taskId=${taskId}`);
+                            const statusJson = await statusResp.json();
+                            if (statusResp.ok && statusJson && statusJson.status === 'not_found') {
+                                console.log('Build completed (builder no longer reports task), stopping log tail.');
+                                area.textContent += '\n--- Build Finished (Monitoring Stopped) ---\n';
+                                area.scrollTop = area.scrollHeight;
+                                stopBuilderLogTail();
 
-                            // Auto-refresh status/progress so the monitor updates without manual click
-                            try {
-                                await pollStatus(taskId);
-                            } catch (e) {
-                                console.warn('Failed to auto-refresh status after completion:', e);
+                                // Auto-refresh status/progress so the monitor updates without manual click
+                                try {
+                                    await pollStatus(taskId);
+                                    await refreshBuildQueue(taskId);
+                                } catch (e) {
+                                    console.warn('Failed to auto-refresh after completion:', e);
+                                }
+                                return;
                             }
-                            return;
+                        } catch (e) {
+                            // ignore completion check failures; we'll retry later
                         }
                     }
 
