@@ -8,8 +8,8 @@
     <script>
         window.SERVER_CONFIG = {
             builderHost: '<%= config.builder.host %>',
-            builderPort: '<%= config.builder.port %>',
-            reportPort: '<%= config.server.port %>',
+            builderPort: <%= config.builder.port %>,
+            reportPort: <%= config.server.port %>,
             localIp: '<%= config.server.localIp %>'
         };
     </script>
@@ -221,41 +221,11 @@
                         id="refreshStatusBtn" style="display: none;">
                     🔄 Refresh Status
                 </button>
-                <button class="control-btn" onclick="window.toggleBuilderLog && window.toggleBuilderLog()" 
-                        id="tailBuilderLogBtn" style="display: none; margin-left: 0.5rem;">
-                    📋 View Builder Log
-                </button>
-            </div>
-
-            <div id="statusMonitorHint" style="display: none; margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
-                Tip: press <b>Refresh Status</b> to switch the monitor to the currently running build from the queue.
             </div>
             
             <div id="statusMonitor">
                 <p style="color: var(--text-secondary);">No active builds. Submit a request to start monitoring.</p>
             </div>
-
-            <!-- Log tail container (initially hidden) -->
-            <div id="logTailContainer" style="display: none; margin-top: 1rem; border-top: 1px solid #444; padding-top: 1rem;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <h3 style="margin: 0; font-size: 1rem; color: var(--text-secondary);" id="builderLogTitle">Builder Log</h3>
-                    <div style="display: flex; gap: 0.5rem;">
-                        <button class="control-btn" onclick="clearBuilderLog()" style="padding: 2px 8px; font-size: 0.8rem;">Clear</button>
-                        <button class="control-btn" onclick="window.toggleBuilderLog()" style="padding: 2px 8px; font-size: 0.8rem;">Close</button>
-                    </div>
-                </div>
-                <pre id="builderLogArea" style="background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 4px; max-height: 400px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap; border: 1px solid #333;"></pre>
-            </div>
-        </div>
-
-        <!-- Build Queue Card -->
-        <div class="card">
-            <h2 class="card-title">
-                <div class="card-title-icon">🧾</div>
-                Build Request Queue
-            </h2>
-            <div style="color: var(--text-secondary);" id="build-queue-summary">Loading...</div>
-            <div id="build-queue-items" class="queue-list"></div>
         </div>
 
         <!-- Recent Reports Card -->

@@ -32,7 +32,8 @@
         });
 
         // Latest queue snapshot (load-first: refreshed only on page load, manual refresh, and after builds complete)
-        let lastQueueSnapshot = { running: null, waiting: [], rawActive: [], rawQueued: [] };
+        // Important: DO NOT mix active tasks into the queued list; builder can run multiple tasks concurrently.
+        let lastQueueSnapshot = { running: null, active: [], queued: [] };
         const requestMetaCache = new Map(); // taskId -> request.json payload (best-effort)
 
         function buildQueueSnapshot(activeTaskIds, queuedTaskIds) {
@@ -43,29 +44,15 @@
             const activeSorted = [...new Set(active)].sort();
             const queuedOrdered = queued; // LinkedBlockingQueue iteration is insertion-ordered
 
-            // Builder can be configured to run N tasks concurrently; to keep queue semantics stable for users,
-            // we treat the oldest active task as "Running" and everything else as "Waiting".
+            // Builder can be configured to run N tasks concurrently.
+            // We still pick the oldest active task as the one we label "RUNNING" for UI emphasis,
+            // but other active tasks remain ACTIVE (not queued).
             const running = activeSorted.length > 0 ? activeSorted[0] : null;
-
-            const waiting = [];
-            for (let i = 1; i < activeSorted.length; i++) waiting.push(activeSorted[i]);
-            for (const id of queuedOrdered) waiting.push(id);
-
-            // De-dup across active/queued in case of transient races
-            const dedupWaiting = [];
-            const seen = new Set(running ? [running] : []);
-            for (const id of waiting) {
-                if (id && !seen.has(id)) {
-                    seen.add(id);
-                    dedupWaiting.push(id);
-                }
-            }
 
             return {
                 running,
-                waiting: dedupWaiting,
-                rawActive: activeSorted,
-                rawQueued: queuedOrdered
+                active: activeSorted,
+                queued: queuedOrdered
             };
         }
 
@@ -90,22 +77,26 @@
                 const viewingId = currentId || sessionStorage.getItem('viewTaskId') || pinnedId;
 
                 const runningCount = lastQueueSnapshot.running ? 1 : 0;
-                const waitingCount = lastQueueSnapshot.waiting.length;
-                const activeReported = lastQueueSnapshot.rawActive ? lastQueueSnapshot.rawActive.length : 0;
-                summaryEl.textContent = `Running: ${runningCount} | Waiting: ${waitingCount}` +
-                    (activeReported > 1 ? ` (builder reports ${activeReported} active tasks)` : '');
+                const activeCount = Array.isArray(lastQueueSnapshot.active) ? lastQueueSnapshot.active.length : 0;
+                const queuedCount = Array.isArray(lastQueueSnapshot.queued) ? lastQueueSnapshot.queued.length : 0;
+                summaryEl.textContent = `Running: ${runningCount} | Active: ${Math.max(0, activeCount - runningCount)} | Queued: ${queuedCount}` +
+                    (activeCount > 1 ? ` (builder reports ${activeCount} active tasks)` : '');
 
                 const items = [];
-                if (!lastQueueSnapshot.running && waitingCount === 0) {
+                if (!lastQueueSnapshot.running && activeCount === 0 && queuedCount === 0) {
                     itemsEl.innerHTML = '<div style="color: var(--text-secondary);">No active or queued builds.</div>';
                     return lastQueueSnapshot;
                 }
 
                 const renderItem = (id, state, subtitle) => {
                     const badges = [];
-                    badges.push(`<span class="queue-badge ${state === 'running' ? 'running' : 'queued'}">${state === 'running' ? 'RUNNING' : 'WAITING'}</span>`);
+                    if (state === 'running') badges.push('<span class="queue-badge running">RUNNING</span>');
+                    else if (state === 'active') badges.push('<span class="queue-badge running">ACTIVE</span>');
+                    else badges.push('<span class="queue-badge queued">QUEUED</span>');
+                    
                     if (id && id === viewingId) badges.push('<span class="queue-badge viewing">VIEWING</span>');
                     if (id && pinnedId && id === pinnedId) badges.push('<span class="queue-badge pinned">PINNED</span>');
+                    
                     return `
                         <div class="queue-item" data-task-id="${id}">
                             <div class="queue-left">
@@ -120,10 +111,19 @@
                 if (lastQueueSnapshot.running) {
                     items.push(renderItem(lastQueueSnapshot.running, 'running', 'Currently running on builder'));
                 }
-                lastQueueSnapshot.waiting.forEach((id, idx) => {
-                    const subtitle = idx === 0 && !lastQueueSnapshot.running ? 'Next to run' : `Queue position ${idx + 1}`;
-                    items.push(renderItem(id, 'queued', subtitle));
-                });
+                // Other active tasks (still running, but not the highlighted oldest one)
+                if (Array.isArray(lastQueueSnapshot.active)) {
+                    for (const id of lastQueueSnapshot.active) {
+                        if (!id || id === lastQueueSnapshot.running) continue;
+                        items.push(renderItem(id, 'active', 'Active (concurrent)'));
+                    }
+                }
+                // True queued tasks (position based ONLY on queued list)
+                if (Array.isArray(lastQueueSnapshot.queued)) {
+                    lastQueueSnapshot.queued.forEach((id, idx) => {
+                        items.push(renderItem(id, 'queued', `Queue position ${idx + 1}`));
+                    });
+                }
 
                 itemsEl.innerHTML = items.join('');
 
@@ -909,11 +909,28 @@
                     const progressFill = document.getElementById('progress-fill');
                     const hintEl = document.getElementById('statusMonitorHint');
 
-                    // Update hint based on queue snapshot: if user is pinned on a completed/queued build, they can switch to running.
+                    // Update hint based on queue snapshot
                     try {
                         const snap = lastQueueSnapshot;
-                        const shouldHint = !!(hintEl && snap && snap.running && viewTaskId && viewTaskId !== snap.running);
-                        if (hintEl) hintEl.style.display = shouldHint ? 'block' : 'none';
+                        const isRunning = snap && snap.running === id;
+                        const isPinned = id === pinnedTaskId;
+                        
+                        if (hintEl) {
+                            const isQueued = snap && Array.isArray(snap.queued) && snap.queued.includes(id);
+                            const isActive = snap && Array.isArray(snap.active) && snap.active.includes(id);
+                            if (snap && snap.running && id !== snap.running) {
+                                // Not viewing the highlighted running one
+                                let msg = 'Viewing ';
+                                if (isQueued) msg += 'queued';
+                                else if (isActive) msg += 'active';
+                                else msg += 'previous';
+                                msg += ' build. Press <b>Refresh Status</b> to switch to the running build.';
+                                hintEl.innerHTML = msg;
+                                hintEl.style.display = 'block';
+                            } else {
+                                hintEl.style.display = 'none';
+                            }
+                        }
                     } catch {}
                     
                     // Check for completion first
@@ -939,17 +956,17 @@
                         // - if it's in the queue snapshot, treat as queued/waiting
                         // - otherwise mark as not found
                         const snap = lastQueueSnapshot;
-                        const waitingIdx = (snap && Array.isArray(snap.waiting)) ? snap.waiting.indexOf(id) : -1;
-                        if (waitingIdx >= 0) {
-                            statusElement.textContent = 'Queued';
+                        const queuedIdx = (snap && Array.isArray(snap.queued)) ? snap.queued.indexOf(id) : -1;
+                        if (queuedIdx >= 0) {
+                            statusElement.textContent = `Queued (${queuedIdx + 1})`;
                             statusElement.parentElement.className = 'status checking';
-                            progressDetails.textContent = `Waiting in build queue (position ${waitingIdx + 1})`;
+                            progressDetails.textContent = `Waiting in build queue (position ${queuedIdx + 1})`;
                             progressFill.style.width = '0%';
-                        } else if (snap && snap.running === id) {
+                        } else if (snap && Array.isArray(snap.active) && snap.active.includes(id)) {
                             // Rare transient case: queue says running but status lookup missed it
-                            statusElement.textContent = 'Running...';
+                            statusElement.textContent = 'Starting...';
                             statusElement.parentElement.className = 'status checking';
-                            progressDetails.textContent = 'Starting (status initializing)...';
+                            progressDetails.textContent = 'Build is starting (initializing)...';
                             progressFill.style.width = '0%';
                         } else {
                             statusElement.textContent = 'Not Found';
@@ -977,7 +994,30 @@
                             progressDetails.textContent = statusData.message || 'Build or tests failed';
                         } else if (statusData.status === 'running' || statusData.status === 'building') {
                             // Update progress details
-                            if (statusData.currentPhase) {
+                            if (statusData.progressSummary && statusData.progressSummary.phase) {
+                                const ps = statusData.progressSummary;
+                                let phaseText = ps.phase.charAt(0).toUpperCase() + ps.phase.slice(1);
+                                if (ps.phase === 'building') phaseText = 'Building...';
+                                if (ps.phase === 'testing') phaseText = 'Testing...';
+                                if (ps.phase === 'callback') phaseText = 'Finalizing...';
+                                
+                                statusElement.textContent = phaseText;
+                                
+                                let taskText = '';
+                                if (ps.currentTest) {
+                                    taskText = `Test: ${ps.currentTest}`;
+                                    if (ps.currentCommit) taskText += ` on ${ps.currentCommit.substring(0, 7)}`;
+                                } else if (ps.currentCommit) {
+                                    taskText = `Commit: ${ps.currentCommit.substring(0, 7)}`;
+                                } else if (ps.phase === 'testing') {
+                                    taskText = 'Preparing tests...';
+                                } else if (ps.phase === 'building') {
+                                    taskText = 'Building sources...';
+                                } else {
+                                    taskText = 'Processing...';
+                                }
+                                progressDetails.textContent = taskText;
+                            } else if (statusData.currentPhase) {
                                 statusElement.textContent = `${statusData.currentPhase}...`;
                                 progressDetails.textContent = statusData.currentTask || 
                                     `Processing ${statusData.currentPhase.toLowerCase()}...`;
@@ -987,7 +1027,17 @@
                             }
                             
                             // Calculate progress
-                            if (statusData.progress !== undefined && statusData.progress !== null) {
+                            if (statusData.progressSummary && typeof statusData.progressSummary.percent === 'number') {
+                                let pct = statusData.progressSummary.percent;
+                                // Double safety: never show 100% if status is still running
+                                if (pct >= 100) pct = 99;
+                                progressFill.style.width = `${pct}%`;
+                                
+                                const ps = statusData.progressSummary;
+                                if (ps.totalTasks > 0) {
+                                    progressDetails.textContent += ` (${ps.completedTasks}/${ps.totalTasks})`;
+                                }
+                            } else if (statusData.progress !== undefined && statusData.progress !== null) {
                                 if (typeof statusData.progress === 'number') {
                                     progressFill.style.width = `${statusData.progress}%`;
                                 } else if (typeof statusData.progress === 'object') {
@@ -1011,15 +1061,6 @@
                                 const elapsed = (new Date() - startTime) / 1000;
                                 const estimatedProgress = Math.min(90, elapsed / 10); // Max 90% until completion
                                 progressFill.style.width = `${estimatedProgress}%`;
-                            }
-                            
-                            // Show current build/test details if available
-                            if (statusData.currentCommit && statusData.currentTest) {
-                                progressDetails.textContent = 
-                                    `Testing ${statusData.currentTest} on ${statusData.currentCommit.substring(0, 7)}`;
-                            } else if (statusData.currentCommit) {
-                                progressDetails.textContent = 
-                                    `Building commit ${statusData.currentCommit.substring(0, 7)}`;
                             }
                             
                         } else {
@@ -1075,9 +1116,33 @@
                 if (!id) return;
                 viewTaskId = id;
                 sessionStorage.setItem('viewTaskId', id);
+                await refreshBuildQueue(id);
                 const meta = await getRequestMeta(id);
                 renderMonitor(meta, id);
                 await pollStatus(id);
+
+                // Restart log tailer if active to point to new task
+                if (logTailActive) {
+                    // If the selected request is queued (not active), don't tail the currently running log.
+                    const snap = lastQueueSnapshot;
+                    const isQueued = snap && Array.isArray(snap.queued) && snap.queued.includes(id);
+                    const isActive = snap && Array.isArray(snap.active) && snap.active.includes(id);
+
+                    const logArea = document.getElementById('builderLogArea');
+                    if (logArea) {
+                        logArea.textContent = isQueued
+                            ? `Queued (${snap.queued.indexOf(id) + 1}) - builder.log will appear when this request starts.`
+                            : 'Loading log for ' + id + '...';
+                    }
+
+                    // Always stop current tail
+                    stopBuilderLogTail();
+
+                    // Only tail if the request is active (or if a log already exists)
+                    if (isActive) {
+                        startBuilderLogTail();
+                    }
+                }
             }
 
             // Expose for queue clicks
@@ -1099,7 +1164,12 @@
                 // Cycle through queue order on refresh (next build)
                 const queueOrder = [];
                 if (snap && snap.running) queueOrder.push(snap.running);
-                if (snap && Array.isArray(snap.waiting)) queueOrder.push(...snap.waiting);
+                if (snap && Array.isArray(snap.active)) {
+                    for (const id of snap.active) {
+                        if (id && id !== snap.running) queueOrder.push(id);
+                    }
+                }
+                if (snap && Array.isArray(snap.queued)) queueOrder.push(...snap.queued);
 
                 if (queueOrder.length > 0) {
                     const idx = queueOrder.indexOf(viewTaskId);
@@ -1129,6 +1199,20 @@
             if (container.style.display === 'none') {
                 container.style.display = 'block';
                 if (!logTailActive) {
+                    // If current view is queued, show placeholder instead of tailing another request.
+                    const viewId = sessionStorage.getItem('viewTaskId') || sessionStorage.getItem('activeTaskId');
+                    const snap = lastQueueSnapshot;
+                    const isQueued = viewId && snap && Array.isArray(snap.queued) && snap.queued.includes(viewId);
+                    if (isQueued) {
+                        const pos = snap.queued.indexOf(viewId) + 1;
+                        const titleEl = document.getElementById('builderLogTitle');
+                        const areaEl = document.getElementById('builderLogArea');
+                        if (titleEl) titleEl.textContent = `${viewId}/builder.log`;
+                        if (areaEl) {
+                            areaEl.textContent = `Queued (${pos}) - builder.log will appear when this request starts.`;
+                        }
+                        return;
+                    }
                     startBuilderLogTail();
                 }
             } else {
@@ -1139,8 +1223,8 @@
 
         window.clearBuilderLog = function() {
             document.getElementById('builderLogArea').textContent = '';
-            // If we're at the end, we might want to reset offset to 0 to re-read everything?
-            // But usually clear is just for UI.
+            logTailOffset = 0;
+            logTailKnownMtime = 0;
         };
 
         async function startBuilderLogTail() {

@@ -308,7 +308,8 @@ public class Builder {
                     if (task != null) {
                         response.put("status", "running")
                                 .put("taskId", taskId)
-                                .put("progress", task.getProgress());
+                                .put("progress", task.getProgress())
+                                .put("progressSummary", task.getProgressSummary());
                     } else {
                         response.put("status", "not_found")
                                 .put("taskId", taskId);
@@ -319,7 +320,8 @@ public class Builder {
                     for (Map.Entry<String, BuilderTask> entry : activeTasks.entrySet()) {
                         tasks.put(new JSONObject()
                             .put("taskId", entry.getKey())
-                            .put("progress", entry.getValue().getProgress()));
+                            .put("progress", entry.getValue().getProgress())
+                            .put("progressSummary", entry.getValue().getProgressSummary()));
                     }
                     response.put("activeTasks", tasks);
 

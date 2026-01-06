@@ -35,6 +35,15 @@ public class BuilderTask {
     private String baselineCommit;
     private WorkloadDistributor workloadDistributor;
 
+    // Progress tracking for dashboard
+    private final AtomicInteger buildsCompleted = new AtomicInteger(0);
+    private final AtomicInteger testsCompleted = new AtomicInteger(0);
+    private volatile int buildsTotal = 0;
+    private volatile int testsTotal = 0;
+    private volatile String currentPhase = "initializing";
+    private volatile String currentCommit = "";
+    private volatile String currentTest = "";
+
     // Thread-safe build cache shared across all tasks
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
 
@@ -75,6 +84,12 @@ public class BuilderTask {
             JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
             JSONArray tests = request.getJSONArray("tests");
             String buildType = request.optString("buildType", "debug");
+
+            // Initialize progress totals
+            this.buildsTotal = request.has("prNumber") ? 1 : commits.length();
+            this.testsTotal = this.buildsTotal * tests.length();
+            this.currentPhase = "setup";
+
             Integer prNumber = null;
             if (request.has("prNumber")) {
                 try {
@@ -133,6 +148,7 @@ public class BuilderTask {
             // Ensure CUBRID source repository is set up
             setupCubridRepository();
 
+            this.currentPhase = "building";
             Map<String, String> builtPackages;
             if (prNumber != null) {
                 // Resolve PR head and baseline (merge-base against develop)
@@ -175,6 +191,7 @@ public class BuilderTask {
             // Track which testers received tests for this requestId
             Set<String> testersUsed = ConcurrentHashMap.newKeySet();
 
+            this.currentPhase = "testing";
             if (config.isPullSchedulingEnabled()) {
                 taskLogger.info("Pull-based scheduling flag enabled - builder will respond to tester pull when wired; legacy push flow remains active.");
             }
@@ -204,7 +221,9 @@ public class BuilderTask {
             
             // Calculate execution time and send callback with results
             long duration = System.currentTimeMillis() - startTime;
+            this.currentPhase = "callback";
             sendCallback(callbackUrl, duration);
+            this.currentPhase = "done";
             
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Builder task failed: " + taskId, e);
@@ -308,6 +327,7 @@ public class BuilderTask {
                 taskLogger.info("Using cached build for PR head " + normalizedCommit + " (baseline: " + baselineShort + ")");
                 builtPackages.put(normalizedCommit, cachedPackage);
                 progress.put(normalizedCommit, 100);
+                buildsCompleted.incrementAndGet();
                 createCachedBuildLog(normalizedCommit, cachedPackage, "memory cache");
                 try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, pr.baselineSha); } catch (Exception ignore) {}
                 return builtPackages;
@@ -324,6 +344,7 @@ public class BuilderTask {
             builtPackages.put(normalizedCommit, diskPackage);
             buildCache.put(cacheKey, diskPackage);
             progress.put(normalizedCommit, 100);
+            buildsCompleted.incrementAndGet();
             createCachedBuildLog(normalizedCommit, diskPackage, "disk cache");
             try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, pr.baselineSha); } catch (Exception ignore) {}
             return builtPackages;
@@ -350,6 +371,7 @@ public class BuilderTask {
                 cleanBuildCache(config.getBuildCacheSize());
             }
             progress.put(normalizedCommit, 100);
+            buildsCompleted.incrementAndGet();
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Failed to build PR #" + pr.prNumber + " (head " + normalizedCommit + ")", e);
             builtPackages.put(normalizedCommit, "");
@@ -525,6 +547,7 @@ public class BuilderTask {
                     }
                     
                     progress.put(commit, 100); // Complete
+                    buildsCompleted.incrementAndGet();
                     
                 } catch (Exception e) {
                     taskLogger.log(Level.SEVERE, "Failed to build commit " + commit, e);
@@ -602,6 +625,7 @@ public class BuilderTask {
                         taskLogger.info("Using cached build for commit " + normalizedCommit + " (baseline: " + baselineShort + ")");
                         builtPackages.put(commit, cachedPackage);
                         progress.put(commit, 100);
+                        buildsCompleted.incrementAndGet();
 
                         // Since it's cached, we assume localhost has it
                         workloadDistributor.completeBuild("localhost:8089", normalizedCommit, cachedPackage);
@@ -622,6 +646,7 @@ public class BuilderTask {
                     builtPackages.put(commit, diskPackage);
                     buildCache.put(cacheKey, diskPackage);
                     progress.put(commit, 100);
+                    buildsCompleted.incrementAndGet();
 
                     // Assume localhost has it
                     workloadDistributor.completeBuild("localhost:8089", normalizedCommit, diskPackage);
@@ -674,6 +699,7 @@ public class BuilderTask {
                     writeBuildMetadata(buildPackage, normalizedCommit, buildType, baselineCommit);
                     cleanBuildCache(config.getBuildCacheSize());
                     progress.put(commit, 100);
+                    buildsCompleted.incrementAndGet();
                 } else {
                     taskLogger.severe("Build failed for commit " + normalizedCommit);
                     builtPackages.put(commit, "");
@@ -2077,6 +2103,40 @@ public class BuilderTask {
         }
         return progressJson;
     }
+
+    /**
+     * Returns a summarized progress object for real-time monitoring.
+     * Includes current phase, commit, test, and overall completion percentage.
+     */
+    public JSONObject getProgressSummary() {
+        JSONObject summary = new JSONObject();
+        summary.put("phase", currentPhase);
+        summary.put("currentCommit", currentCommit);
+        summary.put("currentTest", currentTest);
+        summary.put("buildsCompleted", buildsCompleted.get());
+        summary.put("buildsTotal", buildsTotal);
+        summary.put("testsCompleted", testsCompleted.get());
+        summary.put("testsTotal", testsTotal);
+
+        int totalTasks = buildsTotal + testsTotal;
+        int completedTasks = buildsCompleted.get() + testsCompleted.get();
+        
+        int percent = 0;
+        if (totalTasks > 0) {
+            percent = (int) (100.0 * completedTasks / totalTasks);
+        }
+
+        // Rule: clamp to 99% unless the task is completely done (callback finished)
+        if (percent >= 100 && !"done".equals(currentPhase)) {
+            percent = 99;
+        }
+        
+        summary.put("percent", percent);
+        summary.put("totalTasks", totalTasks);
+        summary.put("completedTasks", completedTasks);
+        
+        return summary;
+    }
     
     /**
      * Create a build log entry for cached builds to maintain consistent log structure
@@ -2335,6 +2395,8 @@ public class BuilderTask {
                             }
                             // Track that this tester received a test for this requestId
                             testersUsed.add(finalWorker);
+                            this.currentCommit = job.commit;
+                            this.currentTest = job.testPath;
                             JSONObject testResult = runTest(job.commit, job.buildPackage, job.testPath,
                                 finalWorker, this.baselineCommit, buildType);
                             results.add(testResult);
@@ -2346,6 +2408,7 @@ public class BuilderTask {
                                 .put("status", "error")
                                 .put("message", e.getMessage()));
                         } finally {
+                            testsCompleted.incrementAndGet();
                             RequestContext.clear();
                         }
                     }
@@ -2691,6 +2754,8 @@ public class BuilderTask {
                         }
                         // Track that this tester received a test for this requestId
                         testersUsed.add(workerIp);
+                        this.currentCommit = a.getCommit();
+                        this.currentTest = a.getTestKey();
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
                             a.getTestKey(), workerIp, this.baselineCommit, buildType, a.getTest());
                         results.add(testResult);
@@ -2702,6 +2767,7 @@ public class BuilderTask {
                             .put("status", "error")
                             .put("message", e.getMessage()));
                     } finally {
+                        testsCompleted.incrementAndGet();
                         RequestContext.clear();
                         inflightCounter.decrementAndGet();
                         if (finalElephantCounter != null) {
