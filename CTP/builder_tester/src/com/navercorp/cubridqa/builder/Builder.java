@@ -310,6 +310,14 @@ public class Builder {
                             .put("progress", entry.getValue().getProgress()));
                     }
                     response.put("activeTasks", tasks);
+
+                    // Also return queued requests for visibility in dashboards
+                    JSONArray queuedTaskIds = new JSONArray();
+                    for (QueuedBuildRequest qr : pendingRequests) {
+                        queuedTaskIds.put(qr.getRequestId());
+                    }
+                    response.put("queuedRequests", pendingRequests.size());
+                    response.put("queuedTaskIds", queuedTaskIds);
                 }
                 
                 sendJsonResponse(exchange, 200, response);
