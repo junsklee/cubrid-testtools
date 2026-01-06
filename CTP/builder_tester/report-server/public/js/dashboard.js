@@ -889,6 +889,7 @@
         let logTailOffset = 0;
         let logTailKnownMtime = 0;
         let logTailTimer = null;
+        let lastReportCheckMs = 0;
 
         window.toggleBuilderLog = function() {
             const container = document.getElementById('logTailContainer');
@@ -966,14 +967,23 @@
                     // Adaptive backoff: if no content, wait longer
                     let delay = data.recommendedPollMs || 5000;
                     
-                    // Check if build is finished every minute
-                    if (Date.now() % 60000 < delay) {
+                    // Check if build is finished (rate-limited to once per minute)
+                    const now = Date.now();
+                    if (now - lastReportCheckMs >= 60000) {
+                        lastReportCheckMs = now;
                         const reportCheck = await fetch(`/report?id=${taskId}`, { method: 'HEAD' });
                         if (reportCheck.ok) {
                             console.log('Build completed (report found), stopping log tail.');
                             area.textContent += '\n--- Build Finished (Monitoring Stopped) ---\n';
                             area.scrollTop = area.scrollHeight;
-                            logTailActive = false;
+                            stopBuilderLogTail();
+
+                            // Auto-refresh status/progress so the monitor updates without manual click
+                            try {
+                                await pollStatus();
+                            } catch (e) {
+                                console.warn('Failed to auto-refresh status after completion:', e);
+                            }
                             return;
                         }
                     }
