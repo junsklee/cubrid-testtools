@@ -1348,22 +1348,11 @@ public class BuilderTask {
                 taskLogger.info("Sending package URL to remote tester " + workerIp + ": " + buildPackageRef);
             }
             
-            // Resolve run parameters with request-level overrides (camelCase or snake_case)
-            String runModeOverride = request.optString("runMode", request.optString("run_mode", config.getRunMode()));
-            int minRunsOverride = request.has("minRuns") ? request.optInt("minRuns", config.getMinRuns()) :
-                                  (request.has("min_runs") ? request.optInt("min_runs", config.getMinRuns()) : config.getMinRuns());
-            int maxRunsOverride = request.has("maxRuns") ? request.optInt("maxRuns", config.getMaxRuns()) :
-                                  (request.has("max_runs") ? request.optInt("max_runs", config.getMaxRuns()) : config.getMaxRuns());
-            Long timeBudgetOverride = null;
-            if (request.has("timeBudgetMs")) {
-                long tb = request.optLong("timeBudgetMs", -1);
-                if (tb >= 1) timeBudgetOverride = tb;
-            } else if (request.has("time_budget_ms")) {
-                long tb = request.optLong("time_budget_ms", -1);
-                if (tb >= 1) timeBudgetOverride = tb;
-            } else {
-                timeBudgetOverride = config.getTimeBudgetMs();
-            }
+            // Resolve run parameters with normalized request values (guaranteed valid by Builder validation)
+            String runModeOverride = request.getString("runMode");
+            int minRunsOverride = request.getInt("minRuns");
+            int maxRunsOverride = request.getInt("maxRuns");
+            Long timeBudgetOverride = request.has("timeBudgetMs") ? request.getLong("timeBudgetMs") : null;
 
             JSONObject testRequest = new JSONObject()
                 .put("buildPackage", buildPackageRef)

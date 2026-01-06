@@ -15,6 +15,8 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 import com.navercorp.cubridqa.builder.logging.*;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
+import com.navercorp.cubridqa.builder.tester.TestRequestValidator;
+import com.navercorp.cubridqa.builder.tester.TestRequestValidator.ValidationResult;
 
 /**
  * Builder - Receives build requests and builds CUBRID at specified commits
@@ -589,6 +591,20 @@ public class Builder {
         );
         if (!hasCommits && !hasPrNumber) {
             throw new IllegalArgumentException("Request must contain non-empty 'commits' array or a valid 'prNumber'");
+        }
+
+        // Strict validation of run parameters (runMode, minRuns, maxRuns, timeBudgetMs)
+        ValidationResult validation = TestRequestValidator.validate(request);
+        if (!validation.isValid()) {
+            throw new IllegalArgumentException("Invalid run parameters: " + String.join("; ", validation.getErrors()));
+        }
+        
+        // Update request with normalized/defaulted values from validation
+        request.put("runMode", validation.getRunMode());
+        request.put("minRuns", validation.getMinRuns());
+        request.put("maxRuns", validation.getMaxRuns());
+        if (validation.getTimeBudgetMs() != null) {
+            request.put("timeBudgetMs", validation.getTimeBudgetMs());
         }
 
         // Check for custom shell script - if provided, tests can be empty
