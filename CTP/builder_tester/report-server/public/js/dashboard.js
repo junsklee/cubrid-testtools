@@ -1106,8 +1106,12 @@
                 renderMonitor(meta, id);
                 await pollStatus(id);
 
-                // Restart log tailer if active to point to new task
-                if (logTailActive) {
+                // If the log panel is open, re-point it to the newly selected task.
+                // Note: selecting a queued item stops the tail timer (logTailActive=false) but the panel stays open,
+                // so we must key off panel visibility, not logTailActive.
+                const logContainer = document.getElementById('logTailContainer');
+                const logPanelOpen = !!(logContainer && logContainer.style.display !== 'none');
+                if (logPanelOpen) {
                     // If the selected request is queued (not active), don't tail the currently running log.
                     const snap = lastQueueSnapshot;
                     const isQueued = snap && Array.isArray(snap.queued) && snap.queued.includes(id);
