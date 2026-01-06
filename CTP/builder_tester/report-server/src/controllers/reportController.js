@@ -186,6 +186,75 @@ class ReportController {
         }
     }
 
+    /**
+     * Tail builder.log for a specific request ID
+     * Bounded reads with offset cursor for real-time monitoring
+     */
+    async tailBuilderLog(req, res) {
+        try {
+            const { taskId, offset, maxBytes, knownMtimeMs } = req.query;
+            const start = parseInt(offset) || 0;
+            const limit = parseInt(maxBytes) || 1024 * 64; // Default 64KB per chunk
+            
+            if (!taskId) {
+                return res.status(400).json({ status: 'invalid', message: 'taskId is required' });
+            }
+
+            // Security: validate taskId format to prevent directory traversal
+            if (!/^[A-Za-z0-9_-]+$/.test(taskId)) {
+                return res.status(400).json({ status: 'invalid', message: 'Invalid taskId format' });
+            }
+
+            const logPath = path.join(config.paths.requests, taskId, 'builder.log');
+            
+            if (!await fileService.fileExists(logPath)) {
+                return res.json({ status: 'not_found', taskId, message: 'builder.log not found yet' });
+            }
+
+            const stats = await fileService.getFileStats(logPath);
+            const fileSize = stats.size;
+            const mtimeMs = stats.mtimeMs;
+
+            // Short-circuit if nothing new to read
+            if (start >= fileSize && knownMtimeMs && parseInt(knownMtimeMs) === Math.floor(mtimeMs)) {
+                return res.json({
+                    status: 'ok',
+                    taskId,
+                    content: '',
+                    nextOffset: start,
+                    fileSize,
+                    mtimeMs: Math.floor(mtimeMs),
+                    recommendedPollMs: 10000 // Quiet file, back off
+                });
+            }
+
+            // Read the next chunk
+            const actualLimit = Math.min(limit, fileSize - start);
+            let content = '';
+            let nextOffset = start;
+
+            if (actualLimit > 0) {
+                const result = await fileService.readFileRange(logPath, start, actualLimit);
+                content = result.data;
+                nextOffset = start + result.bytesRead;
+            }
+
+            res.json({
+                status: 'ok',
+                taskId,
+                content,
+                nextOffset,
+                fileSize,
+                mtimeMs: Math.floor(mtimeMs),
+                recommendedPollMs: actualLimit > 0 ? 2000 : 5000
+            });
+
+        } catch (err) {
+            console.error('Error tailing builder log:', err);
+            res.status(500).json({ status: 'error', message: err.message });
+        }
+    }
+
 }
 
 module.exports = new ReportController();

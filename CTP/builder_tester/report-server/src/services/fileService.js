@@ -84,6 +84,34 @@ class FileService {
     }
 
     /**
+     * Read a specific byte range from a file
+     * @param {string} filePath Path to the file
+     * @param {number} start Start offset (bytes)
+     * @param {number} length Number of bytes to read
+     * @returns {Promise<{data: string, bytesRead: number}>}
+     */
+    async readFileRange(filePath, start, length) {
+        let fileHandle;
+        try {
+            fileHandle = await fs.open(filePath, 'r');
+            const buffer = Buffer.alloc(length);
+            const { bytesRead } = await fileHandle.read(buffer, 0, length, start);
+            
+            // Convert to string, assuming UTF-8 for log files
+            return {
+                data: buffer.toString('utf8', 0, bytesRead),
+                bytesRead: bytesRead
+            };
+        } catch (err) {
+            throw new Error(`Failed to read file range ${filePath}: ${err.message}`);
+        } finally {
+            if (fileHandle) {
+                await fileHandle.close();
+            }
+        }
+    }
+
+    /**
      * Save test results
      */
     async saveTestResults(requestId, data) {

@@ -639,6 +639,7 @@
         function startStatusMonitoring(request) {
             const monitor = document.getElementById('statusMonitor');
             const refreshBtn = document.getElementById('refreshStatusBtn');
+            const tailBtn = document.getElementById('tailBuilderLogBtn');
             const startTime = new Date();
             
             // Store session data for persistence across page refreshes
@@ -648,9 +649,12 @@
                 sessionStorage.setItem('activeRequest', JSON.stringify(request));
             }
             
-            // Show the refresh button
+            // Show the refresh and tail buttons
             if (refreshBtn) {
                 refreshBtn.style.display = 'inline-block';
+            }
+            if (tailBtn) {
+                tailBtn.style.display = 'inline-block';
             }
             
             // Initial display
@@ -877,9 +881,117 @@
             // Store intervals for cleanup if needed
             window.statusMonitorIntervals = {};
             
-            // Make pollStatus available globally for manual refresh
-            window.refreshBuildStatus = pollStatus;
+        // Make pollStatus available globally for manual refresh
+        window.refreshBuildStatus = pollStatus;
+
+        // --- Log Tailing Logic ---
+        let logTailActive = false;
+        let logTailOffset = 0;
+        let logTailKnownMtime = 0;
+        let logTailTimer = null;
+
+        window.toggleBuilderLog = function() {
+            const container = document.getElementById('logTailContainer');
+            if (container.style.display === 'none') {
+                container.style.display = 'block';
+                if (!logTailActive) {
+                    startBuilderLogTail();
+                }
+            } else {
+                container.style.display = 'none';
+                stopBuilderLogTail();
+            }
+        };
+
+        window.clearBuilderLog = function() {
+            document.getElementById('builderLogArea').textContent = '';
+            // If we're at the end, we might want to reset offset to 0 to re-read everything?
+            // But usually clear is just for UI.
+        };
+
+        async function startBuilderLogTail() {
+            const taskId = sessionStorage.getItem('activeTaskId');
+            if (!taskId) return;
+
+            document.getElementById('builderLogTitle').textContent = `${taskId}/builder.log`;
+            logTailActive = true;
+            logTailOffset = 0;
+            logTailKnownMtime = 0;
+            document.getElementById('builderLogArea').textContent = 'Loading builder.log...';
+            
+            pollTail();
         }
+
+        function stopBuilderLogTail() {
+            logTailActive = false;
+            if (logTailTimer) {
+                clearTimeout(logTailTimer);
+                logTailTimer = null;
+            }
+        }
+
+        async function pollTail() {
+            if (!logTailActive) return;
+
+            const taskId = sessionStorage.getItem('activeTaskId');
+            if (!taskId) {
+                stopBuilderLogTail();
+                return;
+            }
+
+            try {
+                const url = `/log-tail/builder?taskId=${taskId}&offset=${logTailOffset}&knownMtimeMs=${logTailKnownMtime}`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    const area = document.getElementById('builderLogArea');
+                    const isAtBottom = area.scrollHeight - area.scrollTop <= area.clientHeight + 50;
+
+                    if (logTailOffset === 0 && data.content === '') {
+                        area.textContent = 'Waiting for log data...';
+                    } else if (logTailOffset === 0) {
+                        area.textContent = data.content;
+                    } else {
+                        area.textContent += data.content;
+                    }
+
+                    logTailOffset = data.nextOffset;
+                    logTailKnownMtime = data.mtimeMs;
+
+                    if (isAtBottom && data.content.length > 0) {
+                        area.scrollTop = area.scrollHeight;
+                    }
+
+                    // Adaptive backoff: if no content, wait longer
+                    let delay = data.recommendedPollMs || 5000;
+                    
+                    // Check if build is finished every minute
+                    if (Date.now() % 60000 < delay) {
+                        const reportCheck = await fetch(`/report?id=${taskId}`, { method: 'HEAD' });
+                        if (reportCheck.ok) {
+                            console.log('Build completed (report found), stopping log tail.');
+                            area.textContent += '\n--- Build Finished (Monitoring Stopped) ---\n';
+                            area.scrollTop = area.scrollHeight;
+                            logTailActive = false;
+                            return;
+                        }
+                    }
+
+                    logTailTimer = setTimeout(pollTail, delay);
+                } else if (data.status === 'not_found') {
+                    document.getElementById('builderLogArea').textContent = 'Log file not yet available...';
+                    logTailTimer = setTimeout(pollTail, 10000);
+                } else {
+                    console.warn('Log tail error:', data.message);
+                    logTailTimer = setTimeout(pollTail, 15000);
+                }
+            } catch (err) {
+                console.error('Failed to poll log tail:', err);
+                logTailTimer = setTimeout(pollTail, 20000);
+            }
+        }
+    }
 
         // Show system info modal
         async function showSystemInfo() {

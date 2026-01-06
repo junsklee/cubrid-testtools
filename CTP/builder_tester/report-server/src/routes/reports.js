@@ -19,4 +19,7 @@ router.get('/api/logs/:req_id/builds', (req, res) => reportController.listBuildL
 router.get('/api/log/:req_id/builds/:filename', (req, res) => reportController.getBuildLog(req, res));
 router.get('/api/log-root/:req_id/:filename', (req, res) => reportController.getRootLog(req, res));
 
+// Tail endpoint (non-/api to bypass rate limits)
+router.get('/log-tail/builder', (req, res) => reportController.tailBuilderLog(req, res));
+
 module.exports = router;
