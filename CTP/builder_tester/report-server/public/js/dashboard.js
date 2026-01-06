@@ -31,9 +31,13 @@
             updateBaselineDisplay();
         });
 
-        // Latest queue snapshot (load-first: refreshed only on page load, manual refresh, and after builds complete)
+        // Latest queue snapshot (load-first: refreshed on page load, manual refresh, and background polling)
         // Builder runs at most one request at a time; the rest are queued.
         let lastQueueSnapshot = { running: null, queued: [] };
+        // Transient UI state: show the most recently finished request in the queue list until a user action clears it.
+        let transientFinishedTaskId = null;
+        let transientFinishedAtMs = 0;
+        let queueAutoRefreshTimer = null;
         const requestMetaCache = new Map(); // taskId -> request.json payload (best-effort)
 
         function buildQueueSnapshot(activeTaskIds, queuedTaskIds) {
@@ -59,6 +63,7 @@
             if (!summaryEl || !itemsEl) return;
 
             try {
+                const prevRunning = lastQueueSnapshot ? lastQueueSnapshot.running : null;
                 const resp = await fetch('/api/builder/status');
                 if (!resp.ok) {
                     throw new Error(`Queue status unavailable: ${resp.status} ${resp.statusText}`);
@@ -68,7 +73,18 @@
                 const activeIds = Array.isArray(data.activeTasks) ? data.activeTasks.map(t => t.taskId).filter(Boolean) : [];
                 const queuedIds = Array.isArray(data.queuedTaskIds) ? data.queuedTaskIds : [];
 
-                lastQueueSnapshot = buildQueueSnapshot(activeIds, queuedIds);
+                const newSnap = buildQueueSnapshot(activeIds, queuedIds);
+                lastQueueSnapshot = newSnap;
+
+                // Detect completion from queue transitions:
+                // if previously we had a running request and it's no longer running AND not queued, consider it finished.
+                if (prevRunning && prevRunning !== newSnap.running) {
+                    const stillQueued = Array.isArray(newSnap.queued) && newSnap.queued.includes(prevRunning);
+                    if (!stillQueued) {
+                        transientFinishedTaskId = prevRunning;
+                        transientFinishedAtMs = Date.now();
+                    }
+                }
 
                 const pinnedId = sessionStorage.getItem('activeTaskId');
                 const viewingId = currentId || sessionStorage.getItem('viewTaskId') || pinnedId;
@@ -78,7 +94,11 @@
                 summaryEl.textContent = `Running: ${runningCount} | Queued: ${queuedCount}`;
 
                 const items = [];
-                if (!lastQueueSnapshot.running && queuedCount === 0) {
+                const shouldShowFinished = !!transientFinishedTaskId &&
+                    transientFinishedTaskId !== lastQueueSnapshot.running &&
+                    !(Array.isArray(lastQueueSnapshot.queued) && lastQueueSnapshot.queued.includes(transientFinishedTaskId));
+
+                if (!lastQueueSnapshot.running && queuedCount === 0 && !shouldShowFinished) {
                     itemsEl.innerHTML = '<div style="color: var(--text-secondary);">No active or queued builds.</div>';
                     return lastQueueSnapshot;
                 }
@@ -86,13 +106,14 @@
                 const renderItem = (id, state, subtitle) => {
                     const badges = [];
                     if (state === 'running') badges.push('<span class="queue-badge running">RUNNING</span>');
+                    else if (state === 'finished') badges.push('<span class="queue-badge finished">FINISHED</span>');
                     else badges.push('<span class="queue-badge queued">QUEUED</span>');
                     
                     if (id && id === viewingId) badges.push('<span class="queue-badge viewing">VIEWING</span>');
                     if (id && pinnedId && id === pinnedId) badges.push('<span class="queue-badge pinned">PINNED</span>');
                     
                     return `
-                        <div class="queue-item" data-task-id="${id}">
+                        <div class="queue-item" data-task-id="${id}" data-queue-state="${state}">
                             <div class="queue-left">
                                 <div class="queue-id">${id}</div>
                                 <div class="queue-subtitle">${subtitle}</div>
@@ -102,6 +123,13 @@
                     `;
                 };
 
+                if (shouldShowFinished) {
+                    items.push(renderItem(
+                        transientFinishedTaskId,
+                        'finished',
+                        'Finished (temporary). Press Refresh Status or click another request to clear.'
+                    ));
+                }
                 if (lastQueueSnapshot.running) {
                     items.push(renderItem(lastQueueSnapshot.running, 'running', 'Currently running on builder'));
                 }
@@ -118,6 +146,11 @@
                 itemsEl.querySelectorAll('.queue-item').forEach(el => {
                     el.addEventListener('click', async () => {
                         const id = el.getAttribute('data-task-id');
+                        // Clear transient finished marker only when switching to a different request.
+                        if (transientFinishedTaskId && id && id !== transientFinishedTaskId) {
+                            transientFinishedTaskId = null;
+                            transientFinishedAtMs = 0;
+                        }
                         if (window.switchMonitorTask && id) {
                             await window.switchMonitorTask(id);
                             await refreshBuildQueue(id);
@@ -142,6 +175,18 @@
                         }
                     });
                 });
+
+                // Background auto-refresh while something is running (low frequency to limit load)
+                if (queueAutoRefreshTimer) {
+                    clearTimeout(queueAutoRefreshTimer);
+                    queueAutoRefreshTimer = null;
+                }
+                const hasActivity = !!lastQueueSnapshot.running;
+                if (hasActivity) {
+                    queueAutoRefreshTimer = setTimeout(() => {
+                        refreshBuildQueue(sessionStorage.getItem('viewTaskId') || sessionStorage.getItem('activeTaskId'));
+                    }, 10000);
+                }
 
                 return lastQueueSnapshot;
             } catch (e) {
@@ -1176,6 +1221,10 @@
             // - refresh queue view
             // - if viewing a queued/previous task, switch to the currently running build
             window.refreshBuildStatus = async () => {
+                // User action: clear transient finished marker.
+                transientFinishedTaskId = null;
+                transientFinishedAtMs = 0;
+
                 const snap = await refreshBuildQueue(viewTaskId);
 
                 // If viewing pinned build and there's a different running build, switch to it.
