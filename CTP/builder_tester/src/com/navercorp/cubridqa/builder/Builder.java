@@ -610,6 +610,39 @@ public class Builder {
                 request.put("tests", new JSONArray().put("custom_script_test"));
             }
         }
+
+        // Validate test paths early to prevent malformed inputs (e.g., report URLs) from becoming "shell/http://..."
+        if (request.has("tests")) {
+            JSONArray tests = request.getJSONArray("tests");
+            List<String> invalid = new ArrayList<>();
+            for (int i = 0; i < tests.length(); i++) {
+                String raw = String.valueOf(tests.get(i));
+                if (raw == null) continue;
+                String t = raw.trim();
+                if (t.isEmpty()) continue;
+                if ("custom_script_test".equals(t)) continue;
+
+                String lower = t.toLowerCase(Locale.ROOT);
+                if (lower.startsWith("http://") || lower.startsWith("https://") || lower.contains("://") || lower.contains("report?id=")) {
+                    invalid.add(t);
+                    continue;
+                }
+                if (t.contains("?") || t.matches(".*\\s+.*")) {
+                    invalid.add(t);
+                    continue;
+                }
+                if (!t.endsWith(".sh")) {
+                    invalid.add(t);
+                    continue;
+                }
+            }
+            if (!invalid.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "Invalid test path(s): " + String.join(", ", invalid) +
+                    ". Expected filesystem paths like shell/.../cases/... .sh (not report URLs)."
+                );
+            }
+        }
         
         // Support both workerIp (singular) and workerIps (array) for backward compatibility
         boolean hasWorkerIp = request.has("workerIp") && !request.getString("workerIp").trim().isEmpty();

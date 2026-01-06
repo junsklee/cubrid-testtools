@@ -582,6 +582,38 @@
             return true;
         }
 
+        function validateTestPathsForSubmit(tests) {
+            const invalid = [];
+            for (const t of (tests || [])) {
+                const v = (t || '').trim();
+                if (!v) continue;
+                if (v === 'custom_script_test') continue;
+
+                // Reject URLs / report links (common copy-paste mistake)
+                const lower = v.toLowerCase();
+                if (lower.startsWith('http://') || lower.startsWith('https://') || lower.includes('://') || lower.includes('report?id=')) {
+                    invalid.push(v);
+                    continue;
+                }
+                // Shell test paths should be filesystem-like, no query strings
+                if (v.includes('?') || /\s/.test(v)) {
+                    invalid.push(v);
+                    continue;
+                }
+                // Require .sh to avoid passing arbitrary strings that later become "shell/<garbage>"
+                if (!v.endsWith('.sh')) {
+                    invalid.push(v);
+                    continue;
+                }
+            }
+            if (invalid.length > 0) {
+                throw new Error(
+                    `Invalid test path(s): ${invalid.join(', ')}. ` +
+                    `Expected filesystem test paths like shell/.../cases/... .sh (not report URLs).`
+                );
+            }
+        }
+
         // Submit build request
         async function submitBuildRequest() {
             const button = document.getElementById('submitButton');
@@ -660,6 +692,9 @@
                         throw new Error('Please enter at least one test case');
                     }
                 }
+
+                // Validate test paths (prevent accidental report URLs)
+                validateTestPathsForSubmit(tests);
                 
                 // Validate callback URL
                 if (!validateCallbackUrl()) {
