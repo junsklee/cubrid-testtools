@@ -33,6 +33,8 @@ public class Builder {
     private final BlockingQueue<QueuedBuildRequest> pendingRequests;
     private final DockerBuildManager dockerManager;
     private final LogRotationManager logRotationManager;
+    // Guards capacity checks + queue/task transitions to prevent over-admitting tasks under concurrency
+    private final Object taskDispatchLock = new Object();
     
     public Builder(BuilderConfig config) throws IOException {
         this.config = config;
@@ -215,46 +217,39 @@ public class Builder {
                     return;
                 }
                 
-                // Check if at capacity - queue the request
-                if (activeTasks.size() >= config.getMaxConcurrentBuilds()) {
-                    QueuedBuildRequest queuedRequest = new QueuedBuildRequest(taskId, request);
-                    pendingRequests.offer(queuedRequest);
-                    
-                    // Calculate queue position (1-based)
-                    int queuePosition = pendingRequests.size();
-                    
-                    logger.info(String.format("[%s] Build request queued at position %d (capacity: %d/%d)",
-                        requestId, queuePosition, activeTasks.size(), config.getMaxConcurrentBuilds()));
-                    
-                    JSONObject response = new JSONObject()
-                        .put("status", "queued")
-                        .put("taskId", taskId)
-                        .put("queuePosition", queuePosition)
-                        .put("message", "Build request queued - will start when capacity available");
-                    
-                    sendJsonResponse(exchange, 202, response);
-                    return;
-                }
-                
-                // Create and submit task
-                BuilderTask task = new BuilderTask(taskId, request, config, dockerManager);
-                activeTasks.put(taskId, task);
-                
-                CompletableFuture.runAsync(() -> {
-                    try {
-                        task.run();
-                    } finally {
-                        activeTasks.remove(taskId);
-                        processNextQueuedRequest();
+                // Capacity check + queue/task admission must be atomic to prevent over-admission
+                synchronized (taskDispatchLock) {
+                    // Check if at capacity - queue the request
+                    if (activeTasks.size() >= config.getMaxConcurrentBuilds()) {
+                        QueuedBuildRequest queuedRequest = new QueuedBuildRequest(taskId, request);
+                        pendingRequests.offer(queuedRequest);
+
+                        // Calculate queue position (1-based)
+                        int queuePosition = pendingRequests.size();
+
+                        logger.info(String.format("[%s] Build request queued at position %d (capacity: %d/%d)",
+                            requestId, queuePosition, activeTasks.size(), config.getMaxConcurrentBuilds()));
+
+                        JSONObject response = new JSONObject()
+                            .put("status", "queued")
+                            .put("taskId", taskId)
+                            .put("queuePosition", queuePosition)
+                            .put("message", "Build request queued - will start when capacity available");
+
+                        sendJsonResponse(exchange, 202, response);
+                        return;
                     }
-                }, buildExecutor);
-                
+
+                    // Admit task
+                    submitTaskLocked(taskId, request);
+                }
+
                 // Send accepted response
                 JSONObject response = new JSONObject()
                     .put("status", "accepted")
                     .put("taskId", taskId)
                     .put("message", "Build request received and processing");
-                
+
                 sendJsonResponse(exchange, 202, response);
                 
             } catch (Exception e) {
@@ -265,6 +260,23 @@ public class Builder {
                 sendJsonResponse(exchange, 400, error);
             }
         }
+    }
+
+    /**
+     * Submit a task while holding {@link #taskDispatchLock} to reserve capacity.
+     */
+    private void submitTaskLocked(String taskId, JSONObject request) {
+        BuilderTask task = new BuilderTask(taskId, request, config, dockerManager);
+        activeTasks.put(taskId, task);
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                task.run();
+            } finally {
+                activeTasks.remove(taskId);
+                processNextQueuedRequest();
+            }
+        }, buildExecutor);
     }
     
     private class StatusHandler implements HttpHandler {
@@ -711,34 +723,30 @@ public class Builder {
      * Called automatically when a build task completes.
      */
     private void processNextQueuedRequest() {
-        // Check if we have capacity and pending requests
-        if (activeTasks.size() < config.getMaxConcurrentBuilds() && !pendingRequests.isEmpty()) {
-            QueuedBuildRequest queuedRequest = pendingRequests.poll();
-            if (queuedRequest != null) {
+        // Drain queue while capacity is available; admission is lock-protected to prevent races.
+        while (true) {
+            QueuedBuildRequest queuedRequest;
+            synchronized (taskDispatchLock) {
+                if (activeTasks.size() >= config.getMaxConcurrentBuilds() || pendingRequests.isEmpty()) {
+                    return;
+                }
+                queuedRequest = pendingRequests.poll();
+                if (queuedRequest == null) {
+                    return;
+                }
+
                 String taskId = queuedRequest.getRequestId();
                 JSONObject request = queuedRequest.getRequest();
-                
+
                 logger.info(String.format("[%s] Starting queued build request (waited %dms, remaining in queue: %d)",
                     taskId, queuedRequest.getWaitTimeMs(), pendingRequests.size()));
-                
+
                 try {
-                    // Create and submit task
-                    BuilderTask task = new BuilderTask(taskId, request, config, dockerManager);
-                    activeTasks.put(taskId, task);
-                    
-                    CompletableFuture.runAsync(() -> {
-                        try {
-                            task.run();
-                        } finally {
-                            activeTasks.remove(taskId);
-                            processNextQueuedRequest();
-                        }
-                    }, buildExecutor);
+                    submitTaskLocked(taskId, request);
                 } catch (Exception e) {
                     logger.log(Level.SEVERE, String.format("[%s] Error processing queued request", taskId), e);
                     activeTasks.remove(taskId);
-                    // Try to process next request even if this one failed
-                    processNextQueuedRequest();
+                    // Continue loop to try next queued request
                 }
             }
         }
