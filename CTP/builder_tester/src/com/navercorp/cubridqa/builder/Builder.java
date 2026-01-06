@@ -25,6 +25,9 @@ import com.navercorp.cubridqa.builder.docker.DockerUtils;
  */
 public class Builder {
     private static final Logger logger = Logger.getLogger(Builder.class.getName());
+    // The builder runs build requests sequentially: at most 1 BuilderTask at a time.
+    // (We still keep an explicit queue for additional requests.)
+    private static final int MAX_CONCURRENT_REQUESTS = 1;
     
     private final BuilderConfig config;
     private final HttpServer server;
@@ -38,7 +41,7 @@ public class Builder {
     
     public Builder(BuilderConfig config) throws IOException {
         this.config = config;
-        this.buildExecutor = Executors.newFixedThreadPool(config.getMaxConcurrentBuilds());
+        this.buildExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_REQUESTS);
         this.activeTasks = new ConcurrentHashMap<>();
         this.pendingRequests = new LinkedBlockingQueue<>();
         this.dockerManager = new DockerBuildManager(config);
@@ -119,7 +122,7 @@ public class Builder {
         logger.info("Builder service started on port " + config.getListenPort());
         logger.info("CUBRID source: " + config.getCubridSrcDir());
         logger.info("Work directory: " + config.getWorkDir());
-        logger.info("Max concurrent builds: " + config.getMaxConcurrentBuilds());
+        logger.info("Max concurrent build requests: " + MAX_CONCURRENT_REQUESTS);
         logger.info("Docker enabled: " + config.useDocker());
     }
     
@@ -174,6 +177,8 @@ public class Builder {
                 // Extract parameters (commits optional when using prNumber)
                 JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
                 JSONArray tests = request.getJSONArray("tests");
+                // callbackUrl is passed through to the BuilderTask via the request JSON
+                @SuppressWarnings("unused")
                 String callbackUrl = request.getString("callbackUrl");
                 
                 // Support both workerIp (singular) and workerIps (array) for backward compatibility
@@ -189,6 +194,8 @@ public class Builder {
                     workerIps = new JSONArray().put(workerIp);
                 }
                 
+                // buildType is used by BuilderTask via the request JSON
+                @SuppressWarnings("unused")
                 String buildType = request.optString("buildType", "debug");
                 
                 // Check tester reachability for all worker IPs
@@ -220,7 +227,7 @@ public class Builder {
                 // Capacity check + queue/task admission must be atomic to prevent over-admission
                 synchronized (taskDispatchLock) {
                     // Check if at capacity - queue the request
-                    if (activeTasks.size() >= config.getMaxConcurrentBuilds()) {
+                    if (activeTasks.size() >= MAX_CONCURRENT_REQUESTS) {
                         QueuedBuildRequest queuedRequest = new QueuedBuildRequest(taskId, request);
                         pendingRequests.offer(queuedRequest);
 
@@ -228,7 +235,7 @@ public class Builder {
                         int queuePosition = pendingRequests.size();
 
                         logger.info(String.format("[%s] Build request queued at position %d (capacity: %d/%d)",
-                            requestId, queuePosition, activeTasks.size(), config.getMaxConcurrentBuilds()));
+                            requestId, queuePosition, activeTasks.size(), MAX_CONCURRENT_REQUESTS));
 
                         JSONObject response = new JSONObject()
                             .put("status", "queued")
@@ -374,7 +381,7 @@ public class Builder {
                     .put("timestamp", System.currentTimeMillis())
                     .put("activeTasks", activeTasks.size())
                     .put("queuedRequests", pendingRequests.size())
-                    .put("maxConcurrentBuilds", config.getMaxConcurrentBuilds())
+                    .put("maxConcurrentBuilds", MAX_CONCURRENT_REQUESTS)
                     .put("workDir", config.getWorkDir())
                     .put("dockerEnabled", config.useDocker());
                 
@@ -729,7 +736,7 @@ public class Builder {
         while (true) {
             QueuedBuildRequest queuedRequest;
             synchronized (taskDispatchLock) {
-                if (activeTasks.size() >= config.getMaxConcurrentBuilds() || pendingRequests.isEmpty()) {
+                if (activeTasks.size() >= MAX_CONCURRENT_REQUESTS || pendingRequests.isEmpty()) {
                     return;
                 }
                 queuedRequest = pendingRequests.poll();

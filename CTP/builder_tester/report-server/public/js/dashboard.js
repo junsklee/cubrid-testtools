@@ -32,8 +32,8 @@
         });
 
         // Latest queue snapshot (load-first: refreshed only on page load, manual refresh, and after builds complete)
-        // Important: DO NOT mix active tasks into the queued list; builder can run multiple tasks concurrently.
-        let lastQueueSnapshot = { running: null, active: [], queued: [] };
+        // Builder runs at most one request at a time; the rest are queued.
+        let lastQueueSnapshot = { running: null, queued: [] };
         const requestMetaCache = new Map(); // taskId -> request.json payload (best-effort)
 
         function buildQueueSnapshot(activeTaskIds, queuedTaskIds) {
@@ -44,14 +44,11 @@
             const activeSorted = [...new Set(active)].sort();
             const queuedOrdered = queued; // LinkedBlockingQueue iteration is insertion-ordered
 
-            // Builder can be configured to run N tasks concurrently.
-            // We still pick the oldest active task as the one we label "RUNNING" for UI emphasis,
-            // but other active tasks remain ACTIVE (not queued).
+            // Only one request runs at a time.
             const running = activeSorted.length > 0 ? activeSorted[0] : null;
 
             return {
                 running,
-                active: activeSorted,
                 queued: queuedOrdered
             };
         }
@@ -77,13 +74,11 @@
                 const viewingId = currentId || sessionStorage.getItem('viewTaskId') || pinnedId;
 
                 const runningCount = lastQueueSnapshot.running ? 1 : 0;
-                const activeCount = Array.isArray(lastQueueSnapshot.active) ? lastQueueSnapshot.active.length : 0;
                 const queuedCount = Array.isArray(lastQueueSnapshot.queued) ? lastQueueSnapshot.queued.length : 0;
-                summaryEl.textContent = `Running: ${runningCount} | Active: ${Math.max(0, activeCount - runningCount)} | Queued: ${queuedCount}` +
-                    (activeCount > 1 ? ` (builder reports ${activeCount} active tasks)` : '');
+                summaryEl.textContent = `Running: ${runningCount} | Queued: ${queuedCount}`;
 
                 const items = [];
-                if (!lastQueueSnapshot.running && activeCount === 0 && queuedCount === 0) {
+                if (!lastQueueSnapshot.running && queuedCount === 0) {
                     itemsEl.innerHTML = '<div style="color: var(--text-secondary);">No active or queued builds.</div>';
                     return lastQueueSnapshot;
                 }
@@ -91,7 +86,6 @@
                 const renderItem = (id, state, subtitle) => {
                     const badges = [];
                     if (state === 'running') badges.push('<span class="queue-badge running">RUNNING</span>');
-                    else if (state === 'active') badges.push('<span class="queue-badge running">ACTIVE</span>');
                     else badges.push('<span class="queue-badge queued">QUEUED</span>');
                     
                     if (id && id === viewingId) badges.push('<span class="queue-badge viewing">VIEWING</span>');
@@ -110,13 +104,6 @@
 
                 if (lastQueueSnapshot.running) {
                     items.push(renderItem(lastQueueSnapshot.running, 'running', 'Currently running on builder'));
-                }
-                // Other active tasks (still running, but not the highlighted oldest one)
-                if (Array.isArray(lastQueueSnapshot.active)) {
-                    for (const id of lastQueueSnapshot.active) {
-                        if (!id || id === lastQueueSnapshot.running) continue;
-                        items.push(renderItem(id, 'active', 'Active (concurrent)'));
-                    }
                 }
                 // True queued tasks (position based ONLY on queued list)
                 if (Array.isArray(lastQueueSnapshot.queued)) {
@@ -917,12 +904,10 @@
                         
                         if (hintEl) {
                             const isQueued = snap && Array.isArray(snap.queued) && snap.queued.includes(id);
-                            const isActive = snap && Array.isArray(snap.active) && snap.active.includes(id);
                             if (snap && snap.running && id !== snap.running) {
                                 // Not viewing the highlighted running one
                                 let msg = 'Viewing ';
                                 if (isQueued) msg += 'queued';
-                                else if (isActive) msg += 'active';
                                 else msg += 'previous';
                                 msg += ' build. Press <b>Refresh Status</b> to switch to the running build.';
                                 hintEl.innerHTML = msg;
@@ -962,7 +947,7 @@
                             statusElement.parentElement.className = 'status checking';
                             progressDetails.textContent = `Waiting in build queue (position ${queuedIdx + 1})`;
                             progressFill.style.width = '0%';
-                        } else if (snap && Array.isArray(snap.active) && snap.active.includes(id)) {
+                        } else if (snap && snap.running === id) {
                             // Rare transient case: queue says running but status lookup missed it
                             statusElement.textContent = 'Starting...';
                             statusElement.parentElement.className = 'status checking';
@@ -1126,7 +1111,7 @@
                     // If the selected request is queued (not active), don't tail the currently running log.
                     const snap = lastQueueSnapshot;
                     const isQueued = snap && Array.isArray(snap.queued) && snap.queued.includes(id);
-                    const isActive = snap && Array.isArray(snap.active) && snap.active.includes(id);
+                    const isActive = snap && snap.running === id;
 
                     const logArea = document.getElementById('builderLogArea');
                     if (logArea) {
@@ -1164,11 +1149,6 @@
                 // Cycle through queue order on refresh (next build)
                 const queueOrder = [];
                 if (snap && snap.running) queueOrder.push(snap.running);
-                if (snap && Array.isArray(snap.active)) {
-                    for (const id of snap.active) {
-                        if (id && id !== snap.running) queueOrder.push(id);
-                    }
-                }
                 if (snap && Array.isArray(snap.queued)) queueOrder.push(...snap.queued);
 
                 if (queueOrder.length > 0) {
