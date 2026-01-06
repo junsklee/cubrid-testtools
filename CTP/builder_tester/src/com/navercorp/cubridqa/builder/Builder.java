@@ -622,12 +622,8 @@ public class Builder {
                 if (t.isEmpty()) continue;
                 if ("custom_script_test".equals(t)) continue;
 
-                String lower = t.toLowerCase(Locale.ROOT);
-                if (lower.startsWith("http://") || lower.startsWith("https://") || lower.contains("://") || lower.contains("report?id=")) {
-                    invalid.add(t);
-                    continue;
-                }
-                if (t.contains("?") || t.matches(".*\\s+.*")) {
+                // Enforce strict shell test paths. Reject anything not starting with "shell/".
+                if (!t.startsWith("shell/")) {
                     invalid.add(t);
                     continue;
                 }
@@ -639,7 +635,7 @@ public class Builder {
             if (!invalid.isEmpty()) {
                 throw new IllegalArgumentException(
                     "Invalid test path(s): " + String.join(", ", invalid) +
-                    ". Expected filesystem paths like shell/.../cases/... .sh (not report URLs)."
+                    ". Expected filesystem paths like shell/.../cases/... .sh."
                 );
             }
         }
