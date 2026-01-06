@@ -41,8 +41,22 @@ if (config.app.environment !== 'test') {
 }
 
 // Rate limiting
-const limiter = rateLimit(config.security.rateLimit);
-app.use('/api/', limiter);
+// Default limiter protects API endpoints, but the dashboard does high-frequency reads (queue/status + log metadata).
+// Make those endpoints more lenient to avoid 429s during normal UI usage.
+const defaultLimiter = rateLimit(config.security.rateLimit);
+const highFreqLimiter = rateLimit({
+    ...config.security.rateLimit,
+    max: Math.max(config.security.rateLimit.max || 0, 2000)
+});
+
+app.use('/api/', (req, res, next) => {
+    const p = req.path || '';
+    // High-frequency dashboard reads
+    if (p === '/builder/status' || p.startsWith('/log-root/') || p.startsWith('/log/') || p.startsWith('/logs/')) {
+        return highFreqLimiter(req, res, next);
+    }
+    return defaultLimiter(req, res, next);
+});
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
