@@ -83,6 +83,16 @@
                     if (!stillQueued) {
                         transientFinishedTaskId = prevRunning;
                         transientFinishedAtMs = Date.now();
+
+                        // If the status monitor is currently viewing the finished task, refresh it once so it flips to Completed.
+                        try {
+                            const currentViewId = sessionStorage.getItem('viewTaskId') || sessionStorage.getItem('activeTaskId');
+                            if (currentViewId && currentViewId === prevRunning && typeof window.__pollStatus === 'function') {
+                                window.__pollStatus(prevRunning);
+                            }
+                        } catch (e) {
+                            // ignore
+                        }
                     }
                 }
 
@@ -1173,6 +1183,9 @@
             // Initial status check only (no automatic polling)
             pollStatus(viewTaskId);
             refreshBuildQueue(viewTaskId);
+
+            // Expose a hook so queue auto-refresh can update the monitor on completion without enabling high-frequency polling.
+            window.__pollStatus = pollStatus;
             
             // Store intervals for cleanup if needed
             window.statusMonitorIntervals = {};
