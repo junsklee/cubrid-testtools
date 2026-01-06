@@ -1174,7 +1174,7 @@
 
             // Make refresh available globally for manual refresh:
             // - refresh queue view
-            // - if currently viewing the pinned task, allow switching to the currently running/next queued build
+            // - if viewing a queued/previous task, switch to the currently running build
             window.refreshBuildStatus = async () => {
                 const snap = await refreshBuildQueue(viewTaskId);
 
@@ -1185,23 +1185,20 @@
                     return;
                 }
 
-                // Cycle through queue order on refresh (next build)
-                const queueOrder = [];
-                if (snap && snap.running) queueOrder.push(snap.running);
-                if (snap && Array.isArray(snap.queued)) queueOrder.push(...snap.queued);
-
-                if (queueOrder.length > 0) {
-                    const idx = queueOrder.indexOf(viewTaskId);
-                    const nextId = idx >= 0 ? queueOrder[(idx + 1) % queueOrder.length] : queueOrder[0];
-                    if (nextId && nextId !== viewTaskId) {
-                        await switchToTask(nextId);
-                    } else {
-                        await pollStatus(viewTaskId);
+                // If a build is currently running and we're not viewing it, switch to it.
+                // If we're already viewing the running build, just refresh status (do NOT cycle to a queued item).
+                if (snap && snap.running) {
+                    if (viewTaskId !== snap.running) {
+                        await switchToTask(snap.running);
+                        await refreshBuildQueue(snap.running);
+                        return;
                     }
+                    await pollStatus(viewTaskId);
                     await refreshBuildQueue(viewTaskId);
                     return;
                 }
 
+                // No running build: just refresh the current view
                 await pollStatus(viewTaskId);
             };
 
