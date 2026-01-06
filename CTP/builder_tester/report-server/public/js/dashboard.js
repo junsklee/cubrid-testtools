@@ -27,8 +27,52 @@
             
             // Check for active sessions on page load
             checkForActiveSessions();
+            refreshBuildQueue();
             updateBaselineDisplay();
         });
+
+        async function refreshBuildQueue(currentId) {
+            const summaryEl = document.getElementById('build-queue-summary');
+            const listEl = document.getElementById('build-queue-list');
+            if (!summaryEl || !listEl) return;
+
+            try {
+                const resp = await fetch('/api/builder/status');
+                if (!resp.ok) {
+                    throw new Error(`Queue status unavailable: ${resp.status} ${resp.statusText}`);
+                }
+                const data = await resp.json();
+
+                const active = Array.isArray(data.activeTasks) ? data.activeTasks.map(t => t.taskId).filter(Boolean) : [];
+                const queued = Array.isArray(data.queuedTaskIds) ? data.queuedTaskIds : [];
+
+                summaryEl.textContent = `Active: ${active.length} | Queued: ${queued.length}`;
+
+                const highlightId = currentId || sessionStorage.getItem('activeTaskId');
+                const lines = [];
+                if (active.length > 0) {
+                    lines.push('Active:');
+                    for (const id of active) {
+                        lines.push(`- ${id === highlightId ? '*' : ''}${id}`);
+                    }
+                }
+                if (queued.length > 0) {
+                    if (active.length > 0) lines.push('');
+                    lines.push('Queued:');
+                    queued.forEach((id, idx) => {
+                        lines.push(`- ${idx + 1}. ${id === highlightId ? '*' : ''}${id}`);
+                    });
+                }
+                if (active.length === 0 && queued.length === 0) {
+                    lines.push('No active or queued builds.');
+                }
+
+                listEl.textContent = lines.join('\n');
+            } catch (e) {
+                summaryEl.textContent = 'Build queue unavailable';
+                listEl.textContent = e && e.message ? e.message : String(e);
+            }
+        }
 
         // Setup event listeners
         function setupEventListeners() {
@@ -691,13 +735,6 @@
                         </div>
                     </div>
                 </div>
-                <div class="info-item">
-                    <div class="info-label">Build Queue</div>
-                    <div class="info-value">
-                        <div id="build-queue-summary" style="color: var(--text-secondary);">Loading...</div>
-                        <pre id="build-queue-list" style="margin: 0.5rem 0 0 0; background: #1e1e1e; color: #d4d4d4; padding: 0.75rem; border-radius: 4px; max-height: 220px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.8rem; line-height: 1.35; white-space: pre-wrap; border: 1px solid #333;"></pre>
-                    </div>
-                </div>
             `;
             
             const totalCommitCount = request.prNumber ? 1 : request.commits.length;
@@ -886,52 +923,9 @@
                 }
             }
 
-            async function refreshBuildQueue() {
-                const summaryEl = document.getElementById('build-queue-summary');
-                const listEl = document.getElementById('build-queue-list');
-                if (!summaryEl || !listEl) return;
-
-                try {
-                    const resp = await fetch('/api/builder/status');
-                    if (!resp.ok) {
-                        throw new Error(`Queue status unavailable: ${resp.status} ${resp.statusText}`);
-                    }
-                    const data = await resp.json();
-
-                    const active = Array.isArray(data.activeTasks) ? data.activeTasks.map(t => t.taskId).filter(Boolean) : [];
-                    const queued = Array.isArray(data.queuedTaskIds) ? data.queuedTaskIds : [];
-
-                    summaryEl.textContent = `Active: ${active.length} | Queued: ${queued.length}`;
-
-                    const currentId = request.taskId || request.requestId;
-                    const lines = [];
-                    if (active.length > 0) {
-                        lines.push('Active:');
-                        for (const id of active) {
-                            lines.push(`- ${id === currentId ? '*' : ''}${id}`);
-                        }
-                    }
-                    if (queued.length > 0) {
-                        lines.push(active.length > 0 ? '' : 'Queued:');
-                        if (active.length > 0) lines.push('Queued:');
-                        queued.forEach((id, idx) => {
-                            lines.push(`- ${idx + 1}. ${id === currentId ? '*' : ''}${id}`);
-                        });
-                    }
-                    if (active.length === 0 && queued.length === 0) {
-                        lines.push('No active or queued builds.');
-                    }
-
-                    listEl.textContent = lines.join('\n');
-                } catch (e) {
-                    summaryEl.textContent = 'Build queue unavailable';
-                    listEl.textContent = e && e.message ? e.message : String(e);
-                }
-            }
-            
             // Initial status check only (no automatic polling)
             pollStatus();
-            refreshBuildQueue();
+            refreshBuildQueue(taskId);
             
             // Store intervals for cleanup if needed
             window.statusMonitorIntervals = {};
@@ -939,7 +933,7 @@
         // Make refresh available globally for manual refresh (also refreshes queue)
         window.refreshBuildStatus = async () => {
             await pollStatus();
-            await refreshBuildQueue();
+            await refreshBuildQueue(taskId);
         };
 
         // --- Log Tailing Logic ---
