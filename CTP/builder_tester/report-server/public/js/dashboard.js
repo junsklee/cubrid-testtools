@@ -660,6 +660,10 @@
             // Initial display
             monitor.innerHTML = `
                 <div class="info-item">
+                    <div class="info-label">Request ID</div>
+                    <div class="info-value" id="request-id">${taskId || ''}</div>
+                </div>
+                <div class="info-item">
                     <div class="info-label">Status</div>
                     <div class="status checking">
                         <span class="status-dot"></span>
