@@ -54,6 +54,7 @@ public class TestStatsStore {
     private final WALSegmentWriter walWriter;
     private final WALManifest manifest;
     private final Path walDir;
+    private final boolean walCollectionEnabled;
 
     // Request journals: one per builder requestId
     private final ConcurrentHashMap<String, RequestJournal> requestJournals;
@@ -107,6 +108,7 @@ public class TestStatsStore {
         this.walWriter = walWriter;
         this.manifest = manifest;
         this.walDir = walDir;
+        this.walCollectionEnabled = builderConfig == null || builderConfig.isWalCollectionEnabled();
         this.statsMap = new ConcurrentHashMap<>();
         this.requestJournals = new ConcurrentHashMap<>();
         this.lastSnapshotTime = Instant.EPOCH;
@@ -136,14 +138,18 @@ public class TestStatsStore {
         // Replay WAL segments from MANIFEST
         replayWAL();
 
-        // Start coordinator (single-threaded, enforces order)
-        snapshotCoordinator.scheduleAtFixedRate(
-                this::coordinatedSnapshot,
-                snapshotIntervalSeconds,
-                snapshotIntervalSeconds,
-                TimeUnit.SECONDS
-        );
-        logger.info("[TestStatsStore] Snapshot coordinator started, interval: " + snapshotIntervalSeconds + "s");
+        if (walCollectionEnabled) {
+            // Start coordinator (single-threaded, enforces order)
+            snapshotCoordinator.scheduleAtFixedRate(
+                    this::coordinatedSnapshot,
+                    snapshotIntervalSeconds,
+                    snapshotIntervalSeconds,
+                    TimeUnit.SECONDS
+            );
+            logger.info("[TestStatsStore] Snapshot coordinator started, interval: " + snapshotIntervalSeconds + "s");
+        } else {
+            logger.info("[TestStatsStore] WAL collection disabled; skipping snapshot coordinator");
+        }
     }
 
     /**
@@ -254,10 +260,12 @@ public class TestStatsStore {
      */
     public void recordObservation(TestObservation obs, String requestId) {
         // Write to WAL first (async, non-blocking)
-        walWriter.append(obs);
+        if (walCollectionEnabled) {
+            walWriter.append(obs);
+        }
 
         // Append to request journal if requestId is provided
-        if (requestId != null && !requestId.isEmpty()) {
+        if (walCollectionEnabled && requestId != null && !requestId.isEmpty()) {
             RequestJournal journal = requestJournals.computeIfAbsent(requestId, rid -> {
                 try {
                     logger.fine("Creating RequestJournal for requestId: " + rid);
@@ -572,6 +580,11 @@ public class TestStatsStore {
         long startTime = System.currentTimeMillis();
 
         try {
+            if (!walCollectionEnabled) {
+                logger.fine("[Coordinator] WAL collection disabled; skipping snapshot and WAL coordination");
+                return;
+            }
+
             // 1) Write snapshot (fsync file → rename → fsync dir) with timeout
             snapshotPath = writeSnapshotWithTimeout(60); // 60 second timeout
             if (snapshotPath == null) {

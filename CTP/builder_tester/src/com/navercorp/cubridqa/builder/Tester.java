@@ -138,7 +138,8 @@ public class Tester {
         
         Path profilesDir = Paths.get(config.getWorkDir()).resolve("profiles");
         Path observationWalPath = profilesDir.resolve("test_stats.jl.gz");
-        TestObservationWriter observationWriter = new TestObservationWriter(observationWalPath, logger);
+        TestObservationWriter observationWriter = new TestObservationWriter(
+            observationWalPath, logger, config.isWalCollectionEnabled());
 
         // Initialize WAL components for robust crash-safe persistence
         Path walDir = profilesDir.resolve("wal");
@@ -217,13 +218,17 @@ public class Tester {
     
     public void start() {
         if (config.isStatsEnabled()) {
-            // Start WAL writer first (acquires lock, opens segment)
-            try {
-                walWriter.start();
-                logger.info("WALSegmentWriter started");
-            } catch (IOException e) {
-                logger.severe("Failed to start WALSegmentWriter: " + e.getMessage());
-                throw new RuntimeException("WAL initialization failed", e);
+            if (config.isWalCollectionEnabled()) {
+                // Start WAL writer first (acquires lock, opens segment)
+                try {
+                    walWriter.start();
+                    logger.info("WALSegmentWriter started");
+                } catch (IOException e) {
+                    logger.severe("Failed to start WALSegmentWriter: " + e.getMessage());
+                    throw new RuntimeException("WAL initialization failed", e);
+                }
+            } else {
+                logger.info("WAL collection disabled (wal_collection_enabled=false); skipping WALSegmentWriter");
             }
 
             // Start TestStatsStore (loads snapshot, replays WAL, starts coordinator)
@@ -248,9 +253,13 @@ public class Tester {
             testStatsStore.stop();
             logger.info("TestStatsStore stopped");
 
-            // Stop WAL writer (releases lock, closes segment)
-            walWriter.stop();
-            logger.info("WALSegmentWriter stopped");
+            if (config.isWalCollectionEnabled()) {
+                // Stop WAL writer (releases lock, closes segment)
+                walWriter.stop();
+                logger.info("WALSegmentWriter stopped");
+            } else {
+                logger.info("WAL collection disabled (wal_collection_enabled=false); skipping WALSegmentWriter shutdown");
+            }
         }
 
         server.stop(0);

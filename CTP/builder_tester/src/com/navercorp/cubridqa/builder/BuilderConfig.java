@@ -50,6 +50,7 @@ public class BuilderConfig {
     private static final String LOG_FETCH_READ_TIMEOUT_SECONDS = "log_fetch_read_timeout_seconds";
     private static final String LOG_FILE_VERIFICATION_TIMEOUT_SECONDS = "log_file_verification_timeout_seconds";
     private static final String STATS_ENABLED = "stats_enabled"; // Tester: enable per-test metrics/WAL
+    private static final String WAL_COLLECTION_ENABLED = "wal_collection_enabled"; // Tester: enable WAL persistence
     private static final String DOCKER_STATS_INTERVAL_MS = "docker_stats_interval_ms"; // Tester: docker stats sampling interval
     private static final String OPTIMIZED_DOCKER_ENABLED = "optimized_docker_enabled"; // Enable Docker image caching
     private static final String DOCKER_ENFORCE_MEMORY_LIMITS = "docker_enforce_memory_limits"; // Enforce Docker memory limits from predictions (default false)
@@ -908,6 +909,14 @@ public class BuilderConfig {
      */
     public boolean isStatsEnabled() {
         return Boolean.parseBoolean(properties.getProperty(STATS_ENABLED, "true"));
+    }
+
+    /**
+     * Whether WAL persistence is enabled for stats.
+     * Default is true.
+     */
+    public boolean isWalCollectionEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(WAL_COLLECTION_ENABLED, "true"));
     }
 
     /**
