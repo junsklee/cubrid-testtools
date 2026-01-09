@@ -5,7 +5,6 @@ import com.navercorp.cubridqa.builder.tester.TestResult;
 import com.navercorp.cubridqa.builder.tester.TestStatus;
 import com.navercorp.cubridqa.builder.cache.BuildCache;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
-import com.navercorp.cubridqa.builder.exec.CubridInstaller;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
@@ -141,7 +140,8 @@ public class DirectExecutor implements ExecutorStrategy {
         
         // Create wrapper script
         String wrapperScript = EnvScriptFactory.createDirectWrapperScript(
-            sourceTestDir.toString(), request.getTestScript(), request.getTestName(), ctpHome, request.getCustomShellScript());
+            sourceTestDir.toString(), request.getTestScript(), request.getTestName(), ctpHome,
+            request.getCustomShellScript(), request.getCustomAttachments());
         File wrapperFile = new File(workDir.toFile(), "test_wrapper.sh");
         Files.write(wrapperFile.toPath(), wrapperScript.getBytes());
         wrapperFile.setExecutable(true);

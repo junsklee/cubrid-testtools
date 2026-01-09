@@ -114,28 +114,34 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             }
         }
         
-        // Resolve test case directory within the local shell testcases checkout
-        Path sourceTestDir;
-        try {
-            sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
-        } catch (IllegalArgumentException e) {
-            return finalizeResult(
-                TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message(e.getMessage()),
-                metricsBuilder, startNs, "docker", null);
+        boolean customOnlyMode = "custom_script_test".equals(request.getTestPath());
+        String relativeTestDir = "";
+        if (!customOnlyMode) {
+            // Resolve test case directory within the local shell testcases checkout
+            Path sourceTestDir;
+            try {
+                sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
+            } catch (IllegalArgumentException e) {
+                return finalizeResult(
+                    TestResult.builder()
+                        .testName(request.getTestName())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message(e.getMessage()),
+                    metricsBuilder, startNs, "docker", null);
+            }
+            if (!Files.isReadable(sourceTestDir)) {
+                return finalizeResult(
+                    TestResult.builder()
+                        .testName(request.getTestName())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message("Permission denied reading test directory: " + sourceTestDir),
+                    metricsBuilder, startNs, "docker", null);
+            }
+            relativeTestDir = computeRelativeTestDir(shellRepoRoot, sourceTestDir, testLogger);
+            testLogger.info("Using test directory: " + sourceTestDir + " (relative: " + (relativeTestDir.isEmpty() ? "." : relativeTestDir) + ")");
+        } else {
+            testLogger.info("Custom-only script mode: using /workspace/custom_test_execution/... inside container");
         }
-        if (!Files.isReadable(sourceTestDir)) {
-            return finalizeResult(
-                TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message("Permission denied reading test directory: " + sourceTestDir),
-                metricsBuilder, startNs, "docker", null);
-        }
-        String relativeTestDir = computeRelativeTestDir(shellRepoRoot, sourceTestDir, testLogger);
-        testLogger.info("Using test directory: " + sourceTestDir + " (relative: " + (relativeTestDir.isEmpty() ? "." : relativeTestDir) + ")");
 
         // Create test execution script for Docker (working directly from the overlay checkout)
         String dockerScript = EnvScriptFactory.createDockerScript(
@@ -144,7 +150,10 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             request.getExpectedBuildVersion(),
             relativeTestDir,
             ctpHomeInContainer,
-            request.getCustomShellScript()
+            request.getCustomShellScript(),
+            request.getCustomAttachments(),
+            customOnlyMode,
+            request.getRequestId()
         );
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());

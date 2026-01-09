@@ -1309,6 +1309,14 @@ public class BuilderTask {
             // Extract custom script from build request if present
             String customShellScript = request.optString("customShellScript", null);
             String customScriptTestPath = request.optString("customScriptTestPath", null);
+            JSONArray customAttachments = null;
+            if (request.has("customAttachments")) {
+                try {
+                    customAttachments = request.getJSONArray("customAttachments");
+                } catch (Exception ignore) {
+                    customAttachments = null;
+                }
+            }
 
             // Prepare test request
             String testDir, testScript, testName;
@@ -1316,9 +1324,15 @@ public class BuilderTask {
             // Check if this is a custom script placeholder
             if (testPath.equals("custom_script_test")) {
                 // Custom script without test path - use temporary directory
-                testDir = "/tmp/custom_test_execution";
-                testScript = "custom_script.sh";
+                String reqId = RequestContext.getRequestId();
+                if (reqId == null || reqId.trim().isEmpty()) {
+                    reqId = request.optString("requestId", "unknown");
+                }
+                String safeReqId = reqId.replaceAll("[^a-zA-Z0-9_.-]", "_");
                 testName = "custom_script_" + System.currentTimeMillis();
+                String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                testDir = "/tmp/custom_test_execution/" + safeReqId + "/" + safeTestName;
+                testScript = "custom_script.sh";
             } else if (customShellScript != null && customScriptTestPath != null && !customScriptTestPath.isEmpty()) {
                 // Custom script with test path provided - use that for environment setup
                 testDir = config.getShellTcDir() + "/" +
@@ -1405,6 +1419,10 @@ public class BuilderTask {
             // Add custom shell script if provided
             if (customShellScript != null && !customShellScript.isEmpty()) {
                 testRequest.put("customShellScript", customShellScript);
+            }
+            // Add custom attachments (base64 payloads) if provided
+            if (customAttachments != null && customAttachments.length() > 0) {
+                testRequest.put("customAttachments", customAttachments);
             }
 
             // Persist test request for diagnostics

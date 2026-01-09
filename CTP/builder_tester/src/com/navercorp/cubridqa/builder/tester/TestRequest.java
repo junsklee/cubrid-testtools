@@ -2,6 +2,10 @@ package com.navercorp.cubridqa.builder.tester;
 
 import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
 import org.json.JSONObject;
+import org.json.JSONArray;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 public class TestRequest {
     private final String testPath;
@@ -25,6 +29,7 @@ public class TestRequest {
     private final String buildType;
     private final PredictedDemand predictedDemand;  // Resource predictions for enforcement
     private final String customShellScript;  // Custom script contents to execute instead of test
+    private final List<CustomAttachment> customAttachments; // Additional files for custom script mode
 
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
@@ -46,6 +51,7 @@ public class TestRequest {
         this.attemptNumber = json.optInt("attemptNumber", 1);
         this.buildType = json.optString("buildType", "debug");
         this.customShellScript = json.optString("customShellScript", null);
+        this.customAttachments = parseCustomAttachments(json);
 
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
@@ -56,6 +62,35 @@ public class TestRequest {
 
         // Parse predicted demand for resource enforcement
         this.predictedDemand = PredictedDemand.fromRequest(json, null);
+    }
+
+    private List<CustomAttachment> parseCustomAttachments(JSONObject json) {
+        try {
+            if (json == null || !json.has("customAttachments")) {
+                return Collections.emptyList();
+            }
+            Object raw = json.get("customAttachments");
+            if (!(raw instanceof JSONArray)) {
+                return Collections.emptyList();
+            }
+            JSONArray arr = (JSONArray) raw;
+            if (arr.length() == 0) {
+                return Collections.emptyList();
+            }
+            List<CustomAttachment> out = new ArrayList<>();
+            for (int i = 0; i < arr.length(); i++) {
+                Object item = arr.get(i);
+                if (item instanceof JSONObject) {
+                    CustomAttachment ca = CustomAttachment.fromJson((JSONObject) item);
+                    if (ca != null && ca.isValid()) {
+                        out.add(ca);
+                    }
+                }
+            }
+            return out.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(out);
+        } catch (Exception ignore) {
+            return Collections.emptyList();
+        }
     }
     
     public String getTestPath() { return testPath; }
@@ -80,4 +115,6 @@ public class TestRequest {
     public PredictedDemand getPredictedDemand() { return predictedDemand; }
     public String getCustomShellScript() { return customShellScript; }
     public boolean hasCustomShellScript() { return customShellScript != null && !customShellScript.isEmpty(); }
+    public List<CustomAttachment> getCustomAttachments() { return customAttachments; }
+    public boolean hasCustomAttachments() { return customAttachments != null && !customAttachments.isEmpty(); }
 }

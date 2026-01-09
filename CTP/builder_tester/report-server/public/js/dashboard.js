@@ -4,6 +4,9 @@
         let workers = [];  // Initialize empty, will be populated on load
         let currentPage = 1;
         let isLoadingCommits = false;
+        // Custom Script attachments (client-side buffer)
+        let customScriptAttachments = []; // { name, size, targetPath, contentBase64 }
+        let customScriptAttachmentsLoading = 0;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -223,6 +226,169 @@
             // PR input updates count if present
             const prInput = document.getElementById('prNumberInput');
             if (prInput) prInput.addEventListener('input', updateCommitCount);
+
+            // Custom Script attachments
+            const attachInput = document.getElementById('customScriptAttachments');
+            if (attachInput) {
+                attachInput.addEventListener('change', onCustomScriptAttachmentsSelected);
+            }
+        }
+
+        function arrayBufferToBase64(buffer) {
+            // Convert ArrayBuffer -> base64 (safe for binary). Size is limited by UI guardrails.
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+            }
+            return btoa(binary);
+        }
+
+        function validateAttachmentTargetPath(p) {
+            const v = (p || '').trim();
+            if (!v) return 'Path is required';
+            if (v.startsWith('/')) return 'Must be a relative path (no leading /)';
+            if (v.includes('\\')) return 'Backslashes are not allowed';
+            if (v.includes('\0')) return 'NUL byte not allowed';
+            if (/\s/.test(v)) return 'Whitespace not allowed in path';
+            // Keep in sync with backend: disallow characters that break safe shell embedding
+            if (/[\'\"\`\$]/.test(v)) return 'Quotes/backticks/$ are not allowed in path';
+            const parts = v.split('/').filter(Boolean);
+            if (parts.some(seg => seg === '.' || seg === '..')) return 'Path traversal not allowed (..)';
+            return null;
+        }
+
+        function renderCustomScriptAttachments() {
+            const list = document.getElementById('customScriptAttachmentsList');
+            if (!list) return;
+            updateCustomScriptAttachmentsSummary();
+
+            if (!customScriptAttachments.length) {
+                list.innerHTML = '<div style="color: var(--text-secondary);">No attachments selected.</div>';
+                return;
+            }
+
+            const rows = customScriptAttachments.map((a, idx) => {
+                const err = validateAttachmentTargetPath(a.targetPath);
+                const errHtml = err ? `<div style="color: var(--error); font-size: 0.85rem; margin-top: 0.25rem;">${escapeHtml(err)}</div>` : '';
+                return `
+                    <div style="border: 1px solid #333; border-radius: 6px; padding: 0.75rem; margin-bottom: 0.5rem; background: rgba(0,0,0,0.2);">
+                        <div style="display: flex; justify-content: space-between; gap: 0.75rem; align-items: center;">
+                            <div style="min-width: 0;">
+                                <div style="font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    ${escapeHtml(a.name)} <span style="color: var(--text-secondary); font-weight: normal;">(${Math.ceil(a.size / 1024)} KB)</span>
+                                </div>
+                                <div style="margin-top: 0.35rem;">
+                                    <label style="display:block; color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.25rem;">Target path (relative)</label>
+                                    <input type="text" class="form-input" data-attach-idx="${idx}" value="${escapeHtml(a.targetPath)}" style="width: 100%;">
+                                    ${errHtml}
+                                </div>
+                            </div>
+                            <button class="control-btn" data-attach-remove="${idx}" style="white-space: nowrap;">Remove</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const loadingNote = customScriptAttachmentsLoading > 0
+                ? `<div style="color: var(--text-secondary); margin-top: 0.25rem;">Reading ${customScriptAttachmentsLoading} file(s)...</div>`
+                : '';
+
+            list.innerHTML = rows + loadingNote;
+
+            // Wire input edits and removals
+            list.querySelectorAll('input[data-attach-idx]').forEach(el => {
+                el.addEventListener('input', () => {
+                    const idx = parseInt(el.getAttribute('data-attach-idx'), 10);
+                    if (!Number.isFinite(idx) || !customScriptAttachments[idx]) return;
+                    customScriptAttachments[idx].targetPath = el.value;
+                    // Re-render to reflect validation state
+                    renderCustomScriptAttachments();
+                });
+            });
+            list.querySelectorAll('button[data-attach-remove]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.getAttribute('data-attach-remove'), 10);
+                    if (!Number.isFinite(idx)) return;
+                    customScriptAttachments.splice(idx, 1);
+                    renderCustomScriptAttachments();
+                });
+            });
+        }
+
+        function updateCustomScriptAttachmentsSummary() {
+            const el = document.getElementById('customScriptAttachmentsSummary');
+            if (!el) return;
+            const count = (customScriptAttachments || []).length;
+            const totalBytes = (customScriptAttachments || []).reduce((sum, a) => sum + (a && a.size ? a.size : 0), 0);
+            const kb = Math.ceil(totalBytes / 1024);
+            if (count === 0) {
+                el.textContent = 'No files selected.';
+                return;
+            }
+            el.textContent = `${count} file(s), ${kb} KB total`;
+        }
+
+        async function onCustomScriptAttachmentsSelected(e) {
+            const files = Array.from((e && e.target && e.target.files) ? e.target.files : []);
+            // Append to existing list (do not replace)
+
+            // Guardrails aligned with backend limits
+            const maxFiles = 20;
+            const maxBytes = 5 * 1024 * 1024;
+            const existingCount = (customScriptAttachments || []).length;
+            const existingBytes = (customScriptAttachments || []).reduce((sum, a) => sum + (a && a.size ? a.size : 0), 0);
+            if (existingCount + files.length > maxFiles) {
+                showToast(`Too many files: ${existingCount + files.length}. Max is ${maxFiles}.`, 'error');
+                renderCustomScriptAttachments();
+                if (e && e.target) e.target.value = '';
+                return;
+            }
+            const totalBytes = files.reduce((sum, f) => sum + (f && f.size ? f.size : 0), 0);
+            if (existingBytes + totalBytes > maxBytes) {
+                showToast(`Attachments too large: ${Math.ceil((existingBytes + totalBytes) / 1024)} KB. Max is ${Math.ceil(maxBytes / 1024)} KB.`, 'error');
+                renderCustomScriptAttachments();
+                if (e && e.target) e.target.value = '';
+                return;
+            }
+
+            customScriptAttachmentsLoading = files.length;
+            renderCustomScriptAttachments();
+
+            for (const f of files) {
+                try {
+                    // If user re-selects the same file (name+size) and targetPath is default, skip to avoid duplicates.
+                    const already = (customScriptAttachments || []).some(a =>
+                        a && a.name === f.name && a.size === f.size && a.targetPath === f.name
+                    );
+                    if (already) {
+                        showToast(`Skipped duplicate file: ${f.name}`, 'info');
+                        continue;
+                    }
+                    const buf = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result);
+                        reader.onerror = () => reject(reader.error || new Error('File read error'));
+                        reader.readAsArrayBuffer(f);
+                    });
+                    const b64 = arrayBufferToBase64(buf);
+                    (customScriptAttachments || []).push({
+                        name: f.name,
+                        size: f.size,
+                        targetPath: f.name,
+                        contentBase64: b64
+                    });
+                } catch (err) {
+                    showToast(`Failed to read file ${f.name}: ${err && err.message ? err.message : String(err)}`, 'error');
+                } finally {
+                    customScriptAttachmentsLoading = Math.max(0, customScriptAttachmentsLoading - 1);
+                    renderCustomScriptAttachments();
+                }
+            }
+
+            // Allow picking the same file again later by resetting the input value
+            if (e && e.target) e.target.value = '';
         }
 
         // Load commits from GitHub
@@ -750,6 +916,19 @@
 
                 // Validate test paths (prevent accidental report URLs)
                 validateTestPathsForSubmit(tests);
+
+                // Validate custom attachments (if any)
+                if (commitMode === 'custom') {
+                    if (customScriptAttachmentsLoading > 0) {
+                        throw new Error(`Attachments are still loading (${customScriptAttachmentsLoading} file(s)). Please wait.`);
+                    }
+                    for (const a of (customScriptAttachments || [])) {
+                        const err = validateAttachmentTargetPath(a.targetPath);
+                        if (err) {
+                            throw new Error(`Invalid attachment path '${a.targetPath}': ${err}`);
+                        }
+                    }
+                }
                 
                 // Validate callback URL
                 if (!validateCallbackUrl()) {
@@ -778,6 +957,12 @@
                     payload.customShellScript = customScriptContent;
                     if (customScriptTestPath) {
                         payload.customScriptTestPath = customScriptTestPath;
+                    }
+                    if (customScriptAttachments && customScriptAttachments.length > 0) {
+                        payload.customAttachments = customScriptAttachments.map(a => ({
+                            targetPath: (a.targetPath || '').trim(),
+                            contentBase64: a.contentBase64
+                        }));
                     }
                 }
 

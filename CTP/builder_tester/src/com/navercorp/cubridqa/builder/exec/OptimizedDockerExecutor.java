@@ -167,28 +167,34 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
         }
         
-        // Resolve test case directory within the local shell testcases checkout
-        Path sourceTestDir;
-        try {
-            sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
-        } catch (IllegalArgumentException e) {
-            return finalizeResult(
-                TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message(e.getMessage()),
-                metricsBuilder, startNs, dockerImage, dockerImageCached, null);
+        boolean customOnlyMode = "custom_script_test".equals(request.getTestPath());
+        String relativeTestDir = "";
+        if (!customOnlyMode) {
+            // Resolve test case directory within the local shell testcases checkout
+            Path sourceTestDir;
+            try {
+                sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
+            } catch (IllegalArgumentException e) {
+                return finalizeResult(
+                    TestResult.builder()
+                        .testName(request.getTestName())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message(e.getMessage()),
+                    metricsBuilder, startNs, dockerImage, dockerImageCached, null);
+            }
+            if (!Files.isReadable(sourceTestDir)) {
+                return finalizeResult(
+                    TestResult.builder()
+                        .testName(request.getTestName())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message("Permission denied reading test directory: " + sourceTestDir),
+                    metricsBuilder, startNs, dockerImage, dockerImageCached, null);
+            }
+            relativeTestDir = computeRelativeTestDir(shellRepoRoot, sourceTestDir, testLogger);
+            testLogger.info("Using test directory: " + sourceTestDir + " (relative: " + (relativeTestDir.isEmpty() ? "." : relativeTestDir) + ")");
+        } else {
+            testLogger.info("Custom-only script mode: using /workspace/custom_test_execution/... inside container");
         }
-        if (!Files.isReadable(sourceTestDir)) {
-            return finalizeResult(
-                TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message("Permission denied reading test directory: " + sourceTestDir),
-                metricsBuilder, startNs, dockerImage, dockerImageCached, null);
-        }
-        String relativeTestDir = computeRelativeTestDir(shellRepoRoot, sourceTestDir, testLogger);
-        testLogger.info("Using test directory: " + sourceTestDir + " (relative: " + (relativeTestDir.isEmpty() ? "." : relativeTestDir) + ")");
 
         // Create simplified test script (no CUBRID extraction needed!)
         String dockerScript = EnvScriptFactory.createDockerOptimizedScript(
@@ -197,7 +203,10 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             request.getExpectedBuildVersion(),
             relativeTestDir,
             ctpHomeInContainer,
-            request.getCustomShellScript()
+            request.getCustomShellScript(),
+            request.getCustomAttachments(),
+            customOnlyMode,
+            request.getRequestId()
         );
         Path dockerScriptPath = dockerWorkDir.resolve("run_test.sh");
         Files.write(dockerScriptPath, dockerScript.getBytes());

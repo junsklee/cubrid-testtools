@@ -1,10 +1,14 @@
 package com.navercorp.cubridqa.builder.exec;
 
+import com.navercorp.cubridqa.builder.tester.CustomAttachment;
+import java.util.List;
+
 public class EnvScriptFactory {
 
     public static final String TESTCASE_MOUNT = "/workspace/testcases";
 
-    public static String createDirectWrapperScript(String testDir, String testScript, String testName, String ctpHome, String customShellScript) {
+    public static String createDirectWrapperScript(String testDir, String testScript, String testName, String ctpHome,
+                                                   String customShellScript, List<CustomAttachment> customAttachments) {
         StringBuilder script = new StringBuilder();
         script.append("#!/bin/bash\n");
         script.append("set -e\n\n");
@@ -15,12 +19,15 @@ public class EnvScriptFactory {
         script.append("export LD_LIBRARY_PATH=\"$HOME/CUBRID/lib:$LD_LIBRARY_PATH\"\n\n");
 
         script.append("# Change to test directory\n");
+        script.append("mkdir -p \"").append(testDir).append("\"\n");
         script.append("cd \"").append(testDir).append("\"\n\n");
 
         script.append("# Source shell test framework if available\n");
         script.append("if [ -f \"$CTP_HOME/shell/init_path/init.sh\" ]; then\n");
         script.append("    source \"$CTP_HOME/shell/init_path/init.sh\"\n");
         script.append("fi\n\n");
+
+        appendCustomAttachments(script, "$PWD", customAttachments);
 
         if (customShellScript != null && !customShellScript.isEmpty()) {
             // Custom script mode: Replace the test file with custom script contents
@@ -64,7 +71,22 @@ public class EnvScriptFactory {
         return createDockerScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT, customShellScript);
     }
 
-    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint, String customShellScript) {
+    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir,
+                                           String ctpHome, String customShellScript, List<CustomAttachment> customAttachments,
+                                           boolean customOnlyMode, String requestId) {
+        return createDockerScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT,
+            customShellScript, customAttachments, customOnlyMode, requestId);
+    }
+
+    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir,
+                                           String ctpHome, String testcaseMountPoint, String customShellScript) {
+        return createDockerScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, testcaseMountPoint,
+            customShellScript, null, false, null);
+    }
+
+    public static String createDockerScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir,
+                                           String ctpHome, String testcaseMountPoint, String customShellScript,
+                                           List<CustomAttachment> customAttachments, boolean customOnlyMode, String requestId) {
         String normalizedRelativeDir = normalizeRelativeDir(relativeTestDir);
         String initPath = ctpHome + "/shell/init_path";
         String testcaseRoot = (testcaseMountPoint == null || testcaseMountPoint.trim().isEmpty())
@@ -75,21 +97,31 @@ public class EnvScriptFactory {
         script.append("#!/bin/bash\n");
         script.append("set -e\n");
 
-        script.append("# Resolve test directory inside the mounted shell testcase tree\n");
-        script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
-        script.append("if [ ! -d \"$TESTCASE_ROOT\" ]; then\n");
-        script.append("  echo \"ERROR: Shell testcase mount '$TESTCASE_ROOT' is unavailable\" >&2\n");
-        script.append("  exit 2\n");
-        script.append("fi\n");
-        script.append("export TESTCASE_DIR=\"$TESTCASE_ROOT");
-        if (!normalizedRelativeDir.isEmpty()) {
-            script.append("/").append(normalizedRelativeDir);
+        if (customOnlyMode) {
+            String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+            String safeReqId = requestId == null ? "unknown" : requestId.replaceAll("[^a-zA-Z0-9_.-]", "_");
+            script.append("# Custom-only script mode (no shell testcase path). Use a dedicated working directory under /workspace.\n");
+            script.append("SAFE_TEST_NAME=\"").append(safeTestName).append("\"\n");
+            script.append("SAFE_REQUEST_ID=\"").append(safeReqId).append("\"\n");
+            script.append("export TESTCASE_DIR=\"/workspace/custom_test_execution/${SAFE_REQUEST_ID}/${SAFE_TEST_NAME}\"\n");
+            script.append("mkdir -p \"$TESTCASE_DIR\"\n\n");
+        } else {
+            script.append("# Resolve test directory inside the mounted shell testcase tree\n");
+            script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
+            script.append("if [ ! -d \"$TESTCASE_ROOT\" ]; then\n");
+            script.append("  echo \"ERROR: Shell testcase mount '$TESTCASE_ROOT' is unavailable\" >&2\n");
+            script.append("  exit 2\n");
+            script.append("fi\n");
+            script.append("export TESTCASE_DIR=\"$TESTCASE_ROOT");
+            if (!normalizedRelativeDir.isEmpty()) {
+                script.append("/").append(normalizedRelativeDir);
+            }
+            script.append("\"\n");
+            script.append("if [ ! -d \"$TESTCASE_DIR\" ]; then\n");
+            script.append("  echo \"ERROR: Test directory '$TESTCASE_DIR' not found\" >&2\n");
+            script.append("  exit 2\n");
+            script.append("fi\n\n");
         }
-        script.append("\"\n");
-        script.append("if [ ! -d \"$TESTCASE_DIR\" ]; then\n");
-        script.append("  echo \"ERROR: Test directory '$TESTCASE_DIR' not found\" >&2\n");
-        script.append("  exit 2\n");
-        script.append("fi\n\n");
 
         script.append("# Extract CUBRID build\n");
         script.append("echo \"Extracting CUBRID build...\"\n");
@@ -280,7 +312,7 @@ public class EnvScriptFactory {
             script.append("fi\n\n");
         }
 
-        appendRunAndCopyResult(script, testScript, customShellScript);
+        appendRunAndCopyResult(script, testScript, customShellScript, customAttachments);
         return script.toString();
     }
 
@@ -288,7 +320,22 @@ public class EnvScriptFactory {
         return createDockerOptimizedScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT, customShellScript);
     }
 
-    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir, String ctpHome, String testcaseMountPoint, String customShellScript) {
+    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir,
+                                                     String ctpHome, String customShellScript, List<CustomAttachment> customAttachments,
+                                                     boolean customOnlyMode, String requestId) {
+        return createDockerOptimizedScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, TESTCASE_MOUNT,
+            customShellScript, customAttachments, customOnlyMode, requestId);
+    }
+
+    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir,
+                                                     String ctpHome, String testcaseMountPoint, String customShellScript) {
+        return createDockerOptimizedScript(testScript, testName, expectedBuildVersion, relativeTestDir, ctpHome, testcaseMountPoint,
+            customShellScript, null, false, null);
+    }
+
+    public static String createDockerOptimizedScript(String testScript, String testName, String expectedBuildVersion, String relativeTestDir,
+                                                     String ctpHome, String testcaseMountPoint, String customShellScript,
+                                                     List<CustomAttachment> customAttachments, boolean customOnlyMode, String requestId) {
         String normalizedRelativeDir = normalizeRelativeDir(relativeTestDir);
         String initPath = ctpHome + "/shell/init_path";
         String testcaseRoot = (testcaseMountPoint == null || testcaseMountPoint.trim().isEmpty())
@@ -299,21 +346,31 @@ public class EnvScriptFactory {
         script.append("#!/bin/bash\n");
         script.append("set -e\n");
 
-        script.append("# Resolve test directory inside the mounted shell testcase tree\n");
-        script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
-        script.append("if [ ! -d \"$TESTCASE_ROOT\" ]; then\n");
-        script.append("  echo \"ERROR: Shell testcase mount '$TESTCASE_ROOT' is unavailable\" >&2\n");
-        script.append("  exit 2\n");
-        script.append("fi\n");
-        script.append("export TESTCASE_DIR=\"$TESTCASE_ROOT");
-        if (!normalizedRelativeDir.isEmpty()) {
-            script.append("/").append(normalizedRelativeDir);
+        if (customOnlyMode) {
+            String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+            String safeReqId = requestId == null ? "unknown" : requestId.replaceAll("[^a-zA-Z0-9_.-]", "_");
+            script.append("# Custom-only script mode (no shell testcase path). Use a dedicated working directory under /workspace.\n");
+            script.append("SAFE_TEST_NAME=\"").append(safeTestName).append("\"\n");
+            script.append("SAFE_REQUEST_ID=\"").append(safeReqId).append("\"\n");
+            script.append("export TESTCASE_DIR=\"/workspace/custom_test_execution/${SAFE_REQUEST_ID}/${SAFE_TEST_NAME}\"\n");
+            script.append("mkdir -p \"$TESTCASE_DIR\"\n\n");
+        } else {
+            script.append("# Resolve test directory inside the mounted shell testcase tree\n");
+            script.append("export TESTCASE_ROOT=\"").append(testcaseRoot).append("\"\n");
+            script.append("if [ ! -d \"$TESTCASE_ROOT\" ]; then\n");
+            script.append("  echo \"ERROR: Shell testcase mount '$TESTCASE_ROOT' is unavailable\" >&2\n");
+            script.append("  exit 2\n");
+            script.append("fi\n");
+            script.append("export TESTCASE_DIR=\"$TESTCASE_ROOT");
+            if (!normalizedRelativeDir.isEmpty()) {
+                script.append("/").append(normalizedRelativeDir);
+            }
+            script.append("\"\n");
+            script.append("if [ ! -d \"$TESTCASE_DIR\" ]; then\n");
+            script.append("  echo \"ERROR: Test directory '$TESTCASE_DIR' not found\" >&2\n");
+            script.append("  exit 2\n");
+            script.append("fi\n\n");
         }
-        script.append("\"\n");
-        script.append("if [ ! -d \"$TESTCASE_DIR\" ]; then\n");
-        script.append("  echo \"ERROR: Test directory '$TESTCASE_DIR' not found\" >&2\n");
-        script.append("  exit 2\n");
-        script.append("fi\n\n");
 
         script.append("# CUBRID is pre-installed in /opt/cubrid\n");
         appendPreinstalledCubridEnv(script, initPath, ctpHome);
@@ -453,13 +510,16 @@ public class EnvScriptFactory {
         script.append("  cp \"$CUBRID/databases/databases.txt.sample\" \"$CUBRID_DATABASES/databases.txt.sample\"\n");
         script.append("fi\n\n");
 
-        appendRunAndCopyResult(script, testScript, customShellScript);
+        appendRunAndCopyResult(script, testScript, customShellScript, customAttachments);
         return script.toString();
     }
 
-    private static void appendRunAndCopyResult(StringBuilder script, String testScript, String customShellScript) {
+    private static void appendRunAndCopyResult(StringBuilder script, String testScript, String customShellScript,
+                                               List<CustomAttachment> customAttachments) {
         script.append("# Run test\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
+
+        appendCustomAttachments(script, "$TESTCASE_DIR", customAttachments);
 
         if (customShellScript != null && !customShellScript.isEmpty()) {
             // Custom script mode: Replace the test file with custom script contents
@@ -499,6 +559,68 @@ public class EnvScriptFactory {
         script.append("fi\n\n");
         
         script.append("exit $TEST_EXIT\n");
+    }
+
+    private static void appendCustomAttachments(StringBuilder script, String baseDirExpr, List<CustomAttachment> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return;
+        }
+        script.append("# Materialize custom attachments\n");
+        script.append("decode_b64_to_file() {\n");
+        script.append("  local b64=\"$1\"\n");
+        script.append("  local dest=\"$2\"\n");
+        script.append("  if command -v base64 >/dev/null 2>&1; then\n");
+        script.append("    (printf '%s' \"$b64\" | base64 -d > \"$dest\" 2>/dev/null) || (printf '%s' \"$b64\" | base64 --decode > \"$dest\")\n");
+        script.append("    return $?\n");
+        script.append("  fi\n");
+        script.append("  if command -v python3 >/dev/null 2>&1; then\n");
+        script.append("    printf '%s' \"$b64\" | python3 - \"$dest\" <<'PY'\n");
+        script.append("import sys, base64\n");
+        script.append("dest = sys.argv[1]\n");
+        script.append("data = sys.stdin.buffer.read()\n");
+        script.append("open(dest, 'wb').write(base64.b64decode(data))\n");
+        script.append("PY\n");
+        script.append("    return $?\n");
+        script.append("  fi\n");
+        script.append("  if command -v python >/dev/null 2>&1; then\n");
+        script.append("    printf '%s' \"$b64\" | python - \"$dest\" <<'PY'\n");
+        script.append("import sys, base64\n");
+        script.append("dest = sys.argv[1]\n");
+        script.append("data = sys.stdin.buffer.read()\n");
+        script.append("open(dest, 'wb').write(base64.b64decode(data))\n");
+        script.append("PY\n");
+        script.append("    return $?\n");
+        script.append("  fi\n");
+        script.append("  echo \"ERROR: No base64 decoder available\" >&2\n");
+        script.append("  return 2\n");
+        script.append("}\n");
+        script.append("write_attachment() {\n");
+        script.append("  local rel=\"$1\"\n");
+        script.append("  local b64=\"$2\"\n");
+        script.append("  case \"$rel\" in\n");
+        script.append("    ''|/*|*\\\\*|*..*|*[$'\\n\\r\\t ']* )\n");
+        script.append("      echo \"ERROR: Invalid attachment targetPath: $rel\" >&2\n");
+        script.append("      return 2\n");
+        script.append("      ;;\n");
+        script.append("  esac\n");
+        script.append("  local base=\"").append(baseDirExpr).append("\"\n");
+        script.append("  local dest=\"$base/$rel\"\n");
+        script.append("  mkdir -p \"$(dirname \"$dest\")\"\n");
+        script.append("  decode_b64_to_file \"$b64\" \"$dest\"\n");
+        script.append("}\n");
+        for (CustomAttachment a : attachments) {
+            if (a == null || !a.isValid()) {
+                continue;
+            }
+            String rel = a.getTargetPath() == null ? "" : a.getTargetPath().trim().replace('\\', '/');
+            String b64 = a.getContentBase64() == null ? "" : a.getContentBase64().trim();
+            if (rel.isEmpty() || b64.isEmpty()) {
+                continue;
+            }
+            // Paths are validated on the server; additionally we reject whitespace/.. at runtime in write_attachment.
+            script.append("write_attachment '").append(rel).append("' '").append(b64).append("'\n");
+        }
+        script.append("\n");
     }
 
     private static void appendPreinstalledCubridEnv(StringBuilder script, String initPath, String ctpHome) {

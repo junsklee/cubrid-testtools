@@ -110,6 +110,7 @@
         .logo h1 {
             font-size: 1.5rem;
             background: var(--gradient);
+            background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
@@ -245,6 +246,40 @@
             min-height: 120px;
             resize: vertical;
             font-family: 'Courier New', monospace;
+        }
+
+        /* Custom Script: file upload */
+        .file-input-hidden {
+            position: absolute;
+            left: -9999px;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+        }
+
+        .file-upload-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .file-upload-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.5rem 0.875rem;
+            border-radius: 10px;
+        }
+
+        .file-upload-summary {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .file-upload-list {
+            margin-top: 0.75rem;
         }
 
         /* Commit Selector */
@@ -705,6 +740,7 @@
         .modal-title {
             font-size: 1.5rem;
             background: var(--gradient);
+            background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }

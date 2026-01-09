@@ -16,6 +16,9 @@ final class TestDirectoryResolver {
 
     static Path resolve(Path shellRepoRoot, TestRequest request, Logger logger) {
         Path normalizedRoot = shellRepoRoot.toAbsolutePath().normalize();
+        String testPathRaw = request.getTestPath();
+        String normalizedTestPath = testPathRaw == null ? "" : testPathRaw.trim().replace('\\', '/');
+        boolean isCustomOnlyPlaceholder = "custom_script_test".equals(normalizedTestPath);
 
         // Preferred: derive relative directory from testPath for local overlay clone
         String relativeDir = deriveRelativeDir(request);
@@ -31,6 +34,11 @@ final class TestDirectoryResolver {
         String providedDir = request.getTestDir();
         if (providedDir != null && !providedDir.trim().isEmpty()) {
             Path candidate = Paths.get(providedDir.trim()).toAbsolutePath().normalize();
+            // For custom-only mode, allow non-existent directories (the wrapper/script will mkdir -p).
+            if (isCustomOnlyPlaceholder) {
+                logger.info("Using custom-only testDir path from request: " + candidate);
+                return candidate;
+            }
             if (Files.exists(candidate) && Files.isDirectory(candidate)) {
                 logger.warning("Using legacy testDir path from request: " + candidate);
                 return candidate;
@@ -49,6 +57,10 @@ final class TestDirectoryResolver {
 
         String normalized = testPath.trim().replace('\\', '/');
         if (normalized.isEmpty()) {
+            return null;
+        }
+        // Special-case custom script placeholder: prefer request.testDir (custom-only mode)
+        if ("custom_script_test".equals(normalized)) {
             return null;
         }
 

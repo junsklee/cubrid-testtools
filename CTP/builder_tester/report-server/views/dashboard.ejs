@@ -101,6 +101,19 @@
                             placeholder="Enter test case path (e.g., shell/_36_damson/cbrd_22637/cases/cbrd_22637.sh)">
                     </div>
 
+                    <div style="margin-bottom: 1rem;">
+                        <label class="form-label">
+                            Attach Files <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
+                            <span class="info-icon" title="Files will be created/overwritten next to the executed custom script.&#10;&#10;If Test Case Path is provided, files go into that directory. Otherwise, files go into the default custom script working directory.&#10;&#10;Max 20 files, 5MB total. Paths are relative (no leading '/', no '..').">ⓘ</span>
+                        </label>
+                        <input type="file" id="customScriptAttachments" class="file-input-hidden" multiple>
+                        <div class="file-upload-row">
+                            <label for="customScriptAttachments" class="control-btn file-upload-btn">Choose Files</label>
+                            <span id="customScriptAttachmentsSummary" class="file-upload-summary">No files selected.</span>
+                        </div>
+                        <div id="customScriptAttachmentsList" class="file-upload-list"></div>
+                    </div>
+
                     <div>
                         <label class="form-label">
                             Custom Shell Script Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>

@@ -30,6 +30,9 @@ public class Builder {
     // The builder runs build requests sequentially: at most 1 BuilderTask at a time.
     // (We still keep an explicit queue for additional requests.)
     private static final int MAX_CONCURRENT_REQUESTS = 1;
+    // Custom script attachments safety limits (JSON base64 payloads)
+    private static final int MAX_CUSTOM_ATTACHMENTS = 20;
+    private static final long MAX_CUSTOM_ATTACHMENTS_BYTES = 5L * 1024 * 1024; // 5MB decoded total
     
     private final BuilderConfig config;
     private final HttpServer server;
@@ -611,6 +614,21 @@ public class Builder {
         boolean hasCustomScript = request.has("customShellScript") &&
                                   !request.getString("customShellScript").trim().isEmpty();
 
+        // Validate custom attachments (only allowed when customShellScript is present)
+        if (request.has("customAttachments")) {
+            Object raw = request.get("customAttachments");
+            if (!(raw instanceof JSONArray)) {
+                throw new IllegalArgumentException("'customAttachments' must be an array");
+            }
+            JSONArray atts = (JSONArray) raw;
+            if (atts.length() > 0 && !hasCustomScript) {
+                throw new IllegalArgumentException("'customAttachments' is only supported with 'customShellScript'");
+            }
+            if (atts.length() > 0) {
+                validateCustomAttachments(atts);
+            }
+        }
+
         if (!hasCustomScript) {
             // Standard mode - tests array is required
             if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
@@ -662,6 +680,71 @@ public class Builder {
         
         if (!hasWorkerIp && !hasWorkerIps) {
             throw new IllegalArgumentException("Request must contain either non-empty 'workerIp' or non-empty 'workerIps' array");
+        }
+    }
+
+    private void validateCustomAttachments(JSONArray atts) {
+        if (atts.length() > MAX_CUSTOM_ATTACHMENTS) {
+            throw new IllegalArgumentException("Too many attachments: " + atts.length() + " (max " + MAX_CUSTOM_ATTACHMENTS + ")");
+        }
+        long totalBytes = 0L;
+        for (int i = 0; i < atts.length(); i++) {
+            Object o = atts.get(i);
+            if (!(o instanceof JSONObject)) {
+                throw new IllegalArgumentException("customAttachments[" + i + "] must be an object");
+            }
+            JSONObject a = (JSONObject) o;
+            String targetPath = a.optString("targetPath", "").trim();
+            String contentBase64 = a.optString("contentBase64", "").trim();
+            if (targetPath.isEmpty()) {
+                throw new IllegalArgumentException("customAttachments[" + i + "].targetPath is required");
+            }
+            if (contentBase64.isEmpty()) {
+                throw new IllegalArgumentException("customAttachments[" + i + "].contentBase64 is required");
+            }
+            validateAttachmentTargetPath(targetPath, i);
+
+            // Validate base64 + compute decoded length
+            try {
+                byte[] decoded = java.util.Base64.getDecoder().decode(contentBase64);
+                totalBytes += decoded.length;
+                if (totalBytes > MAX_CUSTOM_ATTACHMENTS_BYTES) {
+                    throw new IllegalArgumentException("Total attachments size exceeds limit: " + totalBytes +
+                        " bytes (max " + MAX_CUSTOM_ATTACHMENTS_BYTES + ")");
+                }
+            } catch (IllegalArgumentException e) {
+                // Could be invalid base64 or our size limit error above
+                if (e.getMessage() != null && e.getMessage().startsWith("Total attachments size")) {
+                    throw e;
+                }
+                throw new IllegalArgumentException("customAttachments[" + i + "].contentBase64 is not valid base64");
+            }
+        }
+    }
+
+    private void validateAttachmentTargetPath(String targetPath, int idx) {
+        String p = targetPath.trim().replace('\\', '/');
+        if (p.startsWith("/")) {
+            throw new IllegalArgumentException("customAttachments[" + idx + "].targetPath must be relative (no leading '/')");
+        }
+        if (p.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("customAttachments[" + idx + "].targetPath contains NUL byte");
+        }
+        // Disallow whitespace to keep shell quoting and UX predictable
+        if (p.matches(".*\\s+.*")) {
+            throw new IllegalArgumentException("customAttachments[" + idx + "].targetPath must not contain whitespace");
+        }
+        // Disallow characters that complicate safe shell embedding
+        if (p.contains("'") || p.contains("\"") || p.contains("`") || p.contains("$")) {
+            throw new IllegalArgumentException("customAttachments[" + idx + "].targetPath contains unsupported characters (quotes or shell metacharacters)");
+        }
+        // Disallow traversal segments
+        String[] parts = p.split("/");
+        for (String part : parts) {
+            if (part == null || part.isEmpty()) continue;
+            if (".".equals(part) || "..".equals(part)) {
+                throw new IllegalArgumentException("customAttachments[" + idx + "].targetPath must not contain '.' or '..' segments");
+            }
         }
     }
     
