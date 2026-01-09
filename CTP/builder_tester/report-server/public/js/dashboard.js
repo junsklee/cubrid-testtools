@@ -32,6 +32,7 @@
             checkForActiveSessions();
             refreshBuildQueue();
             updateBaselineDisplay();
+            applyBuildOnlyState();
         });
 
         // Latest queue snapshot (load-first: refreshed on page load, manual refresh, and background polling)
@@ -232,6 +233,107 @@
             if (attachInput) {
                 attachInput.addEventListener('change', onCustomScriptAttachmentsSelected);
             }
+
+            const buildOnlyToggle = document.getElementById('buildOnlyToggle');
+            if (buildOnlyToggle) {
+                buildOnlyToggle.addEventListener('change', () => {
+                    applyBuildOnlyState();
+                });
+            }
+        }
+
+        function setSectionDisabled(section, disabled) {
+            if (!section) return;
+            section.classList.toggle('section-disabled', !!disabled);
+        }
+
+        function isBuildOnlyEnabled() {
+            const toggle = document.getElementById('buildOnlyToggle');
+            return !!(toggle && toggle.checked);
+        }
+
+        function isBuildOnlyAvailable() {
+            return commitMode !== 'custom';
+        }
+
+        function isBuildOnlyActive() {
+            return isBuildOnlyAvailable() && isBuildOnlyEnabled();
+        }
+
+        function applyTestCasesDisabledState() {
+            const testsInput = document.getElementById('testsInput');
+            const testsInputLabel = document.getElementById('testsInputLabel');
+            if (!testsInput) return;
+
+            const buildOnly = isBuildOnlyActive();
+            const isCustomMode = commitMode === 'custom';
+            const disabled = buildOnly || isCustomMode;
+
+            testsInput.disabled = disabled;
+            testsInput.style.opacity = disabled ? '0.5' : '1';
+            testsInput.style.cursor = disabled ? 'not-allowed' : 'text';
+
+            if (isCustomMode) {
+                testsInput.placeholder = 'Test cases are configured in Custom Script section above';
+                testsInput.value = '';
+            } else if (buildOnly) {
+                testsInput.placeholder = 'Build-only mode skips tests';
+            } else {
+                testsInput.placeholder = 'Enter test case paths (one per line)\nExample:\nshell/_05_addition/cubridsus1961/cases/cubridsus1961.sh';
+            }
+
+            if (testsInputLabel) {
+                testsInputLabel.style.opacity = disabled ? '0.5' : '1';
+            }
+        }
+
+        function applyBuildOnlyState() {
+            const section = document.getElementById('buildOnlySection');
+            const toggle = document.getElementById('buildOnlyToggle');
+            const available = isBuildOnlyAvailable();
+
+            if (section) {
+                section.style.display = available ? 'block' : 'none';
+            }
+            if (toggle) {
+                toggle.disabled = !available;
+                if (!available && toggle.checked) {
+                    toggle.checked = false;
+                }
+            }
+
+            const enabled = isBuildOnlyActive();
+            const fields = document.getElementById('buildOnlyFields');
+            if (fields) {
+                fields.style.display = enabled ? 'block' : 'none';
+            }
+
+            setSectionDisabled(document.getElementById('workerSection'), enabled);
+            setSectionDisabled(document.getElementById('callbackUrlGroup'), enabled);
+            setSectionDisabled(document.getElementById('testCasesSection'), enabled);
+
+            const callbackInput = document.getElementById('callbackUrl');
+            if (callbackInput) {
+                callbackInput.disabled = enabled;
+            }
+
+            const workerInput = document.getElementById('newWorkerInput');
+            if (workerInput) {
+                workerInput.disabled = enabled;
+            }
+
+            const buildOnlyInputs = [
+                document.getElementById('buildUploadHost'),
+                document.getElementById('buildUploadPort'),
+                document.getElementById('buildUploadUser'),
+                document.getElementById('buildUploadPassword'),
+                document.getElementById('buildUploadRemoteDir')
+            ];
+            buildOnlyInputs.forEach(input => {
+                if (input) input.disabled = !enabled;
+            });
+
+            applyBuildOnlyState();
         }
 
         function arrayBufferToBase64(buffer) {
@@ -645,29 +747,7 @@
                 if (customSection) customSection.style.display = 'block';
             }
 
-            // Enable/disable Test Cases section based on mode
-            const testsInput = document.getElementById('testsInput');
-            const testsInputLabel = document.getElementById('testsInputLabel');
-            if (mode === 'custom') {
-                // Disable Test Cases in Custom Script mode
-                testsInput.disabled = true;
-                testsInput.style.opacity = '0.5';
-                testsInput.style.cursor = 'not-allowed';
-                testsInput.placeholder = 'Test cases are configured in Custom Script section above';
-                testsInput.value = '';
-                if (testsInputLabel) {
-                    testsInputLabel.style.opacity = '0.5';
-                }
-            } else {
-                // Enable Test Cases in other modes
-                testsInput.disabled = false;
-                testsInput.style.opacity = '1';
-                testsInput.style.cursor = 'text';
-                testsInput.placeholder = 'Enter test case paths (one per line)\nExample:\nshell/_05_addition/cubridsus1961/cases/cubridsus1961.sh';
-                if (testsInputLabel) {
-                    testsInputLabel.style.opacity = '1';
-                }
-            }
+            applyTestCasesDisabledState();
 
             updateCommitCount();
             const modeLabelMap = {
@@ -835,6 +915,43 @@
             }
         }
 
+        function buildUploadPayload() {
+            const host = (document.getElementById('buildUploadHost').value || '').trim();
+            const portRaw = (document.getElementById('buildUploadPort').value || '').trim();
+            const username = (document.getElementById('buildUploadUser').value || '').trim();
+            const password = (document.getElementById('buildUploadPassword').value || '');
+            const remoteDir = (document.getElementById('buildUploadRemoteDir').value || '').trim();
+
+            if (!host) throw new Error('Destination host is required for build-only upload');
+            if (!username) throw new Error('Username is required for build-only upload');
+            if (!password) throw new Error('Password is required for build-only upload');
+
+            let port = 22;
+            if (portRaw) {
+                port = parseInt(portRaw, 10);
+                if (!Number.isFinite(port) || port < 1 || port > 65535) {
+                    throw new Error('Destination port must be between 1 and 65535');
+                }
+            }
+
+            return {
+                host,
+                port,
+                username,
+                password,
+                remoteDir
+            };
+        }
+
+        function redactBuildUpload(payload) {
+            if (!payload || typeof payload !== 'object') return payload;
+            const copy = JSON.parse(JSON.stringify(payload));
+            if (copy.buildUpload && copy.buildUpload.password) {
+                copy.buildUpload.password = '***';
+            }
+            return copy;
+        }
+
         // Submit build request
         async function submitBuildRequest() {
             const button = document.getElementById('submitButton');
@@ -842,6 +959,12 @@
             button.textContent = 'Processing...';
             
             try {
+                const buildOnly = isBuildOnlyActive();
+
+                if (!isBuildOnlyAvailable() && isBuildOnlyEnabled()) {
+                    throw new Error('Build-only mode is not available in Custom Script mode');
+                }
+
                 // Gather commits or PR
                 let payloadCommits = [];
                 let prNumberPayload = null;
@@ -893,41 +1016,45 @@
                     .map(s => s.trim())
                     .filter(s => s.length > 0);
 
-                if (commitMode === 'custom') {
-                    customScriptContent = document.getElementById('customScriptContent').value.trim();
-                    customScriptTestPath = document.getElementById('customScriptTestPath').value.trim();
+                if (!buildOnly) {
+                    if (commitMode === 'custom') {
+                        customScriptContent = document.getElementById('customScriptContent').value.trim();
+                        customScriptTestPath = document.getElementById('customScriptTestPath').value.trim();
 
-                    if (!customScriptContent) {
-                        throw new Error('Custom script content is required in Custom Script mode');
-                    }
+                        if (!customScriptContent) {
+                            throw new Error('Custom script content is required in Custom Script mode');
+                        }
 
-                    // If custom test path is provided, use it; otherwise use placeholder
-                    if (customScriptTestPath) {
-                        tests = [customScriptTestPath];
+                        // If custom test path is provided, use it; otherwise use placeholder
+                        if (customScriptTestPath) {
+                            tests = [customScriptTestPath];
+                        } else {
+                            // No test path provided - use placeholder for custom script only mode
+                            tests = ['custom_script_test'];
+                        }
                     } else {
-                        // No test path provided - use placeholder for custom script only mode
-                        tests = ['custom_script_test'];
-                    }
-                } else {
-                    if (tests.length === 0) {
-                        throw new Error('Please enter at least one test case');
-                    }
-                }
-
-                // Validate test paths (prevent accidental report URLs)
-                validateTestPathsForSubmit(tests);
-
-                // Validate custom attachments (if any)
-                if (commitMode === 'custom') {
-                    if (customScriptAttachmentsLoading > 0) {
-                        throw new Error(`Attachments are still loading (${customScriptAttachmentsLoading} file(s)). Please wait.`);
-                    }
-                    for (const a of (customScriptAttachments || [])) {
-                        const err = validateAttachmentTargetPath(a.targetPath);
-                        if (err) {
-                            throw new Error(`Invalid attachment path '${a.targetPath}': ${err}`);
+                        if (tests.length === 0) {
+                            throw new Error('Please enter at least one test case');
                         }
                     }
+
+                    // Validate test paths (prevent accidental report URLs)
+                    validateTestPathsForSubmit(tests);
+
+                    // Validate custom attachments (if any)
+                    if (commitMode === 'custom') {
+                        if (customScriptAttachmentsLoading > 0) {
+                            throw new Error(`Attachments are still loading (${customScriptAttachmentsLoading} file(s)). Please wait.`);
+                        }
+                        for (const a of (customScriptAttachments || [])) {
+                            const err = validateAttachmentTargetPath(a.targetPath);
+                            if (err) {
+                                throw new Error(`Invalid attachment path '${a.targetPath}': ${err}`);
+                            }
+                        }
+                    }
+                } else {
+                    tests = [];
                 }
                 
                 // Validate callback URL
@@ -939,13 +1066,16 @@
                 const payload = {
                     tests: tests,
                     callbackUrl: document.getElementById('callbackUrl').value,
-                    workerIps: workers,
                     buildType: document.getElementById('buildType').value,
                     timeout: parseInt(document.getElementById('timeout').value),
                     runMode: document.getElementById('runMode').value,
                     minRuns: parseInt(document.getElementById('minRuns').value),
-                    maxRuns: parseInt(document.getElementById('maxRuns').value)
+                    maxRuns: parseInt(document.getElementById('maxRuns').value),
+                    buildOnly: buildOnly
                 };
+                if (!buildOnly) {
+                    payload.workerIps = workers;
+                }
                 if (prNumberPayload) {
                     payload.prNumber = prNumberPayload;
                 } else {
@@ -953,7 +1083,7 @@
                 }
 
                 // Add custom script if in custom mode
-                if (commitMode === 'custom' && customScriptContent) {
+                if (!buildOnly && commitMode === 'custom' && customScriptContent) {
                     payload.customShellScript = customScriptContent;
                     if (customScriptTestPath) {
                         payload.customScriptTestPath = customScriptTestPath;
@@ -964,6 +1094,10 @@
                             contentBase64: a.contentBase64
                         }));
                     }
+                }
+
+                if (buildOnly) {
+                    payload.buildUpload = buildUploadPayload();
                 }
 
                 // Add environment variables if provided
@@ -1007,12 +1141,13 @@
                 
                 // Display successful response
                 const requestId = result.taskId || result.requestId || 'Unknown';
-                displayResponse('Build request sent successfully!\n\nRequest ID: ' + requestId + '\n\nStatus: ' + (result.status || 'Processing') + '\n\nPayload:\n' + JSON.stringify(payload, null, 2));
+                const safePayload = redactBuildUpload(payload);
+                displayResponse('Build request sent successfully!\n\nRequest ID: ' + requestId + '\n\nStatus: ' + (result.status || 'Processing') + '\n\nPayload:\n' + JSON.stringify(safePayload, null, 2));
                 showToast('Build request sent successfully!', 'success');
                 
                 // Start monitoring with actual request ID
                 startStatusMonitoring({
-                    ...payload,
+                    ...safePayload,
                     requestId: requestId,
                     taskId: result.taskId
                 });

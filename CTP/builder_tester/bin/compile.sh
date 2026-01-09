@@ -28,7 +28,7 @@ echo "Cleaning stray class files from source directory..."
 find "$PROJECT_ROOT/src" -name "*.class" -type f -delete 2>/dev/null || true
 
 # Set classpath
-CLASSPATH="$PROJECT_ROOT/lib/json.jar:$BUILD_DIR"
+CLASSPATH="$PROJECT_ROOT/lib/json.jar:$PROJECT_ROOT/lib/jsch-0.1.55.jar:$BUILD_DIR"
 
 # Source directory
 SRC_DIR="$PROJECT_ROOT/src"

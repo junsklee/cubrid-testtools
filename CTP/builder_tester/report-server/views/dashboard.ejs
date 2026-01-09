@@ -132,6 +132,62 @@
                 </div>
             </div>
 
+            <!-- Build-only Upload -->
+            <div class="form-group" id="buildOnlySection">
+                <div class="build-only-header">
+                    <label class="form-label">
+                        Build-only Upload
+                        <span class="info-icon" title="Builds selected commit(s) locally and uploads cubrid_<sha>.tar.gz via SFTP.">ⓘ</span>
+                    </label>
+                </div>
+                <label class="toggle-switch" for="buildOnlyToggle">
+                    <input type="checkbox" id="buildOnlyToggle">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text" style="font-weight: normal;">Build only (skip tests)</span>
+                </label>
+                <div id="buildOnlyFields" class="build-only-fields" style="display: none;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="buildUploadHost">
+                                Destination Host <span class="required">*</span>
+                                <span class="info-icon" title="SFTP server hostname or IP (Required)">ⓘ</span>
+                            </label>
+                            <input type="text" class="form-input" id="buildUploadHost" placeholder="e.g., 192.168.1.50">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="buildUploadPort">
+                                Destination Port
+                                <span class="info-icon" title="SFTP port (Optional)&#10;Default: 22">ⓘ</span>
+                            </label>
+                            <input type="number" class="form-input" id="buildUploadPort" placeholder="22" min="1" max="65535">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="buildUploadUser">
+                                Username <span class="required">*</span>
+                                <span class="info-icon" title="SFTP username (Required)">ⓘ</span>
+                            </label>
+                            <input type="text" class="form-input" id="buildUploadUser" placeholder="e.g., username">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="buildUploadPassword">
+                                Password <span class="required">*</span>
+                                <span class="info-icon" title="SFTP password (Required)&#10;Not stored or shown in logs">ⓘ</span>
+                            </label>
+                            <input type="password" class="form-input" id="buildUploadPassword" placeholder="e.g., password">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="buildUploadRemoteDir">
+                            Destination Directory
+                            <span class="info-icon" title="Remote directory to upload into (Optional)&#10;Default: ~ ($HOME)">ⓘ</span>
+                        </label>
+                        <input type="text" class="form-input" id="buildUploadRemoteDir" placeholder="~">
+                    </div>
+                </div>
+            </div>
+
             <!-- Test Cases Section -->
             <div class="form-group" id="testCasesSection">
                 <label class="form-label" for="testsInput" id="testsInputLabel">Test Cases</label>
@@ -140,7 +196,7 @@
             </div>
 
             <!-- Worker Configuration -->
-            <div class="form-group">
+            <div class="form-group" id="workerSection">
                 <label class="form-label">Worker Nodes</label>
                 <div class="worker-list" id="workerList">
                     <div class="worker-item">
@@ -165,7 +221,7 @@
                     </select>
                 </div>
                 
-                <div class="form-group">
+                <div class="form-group" id="callbackUrlGroup">
                     <label class="form-label" for="callbackUrl">Callback URL</label>
                     <input type="text" class="form-input" id="callbackUrl" 
                         value="http://localhost:<%= config.server.port %>/callback">
@@ -216,7 +272,7 @@
                 Send Build Request
             </button>
 
-            <div id="responseDisplay" style="display: none;">
+            <div id="responseDisplay" style="display: none; margin-top: 1.5rem; margin-bottom: 0;">
                 <h3>Response:</h3>
                 <div class="response-display" id="responseContent"></div>
             </div>

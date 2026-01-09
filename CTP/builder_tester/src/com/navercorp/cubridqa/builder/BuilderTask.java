@@ -18,6 +18,7 @@ import com.navercorp.cubridqa.builder.logging.*;
 import com.navercorp.cubridqa.builder.workload.*;
 import com.navercorp.cubridqa.builder.scheduler.*;
 import com.navercorp.cubridqa.builder.tester.stats.*;
+import com.navercorp.cubridqa.builder.transfer.SftpUploader;
 
 /**
  * BuilderTask - Builds CUBRID at multiple commits and runs tests
@@ -82,12 +83,13 @@ public class BuilderTask {
         try {
             // Extract request parameters
             JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
-            JSONArray tests = request.getJSONArray("tests");
+            boolean buildOnly = request.optBoolean("buildOnly", false);
+            JSONArray tests = buildOnly ? new JSONArray() : request.getJSONArray("tests");
             String buildType = request.optString("buildType", "debug");
 
             // Initialize progress totals
             this.buildsTotal = request.has("prNumber") ? 1 : commits.length();
-            this.testsTotal = this.buildsTotal * tests.length();
+            this.testsTotal = buildOnly ? 0 : this.buildsTotal * tests.length();
             this.currentPhase = "setup";
 
             Integer prNumber = null;
@@ -104,7 +106,9 @@ public class BuilderTask {
             
             // Extract worker IPs (supporting both singular and plural forms)
             List<String> workerIps = new ArrayList<>();
-            if (request.has("workerIps")) {
+            if (buildOnly) {
+                workerIps.add("localhost");
+            } else if (request.has("workerIps")) {
                 JSONArray ips = request.getJSONArray("workerIps");
                 for (int i = 0; i < ips.length(); i++) {
                     workerIps.add(ips.getString(i));
@@ -137,11 +141,17 @@ public class BuilderTask {
             this.workloadDistributor = new WorkloadDistributor(nodeIds);
             taskLogger.info("Initialized WorkloadDistributor with nodes: " + nodeIds);
             
-            if (prNumber != null) {
-                taskLogger.info(String.format("Building PR #%d for %d tests across %d tester node(s)", 
+            if (buildOnly) {
+                if (prNumber != null) {
+                    taskLogger.info(String.format("Build-only mode: PR #%d (local build + upload)", prNumber));
+                } else {
+                    taskLogger.info(String.format("Build-only mode: %d commit(s) (local build + upload)", commits.length()));
+                }
+            } else if (prNumber != null) {
+                taskLogger.info(String.format("Building PR #%d for %d tests across %d tester node(s)",
                     prNumber, tests.length(), workerIps.size()));
             } else {
-                taskLogger.info(String.format("Building %d commits for %d tests across %d tester node(s)", 
+                taskLogger.info(String.format("Building %d commits for %d tests across %d tester node(s)",
                     commits.length(), tests.length(), workerIps.size()));
             }
             
@@ -167,6 +177,17 @@ public class BuilderTask {
 
                 // Build all commits SEQUENTIALLY using WorkloadDistributor
                 builtPackages = buildCommitsSequentially(commits, buildType, this.baselineCommit);
+            }
+
+            if (buildOnly) {
+                this.currentPhase = "uploading";
+                uploadBuildOnlyPackages(builtPackages, request.getJSONObject("buildUpload"));
+
+                long duration = System.currentTimeMillis() - startTime;
+                this.currentPhase = "callback";
+                sendCallback(callbackUrl, duration);
+                this.currentPhase = "done";
+                return;
             }
             
             // Distribute tests across multiple tester nodes
@@ -1273,6 +1294,92 @@ public class BuilderTask {
         }
         
         return base;
+    }
+
+    private void uploadBuildOnlyPackages(Map<String, String> builtPackages, JSONObject buildUpload) {
+        if (builtPackages == null || builtPackages.isEmpty()) {
+            taskLogger.warning("No build artifacts found to upload");
+            return;
+        }
+
+        String host = buildUpload.optString("host", "");
+        int port = buildUpload.optInt("port", 22);
+        String username = buildUpload.optString("username", "");
+        String password = buildUpload.optString("password", "");
+        String remoteDir = buildUpload.optString("remoteDir", "");
+
+        String knownHostsPath = config.getSftpKnownHostsPath();
+        boolean strictConfigured = config.isSftpStrictHostKeyChecking();
+        boolean strictEffective = strictConfigured && knownHostsPath != null && !knownHostsPath.trim().isEmpty();
+        if (strictConfigured && !strictEffective) {
+            taskLogger.warning("SFTP strict host key checking enabled but no known_hosts path configured; falling back to non-strict");
+        }
+
+        SftpUploader.Options options = new SftpUploader.Options(
+            knownHostsPath,
+            strictEffective,
+            config.getSftpConnectTimeoutMs()
+        );
+
+        for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
+            String commit = entry.getKey();
+            String packagePath = entry.getValue();
+            this.currentCommit = commit;
+            this.currentTest = "build_only";
+
+            if (packagePath == null || packagePath.isEmpty()) {
+                results.add(new JSONObject()
+                    .put("commit", commit)
+                    .put("test", "build_only")
+                    .put("status", "build_failed")
+                    .put("message", "Build failed for commit " + commit));
+                continue;
+            }
+
+            results.add(new JSONObject()
+                .put("commit", commit)
+                .put("test", "build_only")
+                .put("status", "build_success")
+                .put("message", "Build completed"));
+
+            File packageFile = new File(packagePath);
+            if (!packageFile.exists() || !packageFile.isFile()) {
+                results.add(new JSONObject()
+                    .put("commit", commit)
+                    .put("test", "build_only")
+                    .put("status", "upload_failed")
+                    .put("message", "Build package not found: " + packagePath));
+                continue;
+            }
+
+            try {
+                taskLogger.info(String.format("Uploading %s to %s:%d%s",
+                    packageFile.getName(), host, port, remoteDir));
+                SftpUploader.UploadResult uploadResult = SftpUploader.upload(
+                    host,
+                    port,
+                    username,
+                    password,
+                    remoteDir,
+                    packageFile,
+                    options
+                );
+                results.add(new JSONObject()
+                    .put("commit", commit)
+                    .put("test", "build_only")
+                    .put("status", "upload_success")
+                    .put("message", "Uploaded to " + uploadResult.getRemotePath())
+                    .put("remotePath", uploadResult.getRemotePath()));
+            } catch (Exception e) {
+                String msg = e.getMessage() != null ? e.getMessage() : "Upload failed";
+                results.add(new JSONObject()
+                    .put("commit", commit)
+                    .put("test", "build_only")
+                    .put("status", "upload_failed")
+                    .put("message", msg));
+                taskLogger.warning("Upload failed for " + commit + ": " + msg);
+            }
+        }
     }
 
     private boolean isMergeCommit(String commit, File repoRoot) throws Exception {

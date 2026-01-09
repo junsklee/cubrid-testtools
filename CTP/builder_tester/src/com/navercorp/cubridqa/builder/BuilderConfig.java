@@ -49,6 +49,9 @@ public class BuilderConfig {
     private static final String LOG_FETCH_CONNECT_TIMEOUT_SECONDS = "log_fetch_connect_timeout_seconds";
     private static final String LOG_FETCH_READ_TIMEOUT_SECONDS = "log_fetch_read_timeout_seconds";
     private static final String LOG_FILE_VERIFICATION_TIMEOUT_SECONDS = "log_file_verification_timeout_seconds";
+    private static final String SFTP_KNOWN_HOSTS_PATH = "sftp_known_hosts_path";
+    private static final String SFTP_STRICT_HOST_KEY_CHECKING = "sftp_strict_host_key_checking";
+    private static final String SFTP_CONNECT_TIMEOUT_MS = "sftp_connect_timeout_ms";
     private static final String STATS_ENABLED = "stats_enabled"; // Tester: enable per-test metrics/WAL
     private static final String WAL_COLLECTION_ENABLED = "wal_collection_enabled"; // Tester: enable WAL persistence
     private static final String DOCKER_STATS_INTERVAL_MS = "docker_stats_interval_ms"; // Tester: docker stats sampling interval
@@ -901,6 +904,41 @@ public class BuilderConfig {
             value = 5;
         }
         return Math.max(1, value);
+    }
+
+    /**
+     * Optional known_hosts path for SFTP uploads (build-only mode).
+     * If set, relative paths are resolved against the config base directory.
+     */
+    public String getSftpKnownHostsPath() {
+        String raw = properties.getProperty(SFTP_KNOWN_HOSTS_PATH, "");
+        if (raw == null || raw.trim().isEmpty()) {
+            return null;
+        }
+        Path resolved = resolveConfigPath(raw.trim());
+        return resolved != null ? resolved.toString() : null;
+    }
+
+    /**
+     * Whether to enforce strict host key checking for SFTP uploads.
+     * Default is true when configured.
+     */
+    public boolean isSftpStrictHostKeyChecking() {
+        return Boolean.parseBoolean(properties.getProperty(SFTP_STRICT_HOST_KEY_CHECKING, "true"));
+    }
+
+    /**
+     * SFTP connection timeout in milliseconds (build-only uploads).
+     * Default is 10000ms.
+     */
+    public int getSftpConnectTimeoutMs() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(SFTP_CONNECT_TIMEOUT_MS, "10000"));
+        } catch (NumberFormatException e) {
+            value = 10000;
+        }
+        return Math.max(1000, value);
     }
 
     /**

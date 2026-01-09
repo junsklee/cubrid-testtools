@@ -13,7 +13,7 @@ if ! command -v java >/dev/null 2>&1; then
 fi
 
 # Set classpath
-CLASSPATH="$PROJECT_ROOT/lib/json.jar:$PROJECT_ROOT/lib/builder-tester.jar:$PROJECT_ROOT/build"
+CLASSPATH="$PROJECT_ROOT/lib/json.jar:$PROJECT_ROOT/lib/jsch-0.1.55.jar:$PROJECT_ROOT/lib/builder-tester.jar:$PROJECT_ROOT/build"
 
 # Configuration file
 CONFIG_FILE="$PROJECT_ROOT/conf/tester.conf"

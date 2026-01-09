@@ -172,31 +172,34 @@ public class Builder {
                 
                 // Add request ID to the request object
                 request.put("requestId", requestId);
-                
-                // Record the request in metadata
-                logRotationManager.recordRequest(requestId, request);
-                
+
                 // Validate request
                 validateRequest(request);
+
+                // Record the request in metadata (with secrets redacted)
+                logRotationManager.recordRequest(requestId, sanitizeRequestForLog(request));
                 
                 // Extract parameters (commits optional when using prNumber)
                 JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
-                JSONArray tests = request.getJSONArray("tests");
+                JSONArray tests = request.has("tests") ? request.getJSONArray("tests") : new JSONArray();
+                boolean buildOnly = request.optBoolean("buildOnly", false);
                 // callbackUrl is passed through to the BuilderTask via the request JSON
                 @SuppressWarnings("unused")
                 String callbackUrl = request.getString("callbackUrl");
                 
                 // Support both workerIp (singular) and workerIps (array) for backward compatibility
-                JSONArray workerIps;
-                if (request.has("workerIps")) {
-                    workerIps = request.getJSONArray("workerIps");
-                    if (workerIps.length() == 0) {
-                        throw new IllegalArgumentException("workerIps array cannot be empty");
+                JSONArray workerIps = new JSONArray();
+                if (!buildOnly) {
+                    if (request.has("workerIps")) {
+                        workerIps = request.getJSONArray("workerIps");
+                        if (workerIps.length() == 0) {
+                            throw new IllegalArgumentException("workerIps array cannot be empty");
+                        }
+                    } else {
+                        // Backward compatibility: convert single workerIp to array
+                        String workerIp = request.optString("workerIp", "localhost");
+                        workerIps = new JSONArray().put(workerIp);
                     }
-                } else {
-                    // Backward compatibility: convert single workerIp to array
-                    String workerIp = request.optString("workerIp", "localhost");
-                    workerIps = new JSONArray().put(workerIp);
                 }
                 
                 // buildType is used by BuilderTask via the request JSON
@@ -204,12 +207,35 @@ public class Builder {
                 String buildType = request.optString("buildType", "debug");
                 
                 // Check tester reachability for all worker IPs
-                for (int i = 0; i < workerIps.length(); i++) {
-                    validateTesterReachability(workerIps.getString(i));
+                if (!buildOnly) {
+                    for (int i = 0; i < workerIps.length(); i++) {
+                        validateTesterReachability(workerIps.getString(i));
+                    }
                 }
                 
                 // Log request with request ID
-                if (request.has("prNumber")) {
+                if (buildOnly) {
+                    JSONObject upload = request.getJSONObject("buildUpload");
+                    String remoteDirLog = upload.optString("remoteDir", "").trim();
+                    if (remoteDirLog.isEmpty()) {
+                        remoteDirLog = "~";
+                    }
+                    if (request.has("prNumber")) {
+                        logger.info(String.format("[%s] Received build-only PR request for PR #%s (upload to %s:%d%s)",
+                            requestId,
+                            request.get("prNumber").toString(),
+                            upload.optString("host", "unknown"),
+                            upload.optInt("port", 22),
+                            remoteDirLog));
+                    } else {
+                        logger.info(String.format("[%s] Received build-only request for %d commits (upload to %s:%d%s)",
+                            requestId,
+                            commits.length(),
+                            upload.optString("host", "unknown"),
+                            upload.optInt("port", 22),
+                            remoteDirLog));
+                    }
+                } else if (request.has("prNumber")) {
                     logger.info(String.format("[%s] Received PR build request for PR #%s and %d tests",
                         requestId, request.get("prNumber").toString(), tests.length()));
                 } else {
@@ -587,6 +613,7 @@ public class Builder {
     }
     
     private void validateRequest(JSONObject request) throws IllegalArgumentException {
+        boolean buildOnly = request.optBoolean("buildOnly", false);
         boolean hasCommits = request.has("commits") && request.getJSONArray("commits").length() > 0;
         boolean hasPrNumber = request.has("prNumber") && (
             (request.get("prNumber") instanceof Number && ((Number) request.get("prNumber")).intValue() > 0) ||
@@ -596,18 +623,20 @@ public class Builder {
             throw new IllegalArgumentException("Request must contain non-empty 'commits' array or a valid 'prNumber'");
         }
 
-        // Strict validation of run parameters (runMode, minRuns, maxRuns, timeBudgetMs)
-        ValidationResult validation = TestRequestValidator.validate(request);
-        if (!validation.isValid()) {
-            throw new IllegalArgumentException("Invalid run parameters: " + String.join("; ", validation.getErrors()));
-        }
-        
-        // Update request with normalized/defaulted values from validation
-        request.put("runMode", validation.getRunMode());
-        request.put("minRuns", validation.getMinRuns());
-        request.put("maxRuns", validation.getMaxRuns());
-        if (validation.getTimeBudgetMs() != null) {
-            request.put("timeBudgetMs", validation.getTimeBudgetMs());
+        if (!buildOnly) {
+            // Strict validation of run parameters (runMode, minRuns, maxRuns, timeBudgetMs)
+            ValidationResult validation = TestRequestValidator.validate(request);
+            if (!validation.isValid()) {
+                throw new IllegalArgumentException("Invalid run parameters: " + String.join("; ", validation.getErrors()));
+            }
+            
+            // Update request with normalized/defaulted values from validation
+            request.put("runMode", validation.getRunMode());
+            request.put("minRuns", validation.getMinRuns());
+            request.put("maxRuns", validation.getMaxRuns());
+            if (validation.getTimeBudgetMs() != null) {
+                request.put("timeBudgetMs", validation.getTimeBudgetMs());
+            }
         }
 
         // Check for custom shell script - if provided, tests can be empty
@@ -629,58 +658,118 @@ public class Builder {
             }
         }
 
-        if (!hasCustomScript) {
-            // Standard mode - tests array is required
-            if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
-                throw new IllegalArgumentException("Request must contain non-empty 'tests' array");
+        if (!buildOnly) {
+            if (!hasCustomScript) {
+                // Standard mode - tests array is required
+                if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
+                    throw new IllegalArgumentException("Request must contain non-empty 'tests' array");
+                }
+            } else {
+                // Custom script mode - tests can be empty or missing
+                if (!request.has("tests")) {
+                    // Create placeholder test if tests array is missing
+                    request.put("tests", new JSONArray().put("custom_script_test"));
+                } else if (request.getJSONArray("tests").length() == 0) {
+                    // Create placeholder test if tests array is empty
+                    request.put("tests", new JSONArray().put("custom_script_test"));
+                }
+            }
+
+            // Validate test paths early to prevent malformed inputs (e.g., report URLs) from becoming "shell/http://..."
+            if (request.has("tests")) {
+                JSONArray tests = request.getJSONArray("tests");
+                List<String> invalid = new ArrayList<>();
+                for (int i = 0; i < tests.length(); i++) {
+                    String raw = String.valueOf(tests.get(i));
+                    if (raw == null) continue;
+                    String t = raw.trim();
+                    if (t.isEmpty()) continue;
+                    if ("custom_script_test".equals(t)) continue;
+
+                    // Enforce strict shell test paths. Reject anything not starting with "shell/".
+                    if (!t.startsWith("shell/")) {
+                        invalid.add(t);
+                        continue;
+                    }
+                    if (!t.endsWith(".sh")) {
+                        invalid.add(t);
+                        continue;
+                    }
+                }
+                if (!invalid.isEmpty()) {
+                    throw new IllegalArgumentException(
+                        "Invalid test path(s): " + String.join(", ", invalid) +
+                        ". Expected filesystem paths like shell/.../cases/... .sh."
+                    );
+                }
             }
         } else {
-            // Custom script mode - tests can be empty or missing
-            if (!request.has("tests")) {
-                // Create placeholder test if tests array is missing
-                request.put("tests", new JSONArray().put("custom_script_test"));
-            } else if (request.getJSONArray("tests").length() == 0) {
-                // Create placeholder test if tests array is empty
-                request.put("tests", new JSONArray().put("custom_script_test"));
-            }
-        }
-
-        // Validate test paths early to prevent malformed inputs (e.g., report URLs) from becoming "shell/http://..."
-        if (request.has("tests")) {
-            JSONArray tests = request.getJSONArray("tests");
-            List<String> invalid = new ArrayList<>();
-            for (int i = 0; i < tests.length(); i++) {
-                String raw = String.valueOf(tests.get(i));
-                if (raw == null) continue;
-                String t = raw.trim();
-                if (t.isEmpty()) continue;
-                if ("custom_script_test".equals(t)) continue;
-
-                // Enforce strict shell test paths. Reject anything not starting with "shell/".
-                if (!t.startsWith("shell/")) {
-                    invalid.add(t);
-                    continue;
-                }
-                if (!t.endsWith(".sh")) {
-                    invalid.add(t);
-                    continue;
-                }
-            }
-            if (!invalid.isEmpty()) {
-                throw new IllegalArgumentException(
-                    "Invalid test path(s): " + String.join(", ", invalid) +
-                    ". Expected filesystem paths like shell/.../cases/... .sh."
-                );
-            }
+            validateBuildUpload(request);
         }
         
         // Support both workerIp (singular) and workerIps (array) for backward compatibility
         boolean hasWorkerIp = request.has("workerIp") && !request.getString("workerIp").trim().isEmpty();
         boolean hasWorkerIps = request.has("workerIps") && request.getJSONArray("workerIps").length() > 0;
         
-        if (!hasWorkerIp && !hasWorkerIps) {
+        if (!buildOnly && !hasWorkerIp && !hasWorkerIps) {
             throw new IllegalArgumentException("Request must contain either non-empty 'workerIp' or non-empty 'workerIps' array");
         }
+    }
+
+    private void validateBuildUpload(JSONObject request) {
+        if (!request.has("buildUpload")) {
+            throw new IllegalArgumentException("buildUpload is required when buildOnly is true");
+        }
+        Object raw = request.get("buildUpload");
+        if (!(raw instanceof JSONObject)) {
+            throw new IllegalArgumentException("buildUpload must be an object");
+        }
+        JSONObject buildUpload = (JSONObject) raw;
+
+        String host = buildUpload.optString("host", "").trim();
+        String username = buildUpload.optString("username", "").trim();
+        String remoteDir = buildUpload.optString("remoteDir", "").trim();
+        String password = buildUpload.has("password") ? String.valueOf(buildUpload.get("password")) : "";
+
+        if (host.isEmpty()) {
+            throw new IllegalArgumentException("buildUpload.host is required");
+        }
+        if (username.isEmpty()) {
+            throw new IllegalArgumentException("buildUpload.username is required");
+        }
+        if (password.isEmpty()) {
+            throw new IllegalArgumentException("buildUpload.password is required");
+        }
+        int port = 22;
+        if (buildUpload.has("port")) {
+            Object portRaw = buildUpload.get("port");
+            try {
+                port = portRaw instanceof Number
+                    ? ((Number) portRaw).intValue()
+                    : Integer.parseInt(portRaw.toString().trim());
+            } catch (Exception e) {
+                throw new IllegalArgumentException("buildUpload.port must be a valid integer");
+            }
+            if (port < 1 || port > 65535) {
+                throw new IllegalArgumentException("buildUpload.port must be between 1 and 65535");
+            }
+        }
+
+        buildUpload.put("host", host);
+        buildUpload.put("username", username);
+        buildUpload.put("remoteDir", remoteDir);
+        buildUpload.put("port", port);
+    }
+
+    private JSONObject sanitizeRequestForLog(JSONObject request) {
+        JSONObject sanitized = new JSONObject(request.toString());
+        if (sanitized.has("buildUpload")) {
+            Object raw = sanitized.get("buildUpload");
+            if (raw instanceof JSONObject) {
+                ((JSONObject) raw).put("password", "***");
+            }
+        }
+        return sanitized;
     }
 
     private void validateCustomAttachments(JSONArray atts) {
