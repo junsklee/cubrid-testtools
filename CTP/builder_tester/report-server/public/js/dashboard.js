@@ -279,7 +279,7 @@
             } else if (buildOnly) {
                 testsInput.placeholder = 'Build-only mode skips tests';
             } else {
-                testsInput.placeholder = 'Enter test case paths (one per line)\nExample:\nshell/_05_addition/cubridsus1961/cases/cubridsus1961.sh';
+                testsInput.placeholder = 'Enter test case paths (one per line)\nSupported prefixes: shell/, shell_heavy/, shell_perf/\nExample:\nshell/_05_addition/cubridsus1961/cases/cubridsus1961.sh';
             }
 
             if (testsInputLabel) {
@@ -786,7 +786,10 @@
                 'shell/_28_features_844/issue_10984_query_profiling/_03_mixed_test/_07_show_columns/cases/_07_show_columns.sh',
                 'shell/_08_shard/_50_cubridsus/bug_bts_10130/cases/bug_bts_10130.sh',
                 'shell/_10_plcsql/bug_fix/cbrd_25894/cases/cbrd_25894.sh',
-                'shell/_38_fig/cbrd_24882/vacuumdb/cases/vacuumdb.sh'
+                'shell/_38_fig/cbrd_24882/vacuumdb/cases/vacuumdb.sh',
+                // Examples for the additional supported roots:
+                'shell_heavy/_99_heavy/example/cases/example_heavy.sh',
+                'shell_perf/_99_perf/example/cases/example_perf.sh'
             ];
             
             document.getElementById('testsInput').value = sampleTests.join('\n');
@@ -885,14 +888,15 @@
 
         function validateTestPathsForSubmit(tests) {
             const invalid = [];
+            const allowedRoots = ['shell/', 'shell_heavy/', 'shell_perf/'];
             for (const t of (tests || [])) {
                 const v = (t || '').trim();
                 if (!v) continue;
                 if (v === 'custom_script_test') continue;
 
                 // Enforce strict filesystem-like shell test paths.
-                // Reject anything that doesn't start with "shell/" (this also rejects URLs/report links).
-                if (!v.startsWith('shell/')) {
+                // Reject anything that doesn't start with an allowed shell root (this also rejects URLs/report links).
+                if (!allowedRoots.some(r => v.startsWith(r))) {
                     invalid.push(v);
                     continue;
                 }
@@ -910,7 +914,7 @@
             if (invalid.length > 0) {
                 throw new Error(
                     `Invalid test path(s): ${invalid.join(', ')}. ` +
-                    `Expected filesystem test paths like shell/.../cases/... .sh.`
+                    `Expected filesystem test paths starting with shell/, shell_heavy/, or shell_perf/ (ending with .sh).`
                 );
             }
         }
