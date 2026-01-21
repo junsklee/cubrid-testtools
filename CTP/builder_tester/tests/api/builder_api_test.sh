@@ -14,6 +14,7 @@ echo "Testing Builder API..."
 # Setup
 setup() {
     setup_mock_environment
+    start_test_tester
     start_test_builder
     sleep 2
 }
@@ -21,6 +22,7 @@ setup() {
 # Teardown
 teardown() {
     stop_test_builder
+    stop_test_tester
     cleanup_test_environment
 }
 

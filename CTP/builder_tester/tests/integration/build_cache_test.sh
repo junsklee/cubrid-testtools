@@ -7,7 +7,7 @@
 set -e
 
 # Source test helpers
-source "$(dirname "$0")/../../lib/test_helpers.sh"
+source "$(dirname "$0")/../lib/test_helpers.sh"
 
 echo "Testing Build Cache..."
 

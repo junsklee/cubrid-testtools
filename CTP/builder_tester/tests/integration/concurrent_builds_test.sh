@@ -50,7 +50,7 @@ test_concurrent_build_limit() {
         send_build_request \
             "[\"commit$i\"]" \
             '["shell/test1/cases/test1.sh"]' \
-            "http://localhost:8888/callback" \
+            "" \
             "localhost" \
             "debug" > /tmp/build_response_$i.txt &
     done
@@ -72,7 +72,7 @@ test_concurrent_test_limit() {
     send_build_request \
         '["commit1"]' \
         '["shell/test1/cases/test1.sh", "shell/test2/cases/test2.sh", "shell/test1/cases/test1.sh"]' \
-        "http://localhost:8888/callback" \
+        "" \
         "localhost" \
         "debug"
     

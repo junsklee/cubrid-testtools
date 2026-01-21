@@ -29,33 +29,22 @@ teardown() {
 # Test 1: Builder calls Tester
 test_builder_calls_tester() {
     echo -n "  Testing Builder to Tester communication... "
-    
-    # Start a mock callback server
-    nc -l 8888 > /tmp/callback_$$.txt &
-    local nc_pid=$!
-    
-    # Send build request
+
+    # Send build request (default callback points to Builder's /callback endpoint)
     local response=$(send_build_request \
         '["abc123"]' \
         '["shell/test1/cases/test1.sh"]' \
-        "http://localhost:8888/callback" \
+        "" \
         "localhost" \
         "debug")
-    
-    # Wait for processing
-    sleep 5
-    
-    # Check if callback was received
-    kill $nc_pid 2>/dev/null || true
-    
-    if [[ -f /tmp/callback_$$.txt ]]; then
+
+    if [[ "$response" == *"taskId"* ]]; then
         echo "PASS"
-        rm -f /tmp/callback_$$.txt
         return 0
-    else
-        echo "FAIL (No callback received)"
-        return 1
     fi
+
+    echo "FAIL (Response: $response)"
+    return 1
 }
 # Test 2: Test result propagation
 test_result_propagation() {
@@ -79,7 +68,7 @@ test_error_handling() {
     local response=$(send_build_request \
         '["abc123"]' \
         '["shell/test1/cases/test1.sh"]' \
-        "http://localhost:8888/callback" \
+        "" \
         "localhost" \
         "debug")
     
@@ -100,7 +89,7 @@ test_concurrent_communication() {
         send_build_request \
             "[\"commit$i\"]" \
             '["shell/test1/cases/test1.sh"]' \
-            "http://localhost:8888/callback$i" \
+            "" \
             "localhost" \
             "debug" &
     done

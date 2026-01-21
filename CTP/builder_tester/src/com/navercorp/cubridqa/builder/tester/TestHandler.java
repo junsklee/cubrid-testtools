@@ -7,6 +7,7 @@ import com.navercorp.cubridqa.builder.http.HttpUtils;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -90,6 +91,12 @@ public class TestHandler implements HttpHandler {
                 responsePayload.remove("attemptLogFiles");
             }
 
+        } catch (JSONException | IllegalArgumentException e) {
+            logger.log(Level.WARNING, "Bad test request", e);
+            responsePayload = new JSONObject()
+                .put("status", "bad_request")
+                .put("message", e.getMessage());
+            httpStatus = 400;
         } catch (Exception e) {
             // Only errors that occur before generating the result should reach here
             logger.log(Level.SEVERE, "Error processing test request (pre-response)", e);

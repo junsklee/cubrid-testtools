@@ -44,6 +44,33 @@ PARALLEL=false
 GENERATE_HTML=true
 GENERATE_JUNIT=true
 MAX_PARALLEL_JOBS=4
+
+# Show help message
+show_help() {
+    cat << EOF
+Usage: $(basename "$0") [OPTIONS]
+
+CTP Builder-Tester Test Suite Runner
+
+OPTIONS:
+    -s, --suite SUITE    Run specific test suite (unit|integration|api|system|config|all)
+    -v, --verbose        Enable verbose output
+    -q, --quiet          Suppress output except errors
+    -p, --parallel       Run tests in parallel
+    -j, --jobs N         Maximum parallel jobs (default: 4)
+    --no-html            Skip HTML report generation
+    --no-junit           Skip JUnit XML generation
+    -h, --help           Show this help message
+
+EXAMPLES:
+    $(basename "$0")                    # Run all tests
+    $(basename "$0") -s unit            # Run only unit tests
+    $(basename "$0") -p -j 8            # Run tests in parallel with 8 jobs
+    $(basename "$0") -v -s integration  # Run integration tests with verbose output
+
+EOF
+}
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -86,31 +113,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-# Show help message
-show_help() {
-    cat << EOF
-Usage: $(basename "$0") [OPTIONS]
-
-CTP Builder-Tester Test Suite Runner
-
-OPTIONS:
-    -s, --suite SUITE    Run specific test suite (unit|integration|api|system|config|all)
-    -v, --verbose        Enable verbose output
-    -q, --quiet          Suppress output except errors
-    -p, --parallel       Run tests in parallel
-    -j, --jobs N         Maximum parallel jobs (default: 4)
-    --no-html            Skip HTML report generation
-    --no-junit           Skip JUnit XML generation
-    -h, --help           Show this help message
-
-EXAMPLES:
-    $(basename "$0")                    # Run all tests
-    $(basename "$0") -s unit            # Run only unit tests
-    $(basename "$0") -p -j 8            # Run tests in parallel with 8 jobs
-    $(basename "$0") -v -s integration  # Run integration tests with verbose output
-
-EOF
-}
 
 # Initialize test environment
 initialize_environment() {
@@ -194,6 +196,7 @@ run_test_file() {
     fi
     
     # Execute test
+    set +e
     if $VERBOSE; then
         bash "$test_file" 2>&1 | tee "$test_output"
         test_exit_code=${PIPESTATUS[0]}
@@ -201,6 +204,7 @@ run_test_file() {
         bash "$test_file" &> "$test_output"
         test_exit_code=$?
     fi
+    set -e
     
     local test_end=$(date +%s)
     local test_duration=$((test_end - test_start))
@@ -208,19 +212,19 @@ run_test_file() {
     # Determine test result
     if [[ $test_exit_code -eq 0 ]]; then
         test_result="PASS"
-        ((PASSED_TESTS++))
+        PASSED_TESTS=$((PASSED_TESTS + 1))
         if ! $QUIET; then
             echo -e "${GREEN}✓ PASS${NC} (${test_duration}s)"
         fi
     elif [[ $test_exit_code -eq 77 ]]; then
         test_result="SKIP"
-        ((SKIPPED_TESTS++))
+        SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
         if ! $QUIET; then
             echo -e "${YELLOW}⊘ SKIP${NC} (${test_duration}s)"
         fi
     else
         test_result="FAIL"
-        ((FAILED_TESTS++))
+        FAILED_TESTS=$((FAILED_TESTS + 1))
         if ! $QUIET; then
             echo -e "${RED}✗ FAIL${NC} (${test_duration}s)"
         fi
@@ -230,7 +234,7 @@ run_test_file() {
         fi
     fi
     
-    ((TOTAL_TESTS++))
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
     
     # Record result for reporting
     echo "{\"suite\":\"$suite_name\",\"test\":\"$test_name\",\"result\":\"$test_result\",\"duration\":$test_duration,\"log\":\"$test_output\"}" >> "$RESULTS_DIR/results.jsonl"
@@ -276,6 +280,8 @@ run_suite() {
 generate_json_report() {
     local end_time=$(date +%s)
     local total_duration=$((end_time - START_TIME))
+    local pass_rate
+    pass_rate=$(awk -v total="$TOTAL_TESTS" -v passed="$PASSED_TESTS" 'BEGIN { if (total > 0) { printf "%.2f", passed * 100.0 / total } else { printf "0.00" } }')
     
     cat > "$RESULTS_DIR/report.json" << EOF
 {
@@ -286,7 +292,7 @@ generate_json_report() {
         "passed": $PASSED_TESTS,
         "failed": $FAILED_TESTS,
         "skipped": $SKIPPED_TESTS,
-        "pass_rate": $(awk "BEGIN {printf \"%.2f\", $TOTAL_TESTS > 0 ? $PASSED_TESTS * 100.0 / $TOTAL_TESTS : 0}")
+        "pass_rate": $pass_rate
     },
     "tests": [
 EOF

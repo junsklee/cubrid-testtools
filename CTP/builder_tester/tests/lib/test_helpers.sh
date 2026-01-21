@@ -137,8 +137,8 @@ start_test_builder() {
     fi
     
     # Start builder with test config
-    BUILDER_CONFIG="$config" java -cp "$PROJECT_ROOT/build/*:$PROJECT_ROOT/lib/*" \
-        com.navercorp.cubridqa.builder.Builder &> /tmp/test_builder_$$.log &
+    local java_cp="$PROJECT_ROOT/build:$PROJECT_ROOT/lib/*"
+    java -cp "$java_cp" com.navercorp.cubridqa.builder.Builder "$config" &> /tmp/test_builder_$$.log &
     
     echo $! > "$TEST_BUILDER_PID"
     
@@ -165,8 +165,8 @@ start_test_tester() {
     fi
     
     # Start tester with test config
-    TESTER_CONFIG="$config" java -cp "$PROJECT_ROOT/build/*:$PROJECT_ROOT/lib/*" \
-        com.navercorp.cubridqa.builder.Tester &> /tmp/test_tester_$$.log &
+    local java_cp="$PROJECT_ROOT/build:$PROJECT_ROOT/lib/*"
+    java -cp "$java_cp" com.navercorp.cubridqa.builder.Tester "$config" &> /tmp/test_tester_$$.log &
     
     echo $! > "$TEST_TESTER_PID"    
     # Wait for service to start
@@ -265,11 +265,33 @@ exit 1
 EOF
     chmod +x "$FIXTURES_DIR/mock_testcases/shell/test2/cases/test2.sh"
 }
+
+# Create a minimal tar.gz that CubridInstaller can extract and validate.
+# The installer looks for an executable bin/cubrid_rel after extraction.
+create_mock_build_package() {
+    local output_path="$1"
+    local tmp_dir
+    tmp_dir="$(mktemp -d /tmp/mock_cubrid_pkg_XXXXXX)"
+
+    mkdir -p "$tmp_dir/_install/CUBRID/bin"
+    cat > "$tmp_dir/_install/CUBRID/bin/cubrid_rel" << 'EOF'
+#!/bin/sh
+echo "CUBRID mock"
+exit 0
+EOF
+    chmod +x "$tmp_dir/_install/CUBRID/bin/cubrid_rel"
+
+    tar -czf "$output_path" -C "$tmp_dir" _install
+    rm -rf "$tmp_dir"
+}
 # HTTP request helper functions
 send_build_request() {
     local commits="$1"
     local tests="$2"
-    local callback_url="${3:-http://localhost:8888/callback}"
+    local callback_url="$3"
+    if [[ -z "$callback_url" ]]; then
+        callback_url="http://localhost:$TEST_BUILDER_PORT/callback"
+    fi
     local worker_ip="${4:-localhost}"
     local build_type="${5:-debug}"
     

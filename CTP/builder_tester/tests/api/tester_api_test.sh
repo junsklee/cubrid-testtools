@@ -44,7 +44,7 @@ test_sync_test_endpoint() {
     
     # Create a mock build package
     local mock_package="/tmp/mock_build_$$.tar.gz"
-    touch "$mock_package"
+    create_mock_build_package "$mock_package"
     
     local response=$(send_test_request \
         "$mock_package" \
@@ -71,7 +71,7 @@ test_keepalive_test_endpoint() {
     
     # Create a mock build package
     local mock_package="/tmp/mock_build_keepalive_$$.tar.gz"
-    touch "$mock_package"
+    create_mock_build_package "$mock_package"
     
     local response=$(send_test_request \
         "$mock_package" \
@@ -83,7 +83,9 @@ test_keepalive_test_endpoint() {
     
     rm -f "$mock_package"
     
-    if [[ "$response" == *"containerName"* ]] && [[ "$response" == *"execCommand"* ]]; then
+    # In direct mode, keep-alive is effectively a no-op (no Docker container to keep).
+    # In Docker mode, expect container metadata for debugging.
+    if ([[ "$response" == *"containerName"* ]] && [[ "$response" == *"execCommand"* ]]) || [[ "$response" == *"\"status\":\"pass\""* ]]; then
         echo "PASS"
         return 0
     else
