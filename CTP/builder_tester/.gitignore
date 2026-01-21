@@ -42,7 +42,18 @@ Thumbs.db
 
 # Misc
 *.bak
+*.bak*
 *.cache
+
+# Generated docs outputs
+docs/_summaries/
+
+# Test runner artifacts
+tests/results/
+tests/fixtures/
+
+# Local scratch
+todelete/
 
 # Node.js dependencies and build artifacts
 /report-server/node_modules/
