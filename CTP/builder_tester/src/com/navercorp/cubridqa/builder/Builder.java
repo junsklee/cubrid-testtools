@@ -30,6 +30,8 @@ public class Builder {
     // The builder runs build requests sequentially: at most 1 BuilderTask at a time.
     // (We still keep an explicit queue for additional requests.)
     private static final int MAX_CONCURRENT_REQUESTS = 1;
+    // Supported shell testcase roots (request "tests" must start with one of these)
+    private static final String[] ALLOWED_SHELL_TEST_ROOTS = new String[] { "shell/", "shell_heavy/", "shell_perf/" };
     // Custom script attachments safety limits (JSON base64 payloads)
     private static final int MAX_CUSTOM_ATTACHMENTS = 20;
     private static final long MAX_CUSTOM_ATTACHMENTS_BYTES = 5L * 1024 * 1024; // 5MB decoded total
@@ -82,6 +84,14 @@ public class Builder {
         }
         
         this.server.setExecutor(null); // creates a default executor
+    }
+
+    private static boolean isAllowedShellTestPath(String t) {
+        if (t == null) return false;
+        for (String root : ALLOWED_SHELL_TEST_ROOTS) {
+            if (t.startsWith(root)) return true;
+        }
+        return false;
     }
     
     public void start() {
@@ -686,8 +696,8 @@ public class Builder {
                     if (t.isEmpty()) continue;
                     if ("custom_script_test".equals(t)) continue;
 
-                    // Enforce strict shell test paths. Reject anything not starting with "shell/".
-                    if (!t.startsWith("shell/")) {
+                    // Enforce strict shell test paths. Reject anything not starting with an allowed shell root.
+                    if (!isAllowedShellTestPath(t)) {
                         invalid.add(t);
                         continue;
                     }
@@ -699,7 +709,7 @@ public class Builder {
                 if (!invalid.isEmpty()) {
                     throw new IllegalArgumentException(
                         "Invalid test path(s): " + String.join(", ", invalid) +
-                        ". Expected filesystem paths like shell/.../cases/... .sh."
+                        ". Expected filesystem paths starting with one of: shell/, shell_heavy/, shell_perf/ (ending with .sh)."
                     );
                 }
             }

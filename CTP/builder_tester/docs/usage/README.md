@@ -53,6 +53,9 @@ curl -X POST http://localhost:8089/build \
   }'
 ```
 
+Notes:
+- `tests[]` entries must start with one of: `shell/`, `shell_heavy/`, `shell_perf/` (and end with `.sh`).
+
 Check status and health:
 ```bash
 curl http://localhost:8089/status
@@ -157,7 +160,7 @@ curl -X POST http://localhost:8089/build \
   -H "Content-Type: application/json" \
   -d '{
     "commits": ["6ea587e"],
-    "tests": ["test1.sh", "test2.sh", "test3.sh"],
+    "tests": ["shell/test1.sh", "shell/test2.sh", "shell/test3.sh"],
     "callbackUrl": "http://localhost:8089/callback",
     "workerIps": ["192.168.1.10", "192.168.1.11", "192.168.1.12"],
     "buildType": "debug"

@@ -96,7 +96,7 @@ Docker management:
 ```json
 {
   "commits": ["hash1", "hash2"],    // or prNumber
-  "tests": ["shell/test1.sh"],
+  "tests": ["shell/test1.sh"],      // or: shell_heavy/... or shell_perf/...
   "workerIps": ["192.168.1.100"],   // or workerIp (singular)
   "callbackUrl": "http://...",
   "buildType": "debug"

@@ -105,6 +105,9 @@ curl -X POST http://localhost:8089/build \
   }'
 ```
 
+Notes:
+- `tests[]` entries must be shell testcase paths starting with one of: `shell/`, `shell_heavy/`, `shell_perf/` (and ending with `.sh`).
+
 Check status and health:
 ```bash
 curl http://localhost:8089/status

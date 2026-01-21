@@ -2447,6 +2447,14 @@ public class BuilderTask {
         return value;
     }
 
+    private static boolean isShellRootedTestPath(String raw) {
+        if (raw == null) return false;
+        String t = raw.trim();
+        return t.startsWith("shell/")
+            || t.startsWith("shell_heavy/")
+            || t.startsWith("shell_perf/");
+    }
+
     /**
      * Legacy distribution: shared work queue pulled by all tester threads.
      */
@@ -2474,7 +2482,7 @@ public class BuilderTask {
 
             for (int i = 0; i < tests.length(); i++) {
                 String raw = tests.getString(i);
-                String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+                String testPath = isShellRootedTestPath(raw) ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
                 pendingJobs.offer(new TestJob(commit, buildPackage, testPath));
             }
         }
@@ -2654,7 +2662,7 @@ public class BuilderTask {
         List<String> normalizedTests = new ArrayList<>();
         for (int i = 0; i < tests.length(); i++) {
             String raw = tests.getString(i);
-            String testPath = raw.startsWith("shell") ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+            String testPath = isShellRootedTestPath(raw) ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
             normalizedTests.add(testPath);
         }
 
