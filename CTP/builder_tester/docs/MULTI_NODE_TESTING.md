@@ -71,7 +71,7 @@ Each tester will show when it downloads packages and serves logs:
 [INFO] Download progress: 75%
 [INFO] Build package downloaded successfully: /tmp/tester_work/test_123/cubrid_6ea587e.tar.gz
 [INFO] Serving log file request: /log/docker_opt_6ea587e_test1.log
-[INFO] Found log file at: /home/qahome/cubrid-testtools/CTP/builder_tester/log/requests/req_20250820_232327_192d/tests/docker_opt_6ea587e_test1.log
+[INFO] Found log file at: log/requests/<request-id>/tests/docker_opt_6ea587e_test1.log
 ```
 
 ## Performance Benefits

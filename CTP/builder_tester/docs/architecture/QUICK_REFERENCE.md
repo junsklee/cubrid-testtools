@@ -4,13 +4,13 @@
 
 ```
 Builder Service:
-  - Main entry: /home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/Builder.java
+  - Main entry: src/com/navercorp/cubridqa/builder/Builder.java
   - Build orchestration: BuilderTask.java (1000+ lines)
   - Docker build execution: DockerBuildManager.java (1236 lines)
   - Configuration: conf/builder.conf
 
 Tester Service:
-  - Main entry: /home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/Tester.java
+  - Main entry: src/com/navercorp/cubridqa/builder/Tester.java
   - Test orchestration: tester/TestOrchestrator.java
   - Docker executors: exec/OptimizedDockerExecutor.java, StandardDockerExecutor.java
   - Configuration: conf/tester.conf
@@ -245,4 +245,3 @@ for commit in builtPackages:
 ### Log Access
 - Tester: GET /log/<filename>
 - Builder: GET /download/build/<filename>
-

@@ -106,7 +106,7 @@ Contents:
 ### Understanding ccache optimization
 1. Read: DOCKER_BUILD_ARCHITECTURE.md section 6
 2. Reference: QUICK_REFERENCE.md "Ccache Optimization"
-3. See also: CCACHE_OPTIMIZATION.md for additional details
+3. See also: [../CCACHE_GUIDE.md](../CCACHE_GUIDE.md) for additional details
 
 ### Finding a specific class or method
 1. Use: FILE_STRUCTURE.md "Important File Locations by Function"
@@ -155,23 +155,23 @@ Contents:
 ### Most Important Files
 ```
 Builder service entry point:
-  /home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/Builder.java
+  src/com/navercorp/cubridqa/builder/Builder.java
 
 Tester service entry point:
-  /home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/Tester.java
+  src/com/navercorp/cubridqa/builder/Tester.java
 
 Build orchestration:
-  /home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/BuilderTask.java
+  src/com/navercorp/cubridqa/builder/BuilderTask.java
 
 Docker build execution:
-  /home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/DockerBuildManager.java
+  src/com/navercorp/cubridqa/builder/DockerBuildManager.java
 
 Test orchestration:
-  /home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/tester/TestOrchestrator.java
+  src/com/navercorp/cubridqa/builder/tester/TestOrchestrator.java
 
 Configuration files:
-  /home/qahome/cubrid-testtools/CTP/builder_tester/conf/builder.conf
-  /home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf
+  conf/builder.conf
+  conf/tester.conf
 ```
 
 ### Most Important Algorithms
@@ -225,7 +225,7 @@ Build script generation:
 ## Related Documentation
 
 Also see these files in the same directory:
-- **CCACHE_OPTIMIZATION.md**: Detailed ccache configuration
+- **[../CCACHE_GUIDE.md](../CCACHE_GUIDE.md)**: Detailed ccache configuration
 - **DOCKER_OPTIMIZATION_SUMMARY.md**: Docker optimization notes
 - **README.md**: Original project README
 - **PERFORMANCE_OPTIMIZATION.md**: Performance tuning guide
@@ -274,4 +274,3 @@ Generated on: November 10, 2025
 Documentation version: 2.0 (includes Smart Scheduling System)
 System analyzed: CUBRID Test Tools builder_tester component
 Branch: builder_tester_refactor_tester
-

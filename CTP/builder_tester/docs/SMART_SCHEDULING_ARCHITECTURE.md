@@ -598,7 +598,7 @@ In-Memory:
   ConcurrentHashMap<testKey, TestStats>
 
 On-Disk:
-  $TESTER_WORK/profiles/
+  <work_dir>/profiles/
     ├── test_stats.jl.gz           (WAL: append-only observations)
     └── test_stats.snapshot.json.gz (Compacted state)
 ```
@@ -1893,18 +1893,18 @@ CTP/builder_tester/
 smart_scheduling_enabled=true
 
 # Mice/elephants threshold (milliseconds)
-scheduling_mice_threshold_ms=20000
+scheduling_mice_threshold_ms=30000
 
 # Scoring weights (should sum to ~1.0)
 scheduling_weight_pressure=0.45      # Multi-resource bin-packing
 scheduling_weight_duration=0.25      # Predicted test duration
-scheduling_weight_image=0.15         # Docker image cache locality
-scheduling_weight_package=0.05       # Build package cache locality
-scheduling_weight_age=0.10           # Queue aging (fairness)
+scheduling_weight_image_cache=0.15   # Docker image cache locality
+scheduling_weight_package_cache=0.05 # Build package cache locality
+scheduling_weight_age_boost=0.10     # Queue aging (fairness)
 
 # Node polling and staleness
-scheduling_poll_interval_ms=5000     # Poll /health every 5 seconds
-scheduling_stale_threshold_ms=30000  # Mark node stale after 30 seconds
+scheduling_node_poll_interval_seconds=5    # Poll /health every 5 seconds
+scheduling_node_stale_threshold_seconds=30 # Mark node stale after 30 seconds
 ```
 
 ### Tester Configuration (tester.conf)
@@ -1947,7 +1947,7 @@ score_endpoint_enabled=true
 
 ### WAL (Write-Ahead Log) Pattern
 
-**File:** `$TESTER_WORK/profiles/test_stats.jl.gz`
+**File:** `<work_dir>/profiles/test_stats.jl.gz`
 
 **Format:** Gzip-compressed JSON Lines (one observation per line)
 
@@ -1981,7 +1981,7 @@ public void recordObservation(TestObservation obs) {
 
 ### Snapshot Compaction
 
-**File:** `$TESTER_WORK/profiles/test_stats.snapshot.json.gz`
+**File:** `<work_dir>/profiles/test_stats.snapshot.json.gz`
 
 **Format:** Gzip-compressed JSON array of TestStats
 

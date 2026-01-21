@@ -14,7 +14,7 @@ The system supports concurrent build and test execution with worker node distrib
 
 ### 1.1 Build Execution Flow
 
-**File**: `/home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/Builder.java`
+**File**: `src/com/navercorp/cubridqa/builder/Builder.java`
 
 #### Request Processing Pipeline
 ```
@@ -49,7 +49,7 @@ BuilderTask.run() → Concurrent Docker Builds → Test Distribution → Callbac
 
 ### 1.2 Concurrent Build Execution
 
-**File**: `/home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/DockerBuildManager.java`
+**File**: `src/com/navercorp/cubridqa/builder/DockerBuildManager.java`
 
 #### Docker Build Process
 
@@ -109,7 +109,7 @@ private static final ConcurrentHashMap<String, String> buildCache
 
 ### 2.1 Worker Node Discovery and Validation
 
-**File**: `/home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/Builder.java`
+**File**: `src/com/navercorp/cubridqa/builder/Builder.java`
 
 #### Request Validation (lines 411-431)
 ```java
@@ -133,7 +133,7 @@ Failure → throw IllegalArgumentException
 
 ### 2.2 Tester Service Configuration
 
-**File**: `/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf`
+**File**: `conf/tester.conf`
 
 ```properties
 tester_port=8090
@@ -146,7 +146,7 @@ build_cache_size=10
 
 ### 2.3 Tester Service Architecture
 
-**File**: `/home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/Tester.java`
+**File**: `src/com/navercorp/cubridqa/builder/Tester.java`
 
 ```
 Tester Constructor
@@ -181,7 +181,7 @@ newFixedThreadPool(Math.max(1, config.getMaxConcurrentTests()))
 
 ### 3.1 Test Distribution Algorithm
 
-**File**: `/home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/BuilderTask.java`
+**File**: `src/com/navercorp/cubridqa/builder/BuilderTask.java`
 
 #### Distribution Strategy (lines 124-187)
 
@@ -252,7 +252,7 @@ for Future<JSONObject> f in futuresList:
 
 ### 3.3 Per-Worker Test Execution
 
-**File**: `/home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/BuilderTask.java`
+**File**: `src/com/navercorp/cubridqa/builder/BuilderTask.java`
 
 #### Remote Test Execution (lines 570-640+)
 
@@ -291,7 +291,7 @@ runTest(commit, buildPackage, testPath, assignedWorker, baselineCommit, buildTyp
 ### 4.1 Directory Structure
 
 ```
-/home/qahome/cubrid-testtools/CTP/builder_tester/
+<project_root>/
 ├── src/com/navercorp/cubridqa/builder/
 │   ├── Builder.java                          # Main builder service
 │   ├── Tester.java                           # Main tester service
@@ -755,4 +755,3 @@ The Docker build system is a highly distributed architecture with:
 5. **Concurrent Execution**: Fixed thread pools at builder and tester level
 6. **Graceful Degradation**: Fallback from optimized→standard→direct execution
 7. **Request Tracking**: Per-request logging and callback notification
-

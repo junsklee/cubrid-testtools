@@ -4,6 +4,23 @@
 
 This document provides a comprehensive reference for all configuration options related to the Smart Scheduling system. It covers both builder and tester configuration, including default values, valid ranges, tuning guidelines, and example configurations for common scenarios.
 
+### Source of truth
+
+- Code defaults: `src/com/navercorp/cubridqa/builder/BuilderConfig.java`
+- Repo “recommended defaults”: `conf/builder.conf` and `conf/tester.conf`
+
+### Key name updates (current)
+
+Some keys were renamed; use the **current** names below:
+
+| Legacy name | Current name |
+|---|---|
+| `scheduling_weight_image` | `scheduling_weight_image_cache` |
+| `scheduling_weight_package` | `scheduling_weight_package_cache` |
+| `scheduling_weight_age` | `scheduling_weight_age_boost` |
+| `scheduling_poll_interval_ms` | `scheduling_node_poll_interval_seconds` |
+| `scheduling_stale_threshold_ms` | `scheduling_node_stale_threshold_seconds` |
+
 ## Table of Contents
 
 1. [Builder Configuration](#builder-configuration)
@@ -47,7 +64,7 @@ smart_scheduling_enabled=true
 #### `scheduling_mice_threshold_ms`
 
 **Type:** Long (milliseconds)
-**Default:** `20000` (20 seconds)
+**Default:** `30000` (30 seconds)
 **Range:** `1000` to `300000` (1s to 5min)
 **Since:** Phase 5
 
@@ -244,7 +261,7 @@ scheduling_weight_duration=0.15
 
 ---
 
-#### `scheduling_weight_image`
+#### `scheduling_weight_image_cache`
 
 **Type:** Double (0.0 to 1.0 recommended)
 **Default:** `0.15`
@@ -256,10 +273,10 @@ Weight for Docker image cache locality. Tests that require an image already cach
 **Example:**
 ```properties
 # Strong cache locality preference
-scheduling_weight_image=0.25
+scheduling_weight_image_cache=0.25
 
 # Less cache sensitivity (more willing to cold-start)
-scheduling_weight_image=0.05
+scheduling_weight_image_cache=0.05
 ```
 
 **Tuning Guidelines:**
@@ -274,7 +291,7 @@ scheduling_weight_image=0.05
 
 ---
 
-#### `scheduling_weight_package`
+#### `scheduling_weight_package_cache`
 
 **Type:** Double (0.0 to 1.0 recommended)
 **Default:** `0.05`
@@ -286,10 +303,10 @@ Weight for build package cache locality. Similar to image weight, but for cached
 **Example:**
 ```properties
 # Strong package locality preference
-scheduling_weight_package=0.10
+scheduling_weight_package_cache=0.10
 
 # Ignore package locality (extraction cheap)
-scheduling_weight_package=0.00
+scheduling_weight_package_cache=0.00
 ```
 
 **Tuning Guidelines:**
@@ -299,7 +316,7 @@ scheduling_weight_package=0.00
 
 ---
 
-#### `scheduling_weight_age`
+#### `scheduling_weight_age_boost`
 
 **Type:** Double (0.0 to 1.0 recommended)
 **Default:** `0.10`
@@ -311,10 +328,10 @@ Weight for queue aging (fairness). Tests waiting longer in the queue receive a b
 **Example:**
 ```properties
 # Strong fairness guarantee (FIFO-like)
-scheduling_weight_age=0.20
+scheduling_weight_age_boost=0.20
 
 # Weak fairness (more SJF/bin-packing optimization)
-scheduling_weight_age=0.05
+scheduling_weight_age_boost=0.05
 ```
 
 **Tuning Guidelines:**
@@ -438,11 +455,11 @@ if (freeIoFrac < 0.3) penalty += (0.3 - freeIoFrac) * 0.5  // max 0.15
 
 ### Node Polling and Staleness
 
-#### `scheduling_poll_interval_ms`
+#### `scheduling_node_poll_interval_seconds`
 
-**Type:** Long (milliseconds)
-**Default:** `5000` (5 seconds)
-**Range:** `1000` to `60000` (1s to 1min)
+**Type:** Long (seconds)
+**Default:** `5` (5 seconds)
+**Range:** `1` to `60` (1s to 1min)
 **Since:** Phase 5
 
 **Description:**
@@ -451,16 +468,16 @@ How often the builder polls each tester's `/health` endpoint to update cluster s
 **Example:**
 ```properties
 # Fast polling (more responsive, higher network overhead)
-scheduling_poll_interval_ms=3000
+scheduling_node_poll_interval_seconds=3
 
 # Slow polling (less overhead, more staleness)
-scheduling_poll_interval_ms=10000
+scheduling_node_poll_interval_seconds=10
 ```
 
 **Tuning Guidelines:**
 - **Decrease** if cluster state changes rapidly (short tests, many nodes)
 - **Increase** if network overhead is a concern or tests are long-running
-- Must be < `scheduling_stale_threshold_ms`
+- Must be < `scheduling_node_stale_threshold_seconds`
 - Network cost: ~1 KB/s per node at 5s interval (negligible)
 
 **Effect on Performance:**
@@ -469,11 +486,11 @@ scheduling_poll_interval_ms=10000
 
 ---
 
-#### `scheduling_stale_threshold_ms`
+#### `scheduling_node_stale_threshold_seconds`
 
-**Type:** Long (milliseconds)
-**Default:** `30000` (30 seconds)
-**Range:** `10000` to `300000` (10s to 5min)
+**Type:** Long (seconds)
+**Default:** `30` (30 seconds)
+**Range:** `10` to `300` (10s to 5min)
 **Since:** Phase 5
 
 **Description:**
@@ -482,16 +499,16 @@ Maximum age of a node's health snapshot before it's marked as stale and excluded
 **Example:**
 ```properties
 # Aggressive staleness detection (tight SLA)
-scheduling_stale_threshold_ms=15000
+scheduling_node_stale_threshold_seconds=15
 
 # Relaxed staleness (tolerate transient network issues)
-scheduling_stale_threshold_ms=60000
+scheduling_node_stale_threshold_seconds=60
 ```
 
 **Tuning Guidelines:**
 - **Decrease** if you want fast failure detection (node crashes, network partitions)
 - **Increase** if you have flaky networks (transient connectivity issues)
-- Should be 3-6× `scheduling_poll_interval_ms`
+- Should be 3-6× `scheduling_node_poll_interval_seconds`
 - Monitor "stale node" warnings in logs
 
 **Effect on Performance:**
@@ -1006,7 +1023,7 @@ heartbeat_interval_seconds=10
 ```
 
 **Notes:**
-- Should match `scheduling_poll_interval_ms` on builder (converted to seconds)
+- Should match `scheduling_node_poll_interval_seconds` on builder
 - Tester doesn't actively send heartbeats (pull model, builder polls)
 - Affects internal cache TTLs for Docker image lists, package lists
 
@@ -1143,11 +1160,11 @@ smart_scheduling_enabled=true
 scheduling_mice_threshold_ms=25000              # Treat more tests as mice
 scheduling_weight_pressure=0.55                 # Strong bin-packing
 scheduling_weight_duration=0.20                 # Less duration bias
-scheduling_weight_image=0.15                    # Cache locality still important
-scheduling_weight_package=0.05                  # Moderate package locality
-scheduling_weight_age=0.05                      # Weak fairness (accept some starvation)
-scheduling_poll_interval_ms=3000                # Fast polling
-scheduling_stale_threshold_ms=15000             # Aggressive staleness
+scheduling_weight_image_cache=0.15              # Cache locality still important
+scheduling_weight_package_cache=0.05            # Moderate package locality
+scheduling_weight_age_boost=0.05                # Weak fairness (accept some starvation)
+scheduling_node_poll_interval_seconds=3         # Fast polling
+scheduling_node_stale_threshold_seconds=15      # Aggressive staleness
 
 # Tester
 stats_enabled=true
@@ -1180,11 +1197,11 @@ smart_scheduling_enabled=true
 scheduling_mice_threshold_ms=30000              # Aggressive mice classification
 scheduling_weight_pressure=0.35                 # Moderate bin-packing
 scheduling_weight_duration=0.35                 # Strong duration preference
-scheduling_weight_image=0.15                    # Cache locality
-scheduling_weight_package=0.05                  # Moderate package locality
-scheduling_weight_age=0.10                      # Moderate fairness
-scheduling_poll_interval_ms=5000                # Balanced polling
-scheduling_stale_threshold_ms=30000             # Balanced staleness
+scheduling_weight_image_cache=0.15              # Cache locality
+scheduling_weight_package_cache=0.05            # Moderate package locality
+scheduling_weight_age_boost=0.10                # Moderate fairness
+scheduling_node_poll_interval_seconds=5         # Balanced polling
+scheduling_node_stale_threshold_seconds=30      # Balanced staleness
 
 # Tester
 stats_enabled=true
@@ -1212,14 +1229,14 @@ score_endpoint_enabled=true
 ```properties
 # Builder
 smart_scheduling_enabled=true
-scheduling_mice_threshold_ms=20000              # Balanced threshold
+scheduling_mice_threshold_ms=30000              # Balanced threshold
 scheduling_weight_pressure=0.40                 # Moderate bin-packing
 scheduling_weight_duration=0.15                 # Weak duration bias
-scheduling_weight_image=0.15                    # Cache locality
-scheduling_weight_package=0.05                  # Moderate package locality
-scheduling_weight_age=0.25                      # Strong fairness guarantee
-scheduling_poll_interval_ms=5000                # Balanced polling
-scheduling_stale_threshold_ms=30000             # Balanced staleness
+scheduling_weight_image_cache=0.15              # Cache locality
+scheduling_weight_package_cache=0.05            # Moderate package locality
+scheduling_weight_age_boost=0.25                # Strong fairness guarantee
+scheduling_node_poll_interval_seconds=5         # Balanced polling
+scheduling_node_stale_threshold_seconds=30      # Balanced staleness
 
 # Tester
 stats_enabled=true
@@ -1247,14 +1264,14 @@ score_endpoint_enabled=true
 ```properties
 # Builder
 smart_scheduling_enabled=true
-scheduling_mice_threshold_ms=20000              # Balanced threshold
+scheduling_mice_threshold_ms=30000              # Balanced threshold
 scheduling_weight_pressure=0.30                 # Lower bin-packing (accept underutilization)
 scheduling_weight_duration=0.20                 # Moderate duration bias
-scheduling_weight_image=0.30                    # Very strong image locality
-scheduling_weight_package=0.10                  # Strong package locality
-scheduling_weight_age=0.10                      # Moderate fairness
-scheduling_poll_interval_ms=5000                # Balanced polling
-scheduling_stale_threshold_ms=30000             # Balanced staleness
+scheduling_weight_image_cache=0.30              # Very strong image locality
+scheduling_weight_package_cache=0.10            # Strong package locality
+scheduling_weight_age_boost=0.10                # Moderate fairness
+scheduling_node_poll_interval_seconds=5         # Balanced polling
+scheduling_node_stale_threshold_seconds=30      # Balanced staleness
 
 # Tester
 stats_enabled=true
@@ -1287,10 +1304,10 @@ build_cache_size=20                             # Larger cache
 scheduling_mice_threshold_ms=15000              # Lower threshold (most tests are mice)
 scheduling_weight_pressure=0.50                 # High utilization
 scheduling_weight_duration=0.25                 # Strong SJF
-scheduling_weight_image=0.15
-scheduling_weight_package=0.05
-scheduling_weight_age=0.05                      # Weak fairness (SJF dominates)
-scheduling_poll_interval_ms=3000                # Fast polling (cluster changes rapidly)
+scheduling_weight_image_cache=0.15
+scheduling_weight_package_cache=0.05
+scheduling_weight_age_boost=0.05                # Weak fairness (SJF dominates)
+scheduling_node_poll_interval_seconds=3         # Fast polling (cluster changes rapidly)
 ```
 
 ---
@@ -1304,10 +1321,10 @@ scheduling_poll_interval_ms=3000                # Fast polling (cluster changes 
 scheduling_mice_threshold_ms=30000              # Higher threshold (capture medium tests)
 scheduling_weight_pressure=0.55                 # Strong bin-packing
 scheduling_weight_duration=0.15                 # Weaker SJF (most tests are elephants)
-scheduling_weight_image=0.15
-scheduling_weight_package=0.05
-scheduling_weight_age=0.10
-scheduling_poll_interval_ms=10000               # Slower polling (cluster changes slowly)
+scheduling_weight_image_cache=0.15
+scheduling_weight_package_cache=0.05
+scheduling_weight_age_boost=0.10
+scheduling_node_poll_interval_seconds=10        # Slower polling (cluster changes slowly)
 ```
 
 ---
@@ -1318,13 +1335,13 @@ scheduling_poll_interval_ms=10000               # Slower polling (cluster change
 
 **Recommended Config:**
 ```properties
-scheduling_mice_threshold_ms=20000
+scheduling_mice_threshold_ms=30000
 scheduling_weight_pressure=0.50                 # Dominant resource pressure adapts to node bottlenecks
 scheduling_weight_duration=0.20
-scheduling_weight_image=0.15
-scheduling_weight_package=0.05
-scheduling_weight_age=0.10
-scheduling_poll_interval_ms=5000
+scheduling_weight_image_cache=0.15
+scheduling_weight_package_cache=0.05
+scheduling_weight_age_boost=0.10
+scheduling_node_poll_interval_seconds=5
 score_endpoint_enabled=true                     # Essential for per-node predictions
 ```
 
@@ -1389,14 +1406,14 @@ smart_scheduling_enabled=false                  # One-line rollback
 ```properties
 # Builder
 smart_scheduling_enabled=true
-scheduling_mice_threshold_ms=20000
+scheduling_mice_threshold_ms=30000
 scheduling_weight_pressure=0.50
 scheduling_weight_duration=0.25
-scheduling_weight_image=0.15
-scheduling_weight_package=0.05
-scheduling_weight_age=0.05
-scheduling_poll_interval_ms=3000                # Fast polling
-scheduling_stale_threshold_ms=15000             # Aggressive staleness
+scheduling_weight_image_cache=0.15
+scheduling_weight_package_cache=0.05
+scheduling_weight_age_boost=0.05
+scheduling_node_poll_interval_seconds=3         # Fast polling
+scheduling_node_stale_threshold_seconds=15      # Aggressive staleness
 
 # Tester
 stats_enabled=true
@@ -1449,14 +1466,14 @@ max_concurrent_tests_post_heavy=4               # Allow one extra slot once heav
 ```properties
 # Builder
 smart_scheduling_enabled=true
-scheduling_mice_threshold_ms=20000
+scheduling_mice_threshold_ms=30000
 scheduling_weight_pressure=0.60                 # Very strong bin-packing
 scheduling_weight_duration=0.15                 # Less SJF (accept longer waits)
-scheduling_weight_image=0.15
-scheduling_weight_package=0.05
-scheduling_weight_age=0.05                      # Weak fairness (efficiency over fairness)
-scheduling_poll_interval_ms=5000
-scheduling_stale_threshold_ms=30000
+scheduling_weight_image_cache=0.15
+scheduling_weight_package_cache=0.05
+scheduling_weight_age_boost=0.05                # Weak fairness (efficiency over fairness)
+scheduling_node_poll_interval_seconds=5
+scheduling_node_stale_threshold_seconds=30
 
 # Tester
 stats_enabled=true
@@ -1512,9 +1529,9 @@ scheduling_margin_confidence_factor=0.10        # 10% for low confidence (was 0.
 # Other standard settings
 scheduling_weight_pressure=0.45
 scheduling_weight_duration=0.25
-scheduling_weight_image=0.15
-scheduling_weight_package=0.05
-scheduling_weight_age=0.10
+scheduling_weight_image_cache=0.15
+scheduling_weight_package_cache=0.05
+scheduling_weight_age_boost=0.10
 ```
 
 **Step 3 - Restart Services:**
@@ -1585,15 +1602,15 @@ use_iops_predictions=false
 
 **Diagnosis:**
 Check weight configuration. Likely causes:
-1. `scheduling_weight_image` or `scheduling_weight_package` too high
+1. `scheduling_weight_image_cache` or `scheduling_weight_package_cache` too high
 2. One node has all cached images/packages (cold start elsewhere)
 3. Pressure weight too low (not enough bin-packing penalty)
 
 **Fix:**
 ```properties
 # Option 1: Lower cache locality weights
-scheduling_weight_image=0.10                    # Was 0.30
-scheduling_weight_package=0.03                  # Was 0.10
+scheduling_weight_image_cache=0.10              # Was 0.30
+scheduling_weight_package_cache=0.03            # Was 0.10
 
 # Option 2: Increase pressure weight
 scheduling_weight_pressure=0.55                 # Was 0.30
@@ -1616,7 +1633,7 @@ scheduling_weight_pressure=0.55                 # Was 0.30
 **Fix:**
 ```properties
 # Option 1: Increase age weight
-scheduling_weight_age=0.20                      # Was 0.05
+scheduling_weight_age_boost=0.20                # Was 0.05
 
 # Option 2: Decrease duration weight
 scheduling_weight_duration=0.15                 # Was 0.35
@@ -1645,8 +1662,8 @@ scheduling_weight_duration=0.15                 # Was 0.35
 **Fix:**
 ```properties
 # Builder
-scheduling_weight_image=0.25                    # Increase cache locality preference
-scheduling_poll_interval_ms=3000                # Faster polling
+scheduling_weight_image_cache=0.25              # Increase cache locality preference
+scheduling_node_poll_interval_seconds=3         # Faster polling
 
 # Tester
 build_cache_size=20                             # Larger cache (was 10)
@@ -1667,8 +1684,8 @@ Polling interval too fast for workload characteristics.
 
 **Fix:**
 ```properties
-scheduling_poll_interval_ms=10000               # Slow down (was 3000)
-scheduling_stale_threshold_ms=60000             # Adjust staleness accordingly
+scheduling_node_poll_interval_seconds=10        # Slow down (was 3)
+scheduling_node_stale_threshold_seconds=60      # Adjust staleness accordingly
 ```
 
 **Calculate overhead:**
@@ -1776,15 +1793,15 @@ stats_enabled=true                              # Ensure enabled
 ```
 
 **Also check:**
-- File exists: `$TESTER_WORK/profiles/test_stats.jl.gz`
+- File exists: `<work_dir>/profiles/test_stats.jl.gz`
 - File permissions (writable by tester user)
 - Tester logs for WAL replay errors
 
 **If files corrupted:**
 ```bash
 # Backup and reset
-mv $TESTER_WORK/profiles $TESTER_WORK/profiles.backup
-mkdir $TESTER_WORK/profiles
+mv <work_dir>/profiles <work_dir>/profiles.backup
+mkdir <work_dir>/profiles
 # Restart tester (will start collecting fresh data)
 ```
 
@@ -1813,8 +1830,8 @@ build_cache_size=10
 # Only used when smart_scheduling_enabled=true
 scheduling_mice_threshold_ms=20000
 scheduling_weight_*=...
-scheduling_poll_interval_ms=5000
-scheduling_stale_threshold_ms=30000
+scheduling_node_poll_interval_seconds=5
+scheduling_node_stale_threshold_seconds=30
 ```
 
 ### Side-by-Side Comparison
@@ -1842,13 +1859,13 @@ Before deploying smart scheduling configuration, verify:
 - [ ] `smart_scheduling_enabled` is `true`
 - [ ] All weights are non-negative
 - [ ] Weights sum to reasonable range (0.8 to 1.2)
-- [ ] `scheduling_poll_interval_ms` < `scheduling_stale_threshold_ms`
+- [ ] `scheduling_node_poll_interval_seconds` < `scheduling_node_stale_threshold_seconds`
 - [ ] `scheduling_mice_threshold_ms` > 0
 
 **Tester:**
 - [ ] `stats_enabled` is `true`
 - [ ] `stats_snapshot_interval_seconds` >= 60
-- [ ] `heartbeat_interval_seconds` matches builder's `scheduling_poll_interval_ms` (±1s)
+- [ ] `heartbeat_interval_seconds` matches builder's `scheduling_node_poll_interval_seconds` (±1s)
 - [ ] `score_endpoint_enabled` is `true`
 - [ ] `optimized_docker_enabled` is `true` (for cache locality)
 
@@ -1871,15 +1888,15 @@ fi
 # Check weights sum
 w1=$(grep "^scheduling_weight_pressure=" $BUILDER_CONF | cut -d= -f2)
 w2=$(grep "^scheduling_weight_duration=" $BUILDER_CONF | cut -d= -f2)
-w3=$(grep "^scheduling_weight_image=" $BUILDER_CONF | cut -d= -f2)
-w4=$(grep "^scheduling_weight_package=" $BUILDER_CONF | cut -d= -f2)
-w5=$(grep "^scheduling_weight_age=" $BUILDER_CONF | cut -d= -f2)
+w3=$(grep "^scheduling_weight_image_cache=" $BUILDER_CONF | cut -d= -f2)
+w4=$(grep "^scheduling_weight_package_cache=" $BUILDER_CONF | cut -d= -f2)
+w5=$(grep "^scheduling_weight_age_boost=" $BUILDER_CONF | cut -d= -f2)
 sum=$(echo "$w1 + $w2 + $w3 + $w4 + $w5" | bc)
 echo "[INFO] Weight sum: $sum (should be ~1.0)"
 
 # Check polling vs staleness
-poll=$(grep "^scheduling_poll_interval_ms=" $BUILDER_CONF | cut -d= -f2)
-stale=$(grep "^scheduling_stale_threshold_ms=" $BUILDER_CONF | cut -d= -f2)
+poll=$(grep "^scheduling_node_poll_interval_seconds=" $BUILDER_CONF | cut -d= -f2)
+stale=$(grep "^scheduling_node_stale_threshold_seconds=" $BUILDER_CONF | cut -d= -f2)
 if [ "$poll" -lt "$stale" ]; then
     echo "[OK] Poll interval ($poll) < stale threshold ($stale)"
 else
@@ -1985,15 +2002,15 @@ All other parameters will use sensible defaults.
 | Parameter | Default | Location |
 |-----------|---------|----------|
 | `smart_scheduling_enabled` | `false` | builder.conf |
-| `scheduling_mice_threshold_ms` | `20000` | builder.conf |
+| `scheduling_mice_threshold_ms` | `30000` | builder.conf |
 | `scheduling_weight_pressure` | `0.45` | builder.conf |
 | `scheduling_weight_duration` | `0.25` | builder.conf |
-| `scheduling_weight_image` | `0.15` | builder.conf |
-| `scheduling_weight_package` | `0.05` | builder.conf |
-| `scheduling_weight_age` | `0.10` | builder.conf |
+| `scheduling_weight_image_cache` | `0.15` | builder.conf |
+| `scheduling_weight_package_cache` | `0.05` | builder.conf |
+| `scheduling_weight_age_boost` | `0.10` | builder.conf |
 | `scheduling_weight_heavy` | `0.10` | builder.conf |
-| `scheduling_poll_interval_ms` | `5000` | builder.conf |
-| `scheduling_stale_threshold_ms` | `30000` | builder.conf |
+| `scheduling_node_poll_interval_seconds` | `5` | builder.conf |
+| `scheduling_node_stale_threshold_seconds` | `30` | builder.conf |
 | `tester_profiles_dir` | `~/tmp/tester_work/profiles` | builder.conf |
 | `elephant_min_ms` | `60000` | builder.conf |
 | `use_iops_predictions` | `false` | builder.conf |
@@ -2014,7 +2031,7 @@ All other parameters will use sensible defaults.
 
 For questions or issues with smart scheduling configuration:
 
-1. Check logs: `$BUILDER_WORK/logs/builder.log`, `$TESTER_WORK/logs/tester.log`
+1. Check logs: `log/system/builder.log`, `log/system/tester.log`
 2. Review this document's troubleshooting section
 3. Consult [SMART_SCHEDULING_TESTING_GUIDE.md](SMART_SCHEDULING_TESTING_GUIDE.md)
 4. Review architecture in [SMART_SCHEDULING_ARCHITECTURE.md](SMART_SCHEDULING_ARCHITECTURE.md)

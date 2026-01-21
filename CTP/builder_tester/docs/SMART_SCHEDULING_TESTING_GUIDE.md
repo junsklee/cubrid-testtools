@@ -34,19 +34,18 @@ Edit `conf/builder.conf`:
 smart_scheduling_enabled=true
 
 # Scheduling algorithm parameters
-scheduling_mice_threshold_ms=20000           # Tests ≤20s are "mice", >20s are "elephants"
+scheduling_mice_threshold_ms=30000           # Tests ≤30s are "mice", >30s are "elephants" (code default)
 scheduling_weight_pressure=0.45              # Weight for resource pressure (bin-packing)
 scheduling_weight_duration=0.25              # Weight for predicted test duration
-scheduling_weight_image=0.15                 # Weight for Docker image cache locality
-scheduling_weight_package=0.05               # Weight for build package cache locality
-scheduling_weight_age=0.10                   # Weight for queue aging (fairness)
+scheduling_weight_image_cache=0.15           # Weight for Docker image cache locality
+scheduling_weight_package_cache=0.05         # Weight for build package cache locality
+scheduling_weight_age_boost=0.10             # Weight for queue aging (fairness)
 
 # Node polling and staleness
-scheduling_poll_interval_ms=5000             # How often to poll tester /health endpoints
-scheduling_stale_threshold_ms=30000          # Mark nodes stale after 30s without heartbeat
+scheduling_node_poll_interval_seconds=5      # How often to poll tester /health endpoints
+scheduling_node_stale_threshold_seconds=30   # Mark nodes stale after 30s without heartbeat
 
 # Existing builder config (keep as-is)
-cubrid_git_url=https://github.com/CUBRID/cubrid.git
 # ... other settings
 ```
 
@@ -65,7 +64,6 @@ score_endpoint_enabled=true                  # Enable /score endpoint for predic
 
 # Existing tester config (keep as-is)
 max_concurrent_tests=6
-executor_type=optimized-docker
 # ... other settings
 ```
 
@@ -75,8 +73,9 @@ To start with no historical data:
 
 ```bash
 # On each tester node
-rm -f $TESTER_WORK/profiles/test_stats.jl.gz
-rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
+# Replace with the tester's configured `work_dir` (conf/tester.conf).
+rm -f <work_dir>/profiles/test_stats.jl.gz
+rm -f <work_dir>/profiles/test_stats.snapshot.json.gz
 ```
 
 ## Manual Test Scenarios
@@ -94,14 +93,14 @@ rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
 
 2. Run a small test batch through the builder (or trigger directly on tester):
    ```bash
-   # Example: Run 5-10 tests
-   ./bin/run-tests.sh --commit <commit-sha> --tests shell/sql/basic/*
+   # Send a build request (edit `bin/test_client.sh` to point at your Builder/Tester)
+   ./bin/test_client.sh
    ```
 
 3. Check that observations are being recorded:
    ```bash
    # On the tester node
-   zcat $TESTER_WORK/profiles/test_stats.jl.gz | head -5
+   zcat <work_dir>/profiles/test_stats.jl.gz | head -5
    ```
 
 **Expected Output**:
@@ -128,7 +127,7 @@ rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
    ```bash
    # Run the same test 10 times
    for i in {1..10}; do
-     ./bin/run-tests.sh --commit <commit-sha> --tests shell/sql/basic/test_01.sh
+     ./bin/test_client.sh
    done
    ```
 
@@ -140,7 +139,7 @@ rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
 
 3. Check snapshot file:
    ```bash
-   zcat $TESTER_WORK/profiles/test_stats.snapshot.json.gz | jq .
+   zcat <work_dir>/profiles/test_stats.snapshot.json.gz | jq .
    ```
 
 **Expected Output**:
@@ -173,7 +172,7 @@ rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
 1. Ensure tester is running with tests in progress:
    ```bash
    # Start some long-running tests
-   ./bin/run-tests.sh --commit <commit-sha> --tests shell/sql/ha/* &
+   ./bin/test_client.sh &
    ```
 
 2. Query the /health endpoint:
@@ -325,7 +324,7 @@ rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
 
 3. Start a build job and monitor builder logs:
    ```bash
-   tail -f $BUILDER_WORK/logs/builder.log | grep -E "(NodeDirectory|health|heartbeat)"
+   tail -f log/system/builder.log | grep -E "(NodeDirectory|health|heartbeat)"
    ```
 
 **Expected Log Output**:
@@ -361,7 +360,7 @@ rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
 
 3. Monitor builder logs for scheduling decisions:
    ```bash
-   tail -f $BUILDER_WORK/logs/builder.log | grep -E "(SchedulerService|Assignment|Score)"
+   tail -f log/system/builder.log | grep -E "(SchedulerService|Assignment|Score)"
    ```
 
 **Expected Log Output**:
@@ -416,10 +415,10 @@ rm -f $TESTER_WORK/profiles/test_stats.snapshot.json.gz
    grep "Total execution time" smart_run.log
 
    # Per-node utilization (check tester logs)
-   grep "Average CPU utilization" $TESTER_WORK/logs/tester.log
+   grep "Average CPU utilization" log/system/tester.log
 
    # Image cache hit rate
-   grep "Docker image cache" $TESTER_WORK/logs/tester.log
+   grep "Docker image cache" log/system/tester.log
    ```
 
 **Expected Improvements**:
@@ -452,7 +451,7 @@ Expected: NodeDirectory marks node stale after 30s, scheduler stops assigning to
 #### 8.3 No Historical Data (Cold Start)
 ```bash
 # Clear all stats, run new test
-rm -f $TESTER_WORK/profiles/*.gz
+rm -f <work_dir>/profiles/*.gz
 ```
 Expected: Predictor uses bootstrap defaults (30s, 50% CPU, 512MB), confidence=0.25.
 
@@ -477,13 +476,13 @@ Expected: Elephant eventually gets aged boost, scheduled before newer mice.
 1. **Throughput** (tests/hour):
    ```bash
    # From builder logs
-   grep "Completed.*tests in" $BUILDER_WORK/logs/builder.log
+   grep "Completed.*tests in" log/system/builder.log
    ```
 
 2. **Mean & P95 Test Completion Time**:
    ```bash
    # Extract from TestObservations
-   zcat $TESTER_WORK/profiles/test_stats.jl.gz | \
+   zcat <work_dir>/profiles/test_stats.jl.gz | \
      jq -r '.duration_ms' | \
      awk '{sum+=$1; sumsq+=$1*$1; a[NR]=$1} END {
        asort(a);
@@ -502,7 +501,7 @@ Expected: Elephant eventually gets aged boost, scheduled before newer mice.
 
 4. **Image Cache Hit Rate**:
    ```bash
-   zcat $TESTER_WORK/profiles/test_stats.jl.gz | \
+   zcat <work_dir>/profiles/test_stats.jl.gz | \
      jq -r '.docker_image_cached' | \
      awk '{sum+=$1; count++} END {print sum/count*100"%"}'
    ```
@@ -526,7 +525,7 @@ Expected: Elephant eventually gets aged boost, scheduled before newer mice.
 1. Check tester health: `curl http://<tester-ip>:8090/health`
 2. Verify `max_concurrent_tests` not too low
 3. Check for disk pressure or degraded flags
-4. Review `scheduling_stale_threshold_ms` (may be too aggressive)
+4. Review `scheduling_node_stale_threshold_seconds` (may be too aggressive)
 
 ---
 
@@ -548,7 +547,7 @@ Expected: Elephant eventually gets aged boost, scheduled before newer mice.
 
 **Fixes**:
 1. Verify /health endpoint includes `images.present` list
-2. Increase `scheduling_weight_image` (e.g., 0.20 instead of 0.15)
+2. Increase `scheduling_weight_image_cache` (e.g., 0.20 instead of 0.15)
 3. Ensure Optimized Docker executor is enabled
 4. Check Docker image naming matches `cubrid-test:<commit>_<baseline>` pattern
 
@@ -560,7 +559,7 @@ Expected: Elephant eventually gets aged boost, scheduled before newer mice.
 
 **Fixes**:
 1. Check that `stats_enabled=true` in tester.conf
-2. Verify write permissions on `$TESTER_WORK/profiles/` directory
+2. Verify write permissions on `<work_dir>/profiles/` directory
 3. Check tester logs for WAL replay errors
 4. Manually inspect snapshot file for test entries
 
@@ -579,7 +578,7 @@ If smart scheduling causes issues, immediately revert to legacy mode:
 
 3. Verify legacy mode in logs:
    ```bash
-   tail -f $BUILDER_WORK/logs/builder.log | grep "LEGACY work-queue distribution"
+   tail -f log/system/builder.log | grep "LEGACY work-queue distribution"
    ```
 
 Legacy round-robin distribution will resume immediately.
@@ -610,14 +609,14 @@ Once all tests pass:
 ## Appendix: Quick Reference
 
 ### Configuration File Locations
-- Builder: `/home/qahome/cubrid-testtools/CTP/builder_tester/conf/builder.conf`
-- Tester: `/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf`
+- Builder: `conf/builder.conf`
+- Tester: `conf/tester.conf`
 
 ### Log Locations
-- Builder logs: `$BUILDER_WORK/logs/builder.log`
-- Tester logs: `$TESTER_WORK/logs/tester.log`
-- Test stats: `$TESTER_WORK/profiles/test_stats.jl.gz`
-- Snapshot: `$TESTER_WORK/profiles/test_stats.snapshot.json.gz`
+- Builder logs: `log/system/builder.log`
+- Tester logs: `log/system/tester.log`
+- Test stats: `<work_dir>/profiles/test_stats.jl.gz`
+- Snapshot: `<work_dir>/profiles/test_stats.snapshot.json.gz`
 
 ### Key Endpoints
 - Tester health: `http://<tester-ip>:8090/health`
@@ -630,13 +629,13 @@ Once all tests pass:
 ./bin/compile.sh
 
 # View test stats
-zcat $TESTER_WORK/profiles/test_stats.jl.gz | jq . | less
+zcat <work_dir>/profiles/test_stats.jl.gz | jq . | less
 
 # View snapshot
-zcat $TESTER_WORK/profiles/test_stats.snapshot.json.gz | jq . | less
+zcat <work_dir>/profiles/test_stats.snapshot.json.gz | jq . | less
 
 # Monitor scheduling decisions
-tail -f $BUILDER_WORK/logs/builder.log | grep "SchedulerService"
+tail -f log/system/builder.log | grep "SchedulerService"
 
 # Check node health
 curl -s http://<tester-ip>:8090/health | jq .

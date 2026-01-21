@@ -74,7 +74,7 @@ To verify the improvements on the next build:
 
 2. **Review ccache logs**:
    ```bash
-   tail -1000 /home/qahome/docker-work/work/.ccache/logs/ccache_*.log | grep "Result:" | sort | uniq -c
+   tail -1000 ~/docker-work/work/.ccache/logs/ccache_*.log | grep "Result:" | sort | uniq -c
    ```
 
 3. **Monitor build times**:
@@ -104,4 +104,3 @@ The following files already have full support for `ccache_sloppiness`:
 - `DockerBuildManager.java`: Lines 183, 360, 579, 898 - Passes to Docker
 
 No code changes were required - only configuration!
-

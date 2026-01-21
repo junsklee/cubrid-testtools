@@ -53,7 +53,7 @@
   - System: `~/cubrid-testtools/CTP/builder_tester/log/system/{builder.log,tester.log}`
   - Requests: `~/cubrid-testtools/CTP/builder_tester/log/requests/req_*/{request.json,builder.log,builds/,tests/}`
   - Metadata: `~/cubrid-testtools/CTP/builder_tester/log/.metadata.json`
-  - See log/LOG_MANAGEMENT.md for detailed logging architecture
+  - See `docs/features/TEST_LOGGING_FIXED.md` for logging details and history
 
 ### Shell testcases workspace
 

@@ -98,6 +98,21 @@ See usage README for:
 - Common workflows
 - Troubleshooting
 
+## WAL (Test Statistics)
+
+Directory: [wal/](wal/)
+
+- [wal/README.md](wal/README.md) - Index
+- [wal/ARCHITECTURE.md](wal/ARCHITECTURE.md) - WAL format and lifecycle
+- [wal/OPERATIONS.md](wal/OPERATIONS.md) - Operational guidance
+
+## Summaries
+
+Directory: [`_summaries/`](_summaries/)
+
+- [`_summaries/DOCS_INVENTORY.md`](_summaries/DOCS_INVENTORY.md) - Docs list + verification scope
+- [`_summaries/README.md`](_summaries/README.md) - Summary deliverables index
+
 ## Document Index by Topic
 
 ### For Developers

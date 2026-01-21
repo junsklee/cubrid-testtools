@@ -4,7 +4,7 @@
 
 ### Main Services
 ```
-/home/qahome/cubrid-testtools/CTP/builder_tester/src/com/navercorp/cubridqa/builder/
+src/com/navercorp/cubridqa/builder/
 ├── Builder.java                              # Main builder HTTP service
 ├── Tester.java                               # Main tester HTTP service
 ├── BuilderTask.java                          # Build orchestration (1000+ lines)
@@ -125,18 +125,19 @@ test/
 ## Configuration Files
 
 ```
-/home/qahome/cubrid-testtools/CTP/builder_tester/conf/
+conf/
 ├── builder.conf                              # Builder service configuration
 │   - listen_port=8089
 │   - max_concurrent_builds=4
-│   - test_read_timeout_minutes=60
+│   - test_read_timeout_minutes=160
 │   - use_docker=true
-│   - ccache_enabled=true
-│   - parallel_jobs=0
+│   - smart_scheduling_enabled=true
 │
 └── tester.conf                               # Tester service configuration
     - tester_port=8090
-    - max_concurrent_tests=6
+    - max_concurrent_tests=28
+    - max_concurrent_tests_heavy_queue=28
+    - max_concurrent_tests_post_heavy=42
     - use_docker_tester=true
     - optimized_docker_enabled=true
 ```
@@ -146,7 +147,7 @@ test/
 ## Log Directory Structure
 
 ```
-/home/qahome/cubrid-testtools/CTP/builder_tester/log/
+log/
 ├── system/                                   # System-level logs
 │   ├── builder.log                           # Builder service main log
 │   └── tester.log                            # Tester service main log
@@ -245,19 +246,14 @@ Package format:
 ## Documentation Files
 
 ```
-/home/qahome/cubrid-testtools/CTP/builder_tester/
-├── README.md                                 # Main README
-├── DOCKER_OPTIMIZATION_SUMMARY.md            # Docker optimization notes
-├── CCACHE_OPTIMIZATION.md                    # Ccache configuration details
-├── DOCKER_BUILD_ARCHITECTURE.md              # Comprehensive architecture doc
-├── QUICK_REFERENCE.md                        # Quick reference guide
-├── FILE_STRUCTURE.md                         # This file
-├── MULTIPART_IMPLEMENTATION.md               # Multipart response details
-├── REPORT_SERVER_ENHANCEMENTS.md             # Report server features
-├── REFACTORING_SUMMARY.md                    # Refactoring history
-├── TEST_LOGGING_FIXED.md                     # Logging improvements
-├── PERFORMANCE_OPTIMIZATION.md               # Performance tuning
-└── test_*.sh                                 # Test scripts
+docs/
+├── README.md                                 # Docs entry point
+├── architecture/                             # Architecture docs
+├── configuration/                            # Configuration docs
+├── usage/                                    # API/usage docs
+├── features/                                 # Feature docs
+├── wal/                                      # Stats WAL docs
+└── *_SCHEDULING_*.md                         # Smart scheduling guides
 ```
 
 ---
@@ -265,18 +261,16 @@ Package format:
 ## Binary/Compiled Files
 
 ```
-/home/qahome/cubrid-testtools/CTP/builder_tester/
-├── bin/                                      # Compiled binaries
-│   ├── builder.jar                           # Builder service JAR
-│   ├── tester.jar                            # Tester service JAR
-│   ├── start_builder.sh                      # Builder startup script
-│   └── start_tester.sh                       # Tester startup script
+bin/                                          # Shell entrypoints and helper scripts
+├── compile.sh
+├── start_builder.sh
+├── start_tester.sh
+└── stop_*.sh
 │
-└── lib/                                      # External libraries
-    ├── commons-*.jar
-    ├── json.jar
-    ├── javax.*.jar
-    └── ...
+lib/                                          # JARs (including the built artifact)
+├── builder-tester.jar
+├── json.jar
+└── jsch-0.1.55.jar
 ```
 
 ---
@@ -392,4 +386,3 @@ Tester
 - json.jar (JSON parsing)
 - commons-* (Apache commons)
 - HTTP server (JDK HttpServer)
-

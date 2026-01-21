@@ -356,7 +356,7 @@ The system automatically detects and utilizes available nodes from the request p
 ### Compilation
 
 ```bash
-cd /home/qahome/cubrid-testtools/CTP/builder_tester
+cd <project_root>
 ./bin/compile.sh
 ```
 
@@ -510,7 +510,7 @@ This is expected behavior when builder is still building another commit. Tests w
 
 1. **Compile new code**
    ```bash
-   cd /home/qahome/cubrid-testtools/CTP/builder_tester
+   cd <project_root>
    ./bin/compile.sh
    ```
 
