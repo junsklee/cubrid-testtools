@@ -519,6 +519,61 @@
             gap: 1rem;
         }
 
+        .baseline-rail.checkout-mode .base,
+        .baseline-rail.checkout-mode .base::after {
+            display: none;
+        }
+
+        .baseline-rail.checkout-mode .rail {
+            padding-top: 14px;
+            align-items: center;
+        }
+
+        .baseline-rail.checkout-mode .rail::before {
+            display: none;
+        }
+
+        .baseline-rail.checkout-mode .commit-connector {
+            position: absolute;
+            top: 50%;
+            left: 100%;
+            width: 26px;
+            height: 3px;
+            background: #94a3b8;
+            border-radius: 2px;
+            transform: translateY(-50%);
+        }
+
+        .baseline-rail.checkout-mode .commit-connector::after {
+            content: "";
+            position: absolute;
+            right: -10px;
+            top: 50%;
+            transform: translateY(-50%);
+            border-top: 6px solid transparent;
+            border-bottom: 6px solid transparent;
+            border-left: 10px solid #64748b;
+        }
+
+        .baseline-rail.checkout-mode .commit-card::after {
+            content: none;
+        }
+
+        .baseline-rail.checkout-mode .commit-card.checkout-start::after {
+            content: "";
+            position: absolute;
+            top: -14px;
+            left: 50%;
+            transform: translateX(-50%);
+            height: 14px;
+            border-left: 2px solid #94a3b8;
+        }
+
+        .baseline-rail.checkout-mode .commit-card:last-child .commit-connector,
+        .baseline-rail.checkout-mode.single-commit .commit-connector {
+            display: none;
+        }
+
 
 
 
@@ -1386,6 +1441,7 @@
     <script>
         // Parse the embedded JSON data
         const rawData = {{RESULTS_JSON}};
+        const commitBuildMode = rawData.commitBuildMode || 'baseline_cherrypick';
         let processedData = {};
         let commits = [];
         let currentFilter = 'all';
@@ -1442,9 +1498,26 @@
                     };
                 });
             }
-            // Keep commits in original order - proper chronological sorting happens in loadCommitDetails()
-            commits = Array.from(commitSet);
+            const providedOrder = Array.isArray(rawData.commitOrder) ? rawData.commitOrder : null;
+            if (providedOrder && providedOrder.length > 0) {
+                const ordered = providedOrder.filter(commit => commitSet.has(commit));
+                const seen = new Set(ordered);
+                commitSet.forEach(commit => {
+                    if (!seen.has(commit)) {
+                        ordered.push(commit);
+                    }
+                });
+                commits = ordered;
+            } else {
+                // Keep commits in original order - proper chronological sorting happens in loadCommitDetails()
+                commits = Array.from(commitSet);
+            }
             processedData = testGroups;
+
+            if (commitBuildMode === 'checkout') {
+                const baselineSection = document.getElementById('baselineCommitSection');
+                if (baselineSection) baselineSection.style.display = 'none';
+            }
             
             // Update basic counts
             // Calculate and display execution time
@@ -1512,7 +1585,7 @@
         async function loadCommitDetails() {
             try {
                 // Handle baseline commit display
-                if (rawData.baselineCommit) {
+                if (commitBuildMode !== 'checkout' && rawData.baselineCommit) {
                     try {
                         const baselineResponse = await fetch(`https://api.github.com/repos/CUBRID/cubrid/commits/${rawData.baselineCommit}`);
                         if (baselineResponse.ok) {
@@ -1571,19 +1644,30 @@
                     })
                 );
                 
-                // Sort by timestamp (oldest first), fall back to SHA comparison
-                commitDetails.sort((a, b) => {
-                    if (a.timestamp && b.timestamp) {
-                        return a.timestamp - b.timestamp; // Oldest first
-                    } else if (a.timestamp && !b.timestamp) {
-                        return -1; // Timestamped commits come first
-                    } else if (!a.timestamp && b.timestamp) {
-                        return 1;
-                    } else {
-                        // Both have no timestamp, use lexicographical order
-                        return a.sha.localeCompare(b.sha);
-                    }
-                });
+                const providedOrder = Array.isArray(rawData.commitOrder) ? rawData.commitOrder : null;
+                if (providedOrder && providedOrder.length > 0) {
+                    const orderIndex = new Map();
+                    providedOrder.forEach((sha, idx) => orderIndex.set(sha, idx));
+                    commitDetails.sort((a, b) => {
+                        const ai = orderIndex.has(a.sha) ? orderIndex.get(a.sha) : Number.MAX_SAFE_INTEGER;
+                        const bi = orderIndex.has(b.sha) ? orderIndex.get(b.sha) : Number.MAX_SAFE_INTEGER;
+                        return ai - bi;
+                    });
+                } else {
+                    // Sort by timestamp (oldest first), fall back to SHA comparison
+                    commitDetails.sort((a, b) => {
+                        if (a.timestamp && b.timestamp) {
+                            return a.timestamp - b.timestamp; // Oldest first
+                        } else if (a.timestamp && !b.timestamp) {
+                            return -1; // Timestamped commits come first
+                        } else if (!a.timestamp && b.timestamp) {
+                            return 1;
+                        } else {
+                            // Both have no timestamp, use lexicographical order
+                            return a.sha.localeCompare(b.sha);
+                        }
+                    });
+                }
                 
                 // Update commits array with chronologically sorted order
                 commits = commitDetails.map(item => item.sha);
@@ -1773,7 +1857,51 @@
             if (errorCommits.length > 0) {
                 return { text: 'Error: Test execution failed', class: 'verdict-error' };
             }
-            
+
+            if (commitBuildMode === 'checkout' && commits.length > 0) {
+                const normalized = commits.map(commit => {
+                    const resultData = processedData[testName][commit];
+                    let status;
+                    if (typeof resultData === 'object' && resultData.status) {
+                        status = resultData.status;
+                    } else {
+                        status = resultData || 'error';
+                    }
+                    return status === 'pass' ? 'pass' : 'fail';
+                });
+
+                const allPass = normalized.every(s => s === 'pass');
+                const allFail = normalized.every(s => s === 'fail');
+                if (allPass) {
+                    return { text: 'Pass: Not reproduced across listed commits', class: 'verdict-success' };
+                }
+                if (allFail) {
+                    return { text: 'Pre-existing Failure: Likely not caused by listed commits', class: 'verdict-preexisting' };
+                }
+
+                let transitions = 0;
+                for (let i = 1; i < normalized.length; i++) {
+                    if (normalized[i] !== normalized[i - 1]) {
+                        transitions++;
+                    }
+                }
+
+                if (transitions === 1) {
+                    if (normalized[0] === 'pass') {
+                        const firstFailIndex = normalized.indexOf('fail');
+                        const failedCommit = commits[firstFailIndex] || '';
+                        return { text: 'Regression introduced: ' + failedCommit.substring(0, 7), class: 'verdict-bug' };
+                    }
+                    if (normalized[0] === 'fail') {
+                        const firstPassIndex = normalized.indexOf('pass');
+                        const fixedCommit = commits[firstPassIndex] || '';
+                        return { text: 'Fixed by later commit: ' + fixedCommit.substring(0, 7), class: 'verdict-success' };
+                    }
+                }
+
+                return { text: 'Unstable: Multiple transitions', class: 'verdict-unstable' };
+            }
+
             // Fall back to traditional verdict logic
             const failCount = calculateFailCount(testName);
             const numCommits = commits.length;
@@ -2494,15 +2622,33 @@
 
         // Populate the baseline rail with commit data
         function populateBaselineRail(commitDetails) {
+            const baselineRail = document.getElementById('baselineRail');
             const commitRail = document.getElementById('commitRail');
             const baselineRailLink = document.getElementById('baselineRailLink');
             const baselineRailHash = document.getElementById('baselineRailHash');
+            if (!baselineRail || !commitRail) {
+                return;
+            }
+
+            baselineRail.classList.toggle('single-commit', commitDetails.length <= 1);
+
+            if (commitBuildMode === 'checkout') {
+                baselineRail.classList.add('checkout-mode');
+                if (baselineRailLink) {
+                    baselineRailLink.style.display = 'none';
+                }
+            } else {
+                baselineRail.classList.remove('checkout-mode');
+                if (baselineRailLink) {
+                    baselineRailLink.style.display = '';
+                }
+            }
             
             // Set up baseline link and hash
             let baselineCommit = rawData.baselineCommit;
             
             // If no explicit baseline, try to determine it from commits
-            if (!baselineCommit && commits && commits.length > 0) {
+            if (!baselineCommit && commitBuildMode !== 'checkout' && commits && commits.length > 0) {
                 // Try to get parent of earliest commit from API data
                 const firstCommitDetail = commitDetails.find(detail => detail.sha === commits[0]);
                 if (firstCommitDetail && firstCommitDetail.data && firstCommitDetail.data.parents && firstCommitDetail.data.parents.length > 0) {
@@ -2511,14 +2657,16 @@
                 // If we can't determine baseline, just leave it as undefined - don't use first commit
             }
             
-            if (baselineCommit) {
-                const baselineUrl = `https://github.com/CUBRID/cubrid/commit/${baselineCommit}`;
-                baselineRailLink.href = baselineUrl;
-                baselineRailHash.textContent = baselineCommit.substring(0, 7);
-            } else {
-                // Show dash to indicate server couldn't determine baseline
-                baselineRailLink.href = '#';
-                baselineRailHash.textContent = '-';
+            if (commitBuildMode !== 'checkout' && baselineRailLink && baselineRailHash) {
+                if (baselineCommit) {
+                    const baselineUrl = `https://github.com/CUBRID/cubrid/commit/${baselineCommit}`;
+                    baselineRailLink.href = baselineUrl;
+                    baselineRailHash.textContent = baselineCommit.substring(0, 7);
+                } else {
+                    // Show dash to indicate server couldn't determine baseline
+                    baselineRailLink.href = '#';
+                    baselineRailHash.textContent = '-';
+                }
             }
 
             // Clear existing commit chips
@@ -2536,6 +2684,9 @@
                 // Create commit card element
                 const card = document.createElement('a');
                 card.className = 'commit-card';
+                if (commitBuildMode === 'checkout' && index === 0) {
+                    card.classList.add('checkout-start');
+                }
                 card.setAttribute('role', 'listitem');
                 card.href = commit.html_url;
                 card.target = '_blank';
@@ -2572,6 +2723,12 @@
                     </div>
                 `;
                 
+                if (commitBuildMode === 'checkout') {
+                    const connector = document.createElement('span');
+                    connector.className = 'commit-connector';
+                    card.appendChild(connector);
+                }
+
                 commitRail.appendChild(card);
             });
             
@@ -2584,10 +2741,9 @@
             // Horizontal line is now handled by CSS ::before
             
             // Show the baseline rail
-            document.getElementById('baselineRail').style.display = 'block';
+            baselineRail.style.display = 'block';
         }
 
     </script>
 </body>
 </html>
-
