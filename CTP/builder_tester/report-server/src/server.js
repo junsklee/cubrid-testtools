@@ -103,28 +103,60 @@ async function startServer() {
             `);
         });
         
-        // Graceful shutdown
-        process.on('SIGTERM', () => {
-            console.log('SIGTERM received, closing server...');
-            server.close(() => {
-                console.log('Server closed');
-                process.exit(0);
-            });
+        // Server error handling
+        server.on('error', (error) => {
+            if (error.code === 'EADDRINUSE') {
+                console.error(`Port ${config.server.port} is already in use. Please use a different port.`);
+                process.exit(1);
+            } else if (error.code === 'EACCES') {
+                console.error(`Permission denied. Cannot bind to port ${config.server.port}.`);
+                process.exit(1);
+            } else {
+                console.error('Server error:', error);
+                // Don't exit on other errors - let the server try to recover
+            }
         });
         
-        process.on('SIGINT', () => {
-            console.log('\nSIGINT received, closing server...');
+        // Connection timeout handling (prevent hanging connections)
+        server.timeout = 120000; // 2 minutes
+        server.keepAliveTimeout = 65000; // 65 seconds (just above typical load balancer timeout)
+        server.headersTimeout = 66000; // 66 seconds (must be > keepAliveTimeout)
+        
+        // Track server start time for uptime monitoring
+        const serverStartTime = Date.now();
+        let isShuttingDown = false;
+        
+        // Graceful shutdown handler
+        const gracefulShutdown = (signal) => {
+            if (isShuttingDown) {
+                return;
+            }
+            isShuttingDown = true;
+            console.log(`${signal} received, closing server gracefully...`);
+            
+            // Stop accepting new connections
             server.close(() => {
                 console.log('Server closed');
                 process.exit(0);
             });
-        });
+            
+            // Force close after 10 seconds if graceful shutdown fails
+            setTimeout(() => {
+                console.error('Forced shutdown after timeout');
+                process.exit(1);
+            }, 10000);
+        };
+        
+        // Graceful shutdown
+        process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+        process.on('SIGINT', () => gracefulShutdown('SIGINT'));
         
         // Handle unhandled promise rejections
         process.on('unhandledRejection', (reason, promise) => {
             console.error('Unhandled Promise Rejection at:', promise);
             console.error('Reason:', reason);
             // Log but don't exit - keep the server running
+            // TODO: Add log to a file or monitoring service
         });
         
         // Handle uncaught exceptions
@@ -150,15 +182,52 @@ async function startServer() {
         const heartbeat = setInterval(() => {
             // This helps detect if the event loop is blocked
             const timestamp = new Date().toISOString();
+            const uptime = Math.floor((Date.now() - serverStartTime) / 1000);
             if (config.app.environment === 'development') {
-                console.log(`[Heartbeat] Server alive at ${timestamp}`);
+                console.log(`[Heartbeat] Server alive at ${timestamp} (uptime: ${uptime}s)`);
             }
         }, 3600000); // Every hour
         
-        // Clear heartbeat on shutdown
+        // Internal health check - verify server is still responding
+        const healthCheckInterval = setInterval(async () => {
+            try {
+                // Simple check: verify server is listening
+                if (!server.listening) {
+                    console.error('[Health Check] Server is not listening!');
+                    return;
+                }
+                
+                // Check memory usage
+                const memUsage = process.memoryUsage();
+                const memUsageMB = {
+                    rss: Math.round(memUsage.rss / 1024 / 1024),
+                    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+                    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+                    external: Math.round(memUsage.external / 1024 / 1024)
+                };
+                
+                // Warn if memory usage is high (> 1GB RSS)
+                if (memUsageMB.rss > 1024) {
+                    console.warn(`[Health Check] High memory usage: ${JSON.stringify(memUsageMB)}`);
+                }
+                
+                if (config.app.environment === 'development') {
+                    console.log(`[Health Check] Server healthy - Memory: ${memUsageMB.rss}MB RSS`);
+                }
+            } catch (err) {
+                console.error('[Health Check] Error during health check:', err);
+            }
+        }, 300000); // Every 5 minutes
+        
+        // Clear intervals on shutdown
         process.on('exit', () => {
             clearInterval(heartbeat);
+            clearInterval(healthCheckInterval);
         });
+        
+        // Export server instance for testing/monitoring
+        app.set('server', server);
+        app.set('serverStartTime', serverStartTime);
         
     } catch (err) {
         console.error('Failed to start server:', err);

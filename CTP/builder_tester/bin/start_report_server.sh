@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CUBRID Builder-Tester Report Server Startup Script
-# This script starts the integrated report server with dashboard
+# This script starts the report server with dashboard
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPORT_SERVER_DIR="$SCRIPT_DIR/../report-server"
@@ -54,9 +54,9 @@ fi
 # Change to report server directory
 cd "$REPORT_SERVER_DIR" || exit 1
 
-# Check if the integrated server file exists
-if [ ! -f "report-server-integrated.js" ]; then
-    echo -e "${RED}Error: report-server-integrated.js not found in $REPORT_SERVER_DIR${NC}"
+# Check if the server entrypoint exists
+if [ ! -f "src/server.js" ]; then
+    echo -e "${RED}Error: src/server.js not found in $REPORT_SERVER_DIR${NC}"
     exit 1
 fi
 
@@ -66,4 +66,4 @@ echo -e "${GREEN}Builder: http://${BUILDER_HOST}:${BUILDER_PORT}${NC}"
 echo ""
 
 # Start the Node.js server
-node report-server-integrated.js "$REPORT_PORT"
+node src/server.js "$REPORT_PORT"
