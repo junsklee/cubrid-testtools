@@ -49,7 +49,8 @@ curl -X POST http://localhost:8089/build \
     "tests": ["shell/_01_utility/_38_csql/csql_hist/cases/csql_hist.sh"],
     "callbackUrl": "http://localhost:8888/callback",
     "workerIp": "localhost",
-    "buildType": "debug"
+    "buildType": "debug",
+    "use_baseline_cherrypick": true
   }'
 ```
 
@@ -197,12 +198,14 @@ See docs/CCACHE_GUIDE.md for detailed setup.
 
 ## Notes on isolated builds
 
-- Baseline = parent of earliest commit in `commits[]`
-- **The baseline commit itself is automatically excluded from build targets** to avoid version numbering issues
-- Each build starts from a clean baseline state to ensure consistent versioning (baseline + 1)
-- Docker build path (default): clone into writable target, checkout temp branch at baseline, reset hard to baseline, cherry-pick only the target commit, `git submodule sync && git submodule update --init --recursive --checkout --force`, clean, build, package
-- Direct host fallback: create temp branch + `git worktree add` at baseline, reset hard to baseline, cherry-pick only the target commit, sync submodules, clean, build, package, remove worktree and delete temp branch
-- Merge commits are cherry-picked with `-m 1`
+Builder supports two multi-commit build modes (configure `commit_build_mode` in `conf/builder.conf`):
+
+- `checkout` (default): builds each commit via full-history `git checkout <commit>` with no baseline/cherry-pick isolation.
+- `baseline_cherrypick`: uses a common baseline (parent of earliest commit) and cherry-picks each target commit for consistent versioning.
+  - **The baseline commit itself is automatically excluded from build targets** to avoid version numbering issues.
+  - Docker build path: clone into writable target, checkout temp branch at baseline, reset hard to baseline, cherry-pick only the target commit, `git submodule sync && git submodule update --init --recursive --checkout --force`, clean, build, package.
+  - Direct host fallback: create temp branch + `git worktree add` at baseline, reset hard to baseline, cherry-pick only the target commit, sync submodules, clean, build, package, remove worktree and delete temp branch.
+  - Merge commits are cherry-picked with `-m 1`.
 
 ## Logs
 

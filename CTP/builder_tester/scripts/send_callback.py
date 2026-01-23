@@ -158,7 +158,9 @@ def extract_metadata_from_log(log_file):
         "baselineCommit": None,
         "taskId": None,
         "executionTimeSeconds": None,
-        "expectedCommit": None
+        "expectedCommit": None,
+        "commitBuildMode": None,
+        "commitTimestamps": {}
     }
     
     with open(log_file, 'r', encoding='utf-8') as f:
@@ -168,6 +170,13 @@ def extract_metadata_from_log(log_file):
         baseline_match = re.search(r'Using baseline \(parent of earliest commit\): ([a-f0-9]+)', content)
         if baseline_match:
             metadata["baselineCommit"] = baseline_match.group(1)
+
+        # Extract commit build mode
+        mode_match = re.search(r'Using commit build mode (checkout|baseline_cherrypick)', content)
+        if mode_match:
+            metadata["commitBuildMode"] = mode_match.group(1)
+        elif metadata["baselineCommit"]:
+            metadata["commitBuildMode"] = "baseline_cherrypick"
         
         # Extract expected commit (the commit that was actually built)
         commit_match = re.search(r'Using cached build from disk for commit ([a-f0-9]+)', content)
@@ -203,6 +212,14 @@ def extract_metadata_from_log(log_file):
             end_match = re.search(r'Builder task ([^\s]+) completed in (\d+) seconds', content)
             if end_match:
                 metadata["executionTimeSeconds"] = int(end_match.group(2))
+
+        # Extract commit timestamps if present
+        timestamp_matches = re.findall(r'Commit ([a-f0-9]+) has timestamp (\d+)', content)
+        for commit, ts in timestamp_matches:
+            try:
+                metadata["commitTimestamps"][commit] = int(ts)
+            except ValueError:
+                continue
     
     return metadata
 
@@ -297,10 +314,6 @@ def main():
         else:
             metadata["taskId"] = "unknown"
     
-    if not metadata["baselineCommit"]:
-        print("Warning: Could not extract baselineCommit from log", file=sys.stderr)
-        metadata["baselineCommit"] = "e00307bc1149f143b7648620193d34d1c0bee86b"
-    
     if not metadata["executionTimeSeconds"]:
         print("Warning: Could not extract execution time from log, using 33491 seconds", file=sys.stderr)
         metadata["executionTimeSeconds"] = 33491
@@ -310,16 +323,28 @@ def main():
         "requestId": metadata["taskId"],
         "taskId": metadata["taskId"],
         "results": results,
-        "baselineCommit": metadata["baselineCommit"],
         "executionTime": format_execution_time(metadata["executionTimeSeconds"]),
         "timestamp": int(datetime.now().timestamp() * 1000)
     }
+
+    if metadata.get("baselineCommit"):
+        payload["baselineCommit"] = metadata["baselineCommit"]
+    if metadata.get("commitBuildMode"):
+        payload["commitBuildMode"] = metadata["commitBuildMode"]
+    if metadata.get("commitTimestamps"):
+        payload["commitTimestamps"] = metadata["commitTimestamps"]
+        # Build commit order (oldest to newest)
+        ordered = sorted(metadata["commitTimestamps"].items(), key=lambda item: (item[1], item[0]))
+        payload["commitOrder"] = [commit for commit, _ts in ordered]
     
     print(f"\nCallback payload summary:")
     print(f"  requestId: {payload['requestId']}")
     print(f"  taskId: {payload['taskId']}")
     print(f"  results count: {len(payload['results'])}")
-    print(f"  baselineCommit: {payload['baselineCommit']}")
+    if "baselineCommit" in payload:
+        print(f"  baselineCommit: {payload['baselineCommit']}")
+    if "commitBuildMode" in payload:
+        print(f"  commitBuildMode: {payload['commitBuildMode']}")
     print(f"  executionTime: {payload['executionTime']}")
     print(f"  timestamp: {payload['timestamp']}")
     

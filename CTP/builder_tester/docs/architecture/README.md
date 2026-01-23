@@ -15,7 +15,7 @@
 ## Flow
 
 1. Client POSTs to Builder `/build` with `commits[]`, `tests[]`, `callbackUrl`, `workerIp`, `buildType`.
-2. Builder task builds each commit (Docker or direct) in isolation onto a common baseline (parent of earliest commit). For each built artifact, it calls Tester `/test` on `workerIp` with the test details.
+2. Builder task builds each commit (Docker or direct) using the configured `commit_build_mode` (default `checkout`, optional `baseline_cherrypick`). For each built artifact, it calls Tester `/test` on `workerIp` with the test details.
 3. Tester extracts the build, configures CUBRID, runs the shell test in Docker (or direct fallback). The testcases mount is read-write. Result is read from `<scriptBase>.result` (e.g., `foo.sh` → `foo.result`).
    - **Multi-attempt execution**: If retry is configured, creates separate log files (test.log, test.2.log, etc.)
    - **Response with metadata**: Returns `attemptLogMetadata` array with status and filename for each attempt
@@ -99,13 +99,12 @@ The system implements a dual logging approach:
 
 ### Commit isolation details
 
-- Compute baseline as the parent of the earliest requested commit
-- **Automatically exclude the baseline commit itself from build targets** (baseline should result in baseline version, not baseline+1)
-- For each target commit, ensure clean baseline state for consistent version numbering:
-- Docker build path (default): clone into writable target, checkout a temporary branch at the baseline, reset hard to baseline, cherry-pick the single target commit, sync submodules to gitlinks, clean and build, then package
-- Direct host fallback: create a temporary branch + `git worktree add` at baseline, reset hard to baseline, cherry-pick only the target commit, sync submodules, clean and build, package, then remove the worktree and delete the temp branch
-- Each build starts from pristine baseline state, ensuring all target commits get version = baseline + 1
-- Merge commits are cherry-picked with `-m 1`
+- `commit_build_mode=checkout` (default): build each commit via full-history checkout; no baseline/cherry-pick isolation.
+- `commit_build_mode=baseline_cherrypick`: compute baseline as the parent of the earliest requested commit and isolate each build:
+  - **Automatically exclude the baseline commit itself from build targets** (baseline should result in baseline version, not baseline+1).
+  - Docker build path: clone into writable target, checkout a temporary branch at the baseline, reset hard to baseline, cherry-pick the single target commit, sync submodules to gitlinks, clean and build, then package.
+  - Direct host fallback: create a temporary branch + `git worktree add` at baseline, reset hard to baseline, cherry-pick only the target commit, sync submodules, clean and build, package, then remove the worktree and delete the temp branch.
+  - Merge commits are cherry-picked with `-m 1`.
 - Host binds:
   - `config.docker_host_root` (default `~/docker-work`) binds to `/work` and `/root/.gradle`
   - `config.getCubridSrcDir()` mounted read-only
@@ -113,4 +112,4 @@ The system implements a dual logging approach:
 
 ## Callback
 
-- After all builds/tests complete, Builder POSTs `{ taskId, results[], timestamp }` to the configured `callbackUrl`.
+- After all builds/tests complete, Builder POSTs `{ taskId, results[], commitBuildMode, commitOrder, baselineCommit, timestamp }` to the configured `callbackUrl`.

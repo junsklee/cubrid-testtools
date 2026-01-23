@@ -90,7 +90,8 @@ HTTP endpoint in `Builder.java` that accepts remote build requests.
 {
   "commit": "sha",
   "buildType": "debug|release",
-  "baselineCommit": "sha"
+  "baselineCommit": "sha",
+  "commitBuildMode": "baseline_cherrypick|checkout"
 }
 ```
 
@@ -109,9 +110,9 @@ HTTP endpoint in `Builder.java` that accepts remote build requests.
 #### Sequential Build Assignment
 
 ```
-Algorithm: assignBuild(commit, buildType, baseline)
+Algorithm: assignBuild(commit, buildType, baselineKey)
 
-Input: Commit to build, build type, baseline commit
+Input: Commit to build, build type, baseline key (`history` for checkout mode)
 Output: Assigned node ID
 
 1. Wait for an idle node (with timeout)
@@ -312,7 +313,7 @@ public class WorkloadDistributor {
      * Assign next build (blocking until node available)
      * @return Node ID assigned to build
      */
-    public String assignBuild(String commit, String buildType, String baseline);
+    public String assignBuild(String commit, String buildType, String baselineKey);
 
     /**
      * Mark build completion and record package location
@@ -365,7 +366,7 @@ public class RemoteBuildClient {
         String nodeId,
         String commit,
         String buildType,
-        String baselineCommit
+        String baselineKey
     ) throws IOException;
 
     /**

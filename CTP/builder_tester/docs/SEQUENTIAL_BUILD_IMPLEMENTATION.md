@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the implementation of sequential build execution and distributed workload management in the builder_tester system. The implementation replaces the previous concurrent build model with a sequential approach that maximizes compiler cache effectiveness and enables distributed building across all nodes.
+This document describes the implementation of sequential build execution and distributed workload management in the builder_tester system. The implementation replaces the previous concurrent build model with a sequential approach that maximizes compiler cache effectiveness and enables distributed building across all nodes. It applies to both `checkout` and `baseline_cherrypick` build modes.
 
 ## Background
 
@@ -87,16 +87,18 @@ HTTP endpoint handler for remote build requests.
 private Map<String, String> buildCommitsSequentially(
     JSONArray commits,
     String buildType,
-    String baselineCommit
+    String baselineCommit,
+    String baselineKey,
+    String commitBuildMode
 ) throws Exception
 ```
 
 **Algorithm:**
 1. Iterate through commits sequentially (not in parallel)
-2. Check build cache (memory and disk)
+2. Check build cache (memory and disk) using baseline key (`history` for checkout mode)
 3. If not cached:
    - Assign build via WorkloadDistributor
-   - Execute locally if localhost, remotely otherwise
+   - Execute locally if localhost, remotely otherwise (passing commitBuildMode)
    - Record package location
 4. Update build cache and progress
 
@@ -126,7 +128,7 @@ workloadDistributor = new WorkloadDistributor(nodeIds);
 
 **Sequential Assignment Flow:**
 ```
-1. Call workloadDistributor.assignBuild(commit, buildType, baseline)
+1. Call workloadDistributor.assignBuild(commit, buildType, baselineKey)
 2. Distributor finds next idle node using round-robin
 3. If all nodes busy, wait until one becomes idle
 4. Mark node as BUILDING
@@ -137,11 +139,11 @@ workloadDistributor = new WorkloadDistributor(nodeIds);
 ```java
 if (workloadDistributor.isNodeLocal(assignedNode)) {
     // Execute locally via DockerBuildManager
-    buildPackage = buildCommit(commit, buildType, workDir, baseline);
+    buildPackage = buildCommit(commit, buildType, workDir, baseline, commitBuildMode);
 } else {
     // Trigger remote build via HTTP
     JSONObject result = RemoteBuildClient.triggerRemoteBuild(
-        assignedNode, commit, buildType, baseline
+        assignedNode, commit, buildType, baseline, commitBuildMode
     );
     buildPackage = result.optString("packagePath");
 }
@@ -158,7 +160,8 @@ if (workloadDistributor.isNodeLocal(assignedNode)) {
 {
   "commit": "abc123...",
   "buildType": "debug",
-  "baselineCommit": "def456..."
+  "baselineCommit": "def456...",
+  "commitBuildMode": "baseline_cherrypick"
 }
 ```
 

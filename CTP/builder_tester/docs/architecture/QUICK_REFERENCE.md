@@ -35,13 +35,13 @@ Docker management:
 
 ### BuilderTask.java
 - `run()`: Main orchestration - builds, distributes tests, collects results
-- `buildCommitsConcurrently()`: Parallel docker builds
+- `buildCommitsConcurrently()`: Parallel docker builds (legacy path)
 - `buildPullRequest()`: PR-specific build logic
-- `determineBaselineCommit()`: Calculate baseline (parent of earliest commit)
-- Test distribution: lines 124-187 (round-robin with global index)
+- `computeCommitOrderInfo()`: Commit order + timestamps for callbacks/verdicts
+- Build mode: `commit_build_mode` (`checkout` default, `baseline_cherrypick` optional)
 
 ### DockerBuildManager.java
-- `buildCubrid(commitHash, workDir, buildType, baselineCommit)`: Docker build
+- `buildCubrid(commitHash, workDir, buildType, baselineCommit, commitBuildMode)`: Docker build
 - `buildPullRequest()`: Build PR branch
 - `createDockerBuildScript()`: Generate build.sh script
 - `buildCubridDirect()`: Fallback direct host build
@@ -70,15 +70,15 @@ Docker management:
 - Per-request test execution pools
 
 ### Test Distribution
-- Global round-robin algorithm: test_index % num_workers
-- Load balancing: even distribution regardless of commit count
-- Worker priority: local testers executed before remote
+- Smart Scheduling (default): uses `/health` + optional `/score` + profiles/WAL
+- Legacy distribution: work-queue when smart scheduling disabled
 
 ## Configuration Keys
 
 ### builder.conf
 - `listen_port=8089`
 - `max_concurrent_builds=4`
+- `commit_build_mode=checkout`
 - `test_read_timeout_minutes=60`
 - `use_docker=true`
 - `ccache_enabled=true`
@@ -141,9 +141,11 @@ for commit in builtPackages:
 
 ## Docker Build Process
 
-1. **Baseline Selection**: Parent of earliest commit (for cherry-pick)
+1. **Build Mode**: `checkout` (default) or `baseline_cherrypick`
 2. **Source Checkout**: Clone with reference to reduce network usage
-3. **Commit Application**: Cherry-pick with format-patch fallback
+3. **Commit Application**:
+   - checkout: `git checkout <commit>`
+   - baseline_cherrypick: cherry-pick with format-patch fallback
 4. **Submodule Sync**: Parallel update with git version detection
 5. **Build Execution**: With ccache and deterministic version
 6. **Package Creation**: Packages only _install/CUBRID (optimized)
@@ -170,7 +172,7 @@ for commit in builtPackages:
 
 ### In-Memory Cache
 - ConcurrentHashMap<String, String>
-- Key: commit + buildType + baseline
+- Key: commit + buildType + baselineKey (baseline SHA or `history`)
 - Validates cached builds before reuse
 
 ### Disk Cache
@@ -184,7 +186,7 @@ for commit in builtPackages:
 - Class: DockerImageBuilder
 - Cache: Concurrent image name → package mapping
 - LRU eviction: When cache size exceeds max_cached_images
-- Image naming: cubrid-test:commit_baseline
+- Image naming: cubrid-test:commit_baselineKey
 
 ### Image Build Process
 1. Extract build package
