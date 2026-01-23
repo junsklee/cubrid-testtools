@@ -70,6 +70,7 @@ public class Builder {
         this.server.createContext("/status", new StatusHandler());
         this.server.createContext("/health", new HealthCheckHandler());
         this.server.createContext("/download/build/", new BuildDownloadHandler());
+        this.server.createContext("/queue/remove", new QueueRemoveHandler());
         
         // Add report handler for viewing test results
         try {
@@ -322,6 +323,9 @@ public class Builder {
                 task.run();
             } finally {
                 activeTasks.remove(taskId);
+                if (task.isCancelRequested() && task.shouldDeleteLogsOnCancel()) {
+                    logRotationManager.deleteRequestLogDir(taskId);
+                }
                 processNextQueuedRequest();
             }
         }, buildExecutor);
@@ -463,6 +467,85 @@ public class Builder {
                 logger.log(Level.WARNING, "Error in health check", e);
                 JSONObject error = new JSONObject()
                     .put("status", "error")
+                    .put("message", e.getMessage());
+                sendJsonResponse(exchange, 500, error);
+            }
+        }
+    }
+
+    private class QueueRemoveHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "Method not allowed");
+                return;
+            }
+
+            String taskId = null;
+            BuilderTask runningTask = null;
+            boolean removedFromQueue = false;
+            boolean logsDeleted = false;
+            int remainingQueued = 0;
+
+            try {
+                String body = readRequestBody(exchange);
+                JSONObject payload = new JSONObject(body);
+                taskId = payload.optString("taskId", "").trim();
+
+                if (taskId.isEmpty()) {
+                    sendJsonResponse(exchange, 400, new JSONObject()
+                        .put("status", "error")
+                        .put("message", "Missing taskId"));
+                    return;
+                }
+
+                synchronized (taskDispatchLock) {
+                    runningTask = activeTasks.get(taskId);
+                    if (runningTask != null) {
+                        runningTask.requestCancel(true);
+                        removedFromQueue = removeFromPendingQueue(taskId);
+                    } else {
+                        removedFromQueue = removeFromPendingQueue(taskId);
+                    }
+                    remainingQueued = pendingRequests.size();
+                }
+
+                if (runningTask != null) {
+                    try {
+                        cleanupContainersForCancel();
+                    } catch (Exception cleanupEx) {
+                        logger.warning("Cancel cleanup failed: " + cleanupEx.getMessage());
+                    }
+
+                    JSONObject response = new JSONObject()
+                        .put("status", "cancel_requested")
+                        .put("taskId", taskId)
+                        .put("queuedRemaining", remainingQueued);
+                    sendJsonResponse(exchange, 200, response);
+                    return;
+                }
+
+                if (removedFromQueue) {
+                    logsDeleted = logRotationManager.deleteRequestLogDir(taskId);
+                    JSONObject response = new JSONObject()
+                        .put("status", "removed")
+                        .put("taskId", taskId)
+                        .put("logsDeleted", logsDeleted)
+                        .put("queuedRemaining", remainingQueued);
+                    sendJsonResponse(exchange, 200, response);
+                    return;
+                }
+
+                JSONObject response = new JSONObject()
+                    .put("status", "not_found")
+                    .put("taskId", taskId);
+                sendJsonResponse(exchange, 200, response);
+
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Error removing queued request", e);
+                JSONObject error = new JSONObject()
+                    .put("status", "error")
+                    .put("taskId", taskId)
                     .put("message", e.getMessage());
                 sendJsonResponse(exchange, 500, error);
             }
@@ -932,6 +1015,18 @@ public class Builder {
         removeExitedByAncestor(config.getDockerTestImage());
     }
 
+    private void cleanupContainersForCancel() throws IOException, InterruptedException {
+        if (!DockerUtils.isDockerAvailable()) {
+            logger.info("Docker not available; skipping cancel cleanup");
+            return;
+        }
+        // Stop any active tester containers
+        removeByNamePrefix("tester_");
+        // Stop all containers for builder/tester images (running or exited)
+        removeByAncestor(config.getDockerBuildImage());
+        removeByAncestor(config.getDockerTestImage());
+    }
+
     private void removeByNamePrefix(String prefix) throws IOException, InterruptedException {
         String listCmd = "docker ps -aq --filter name=" + prefix;
         List<String> ids = readCommandOutput(new String[]{"bash", "-lc", listCmd});
@@ -955,6 +1050,33 @@ public class Builder {
             cmd.add("docker rm " + String.join(" ", ids));
             new ProcessBuilder(cmd).inheritIO().start().waitFor();
         }
+    }
+
+    private void removeByAncestor(String image) throws IOException, InterruptedException {
+        if (image == null || image.trim().isEmpty()) return;
+        List<String> ids = readCommandOutput(new String[]{
+            "docker", "ps", "-aq", "--filter", "ancestor=" + image
+        });
+        if (!ids.isEmpty()) {
+            logger.info("Removing containers for image '" + image + "': " + String.join(",", ids));
+            List<String> cmd = new ArrayList<>();
+            cmd.add("docker"); cmd.add("rm"); cmd.add("-f");
+            cmd.addAll(ids);
+            new ProcessBuilder(cmd).inheritIO().start().waitFor();
+        }
+    }
+
+    private boolean removeFromPendingQueue(String requestId) {
+        boolean removed = false;
+        Iterator<QueuedBuildRequest> it = pendingRequests.iterator();
+        while (it.hasNext()) {
+            QueuedBuildRequest qr = it.next();
+            if (qr != null && requestId.equals(qr.getRequestId())) {
+                it.remove();
+                removed = true;
+            }
+        }
+        return removed;
     }
 
     private List<String> readCommandOutput(String[] cmd) throws IOException, InterruptedException {

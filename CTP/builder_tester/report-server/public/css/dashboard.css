@@ -986,6 +986,37 @@
             justify-content: flex-end;
         }
 
+        .queue-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .queue-remove {
+            width: 24px;
+            height: 24px;
+            border-radius: 999px;
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            background: rgba(239, 68, 68, 0.12);
+            color: var(--error);
+            font-size: 0.85rem;
+            line-height: 1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .queue-remove:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+
+        .queue-remove:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
         .queue-badge {
             font-size: 0.75rem;
             padding: 0.2rem 0.55rem;

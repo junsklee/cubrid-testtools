@@ -141,13 +141,21 @@
                     if (id && id === viewingId) badges.push('<span class="queue-badge viewing">VIEWING</span>');
                     if (id && pinnedId && id === pinnedId) badges.push('<span class="queue-badge pinned">PINNED</span>');
                     
+                    const removeBtn = state === 'finished' ? '' : `
+                        <button class="queue-remove" data-task-id="${id}" data-queue-state="${state}" title="Remove request">
+                            ✕
+                        </button>
+                    `;
                     return `
                         <div class="queue-item" data-task-id="${id}" data-queue-state="${state}">
                             <div class="queue-left">
                                 <div class="queue-id">${id}</div>
                                 <div class="queue-subtitle">${subtitle}</div>
                             </div>
-                            <div class="queue-badges">${badges.join('')}</div>
+                            <div class="queue-right">
+                                <div class="queue-badges">${badges.join('')}</div>
+                                ${removeBtn}
+                            </div>
                         </div>
                     `;
                 };
@@ -201,6 +209,70 @@
                             } catch (e) {
                                 showToast('Could not load request details for this queue item.', 'error');
                             }
+                        }
+                    });
+                });
+
+                // Allow removing queue items via ✕ button
+                itemsEl.querySelectorAll('.queue-remove').forEach(btn => {
+                    btn.addEventListener('click', async (event) => {
+                        event.stopPropagation();
+                        const taskId = btn.getAttribute('data-task-id');
+                        const state = btn.getAttribute('data-queue-state');
+                        if (!taskId) return;
+
+                        const isRunning = state === 'running';
+                        const confirmMsg = isRunning
+                            ? `Cancel running request ${taskId}? This stops Docker containers and deletes request logs.`
+                            : `Remove request ${taskId}? This will delete its request logs and clean up related artifacts.`;
+                        if (!window.confirm(confirmMsg)) {
+                            return;
+                        }
+
+                        btn.disabled = true;
+                        try {
+                            const resp = await fetch('/api/builder/queue/remove', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ taskId })
+                            });
+                            const text = await resp.text();
+                            let payload = {};
+                            try {
+                                payload = text ? JSON.parse(text) : {};
+                            } catch (e) {
+                                payload = {};
+                            }
+
+                            if (!resp.ok) {
+                                const msg = payload.error || text || 'Request failed';
+                                throw new Error(msg);
+                            }
+
+                            const status = payload.status || '';
+                            if (status === 'cancel_requested') {
+                                showToast(`Cancel requested for ${taskId}.`, 'info');
+                            } else if (status === 'removed') {
+                                showToast(`Removed ${taskId} from queue.`, 'success');
+                            } else if (status === 'not_found') {
+                                showToast(`Request ${taskId} not found.`, 'warning');
+                            } else {
+                                showToast(`Request ${taskId} updated.`, 'info');
+                            }
+
+                            const activeId = sessionStorage.getItem('activeTaskId');
+                            const viewId = sessionStorage.getItem('viewTaskId');
+                            if (taskId === activeId) sessionStorage.removeItem('activeTaskId');
+                            if (taskId === viewId) sessionStorage.removeItem('viewTaskId');
+
+                            if (window.refreshBuildStatus) {
+                                await window.refreshBuildStatus();
+                            }
+                            await refreshBuildQueue(sessionStorage.getItem('viewTaskId') || sessionStorage.getItem('activeTaskId'));
+                        } catch (e) {
+                            showToast(`Failed to remove request: ${e.message}`, 'error');
+                        } finally {
+                            btn.disabled = false;
                         }
                     });
                 });

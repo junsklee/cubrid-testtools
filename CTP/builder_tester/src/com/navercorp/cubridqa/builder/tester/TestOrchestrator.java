@@ -78,6 +78,11 @@ public class TestOrchestrator {
         // Generate unique test ID for tracking
         String testId = generateTestId(request);
         String testKey = request.optString("testKey", "unknown");
+        String requestId = request.optString("requestId", null);
+
+        if (CancelledRequests.isCancelled(requestId)) {
+            return cancelledResponse(requestId, "Request cancelled before reservation");
+        }
 
         // Extract predicted demand from request
         // Pass null for NodeHardware since TestOrchestrator doesn't have access to it
@@ -91,13 +96,17 @@ public class TestOrchestrator {
         long reqTimeoutSec = request.optLong("timeout", 0);
         long waitTimeoutMs = reqTimeoutSec > 0 ? reqTimeoutSec * 1000L : 24 * 60 * 60 * 1000L;
         
-        boolean reserved = waitForReservation(testId, testKey, demand, heavyTest, testLogger, waitTimeoutMs);
+        boolean reserved = waitForReservation(testId, testKey, demand, heavyTest, testLogger, waitTimeoutMs, requestId);
         
         if (!reserved) {
-            JSONObject response = new JSONObject();
-            response.put("status", "rejected");
-            response.put("error", "No capacity - node oversubscribed (timeout waiting for resources)");
-            return response;
+            if (CancelledRequests.isCancelled(requestId)) {
+                return cancelledResponse(requestId, "Request cancelled while waiting for resources");
+            } else {
+                JSONObject response = new JSONObject();
+                response.put("status", "rejected");
+                response.put("error", "No capacity - node oversubscribed (timeout waiting for resources)");
+                return response;
+            }
         }
 
         try {
@@ -127,6 +136,9 @@ public class TestOrchestrator {
 
         int attempt = 0;
         while (true) {
+            if (CancelledRequests.isCancelled(requestId)) {
+                return cancelledResponse(requestId, "Request cancelled before test attempt");
+            }
             attempt++;
             if (attempt > maxRuns) break; // Guard, should not happen due to checks after attempt
 
@@ -577,7 +589,7 @@ public class TestOrchestrator {
      * 
      * Returns false if timeout reached.
      */
-    private boolean waitForReservation(String testId, String testKey, PredictedDemand pd, boolean heavyTest, Logger logger, long timeoutMs) {
+    private boolean waitForReservation(String testId, String testKey, PredictedDemand pd, boolean heavyTest, Logger logger, long timeoutMs, String requestId) {
         long start = System.currentTimeMillis();
 
         QueueToken token = new QueueToken(testId, pd.getDurationMs());
@@ -587,6 +599,10 @@ public class TestOrchestrator {
         try {
             synchronized (reservationLock) {
                 while (true) {
+                    if (CancelledRequests.isCancelled(requestId)) {
+                        logger.warning("Request cancelled while waiting for resources: " + requestId);
+                        return false;
+                    }
                     // Priority check: Am I the highest priority waiter?
                     // We peek at the head of the queue.
                     QueueToken head = waitQueue.peek();
@@ -926,5 +942,15 @@ public class TestOrchestrator {
         String sanitizedTestKey = testKey.replace("/", "_").replace("\\", "_");
 
         return String.format("%s@%s@%d@%s", sanitizedTestKey, commitShort, timestamp, random);
+    }
+
+    private JSONObject cancelledResponse(String requestId, String message) {
+        JSONObject response = new JSONObject();
+        response.put("status", "cancelled");
+        response.put("message", message);
+        if (requestId != null && !requestId.trim().isEmpty()) {
+            response.put("requestId", requestId);
+        }
+        return response;
     }
 }

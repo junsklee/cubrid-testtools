@@ -57,6 +57,7 @@ public class TesterService {
         ActualSampler actualSampler = new ActualSampler(config);
         this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator, actualSampler));
         this.apiServer.registerHandler("/log/", new LogStreamHandler(logLocator, responseWriter));
+        this.apiServer.registerHandler("/cancel-request", new CancelRequestHandler());
         
         // Create work directory if it doesn't exist
         File workDir = new File(config.getWorkDir());

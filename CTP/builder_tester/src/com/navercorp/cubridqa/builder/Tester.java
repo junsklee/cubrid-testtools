@@ -7,6 +7,7 @@ import com.navercorp.cubridqa.builder.tester.HealthHandler;
 import com.navercorp.cubridqa.builder.tester.ScoreHandler;
 import com.navercorp.cubridqa.builder.tester.LogStreamHandler;
 import com.navercorp.cubridqa.builder.tester.FinalizeRequestHandler;
+import com.navercorp.cubridqa.builder.tester.CancelRequestHandler;
 import com.navercorp.cubridqa.builder.tester.HttpResponseWriter;
 import com.navercorp.cubridqa.builder.tester.NodeCapacity;
 import com.navercorp.cubridqa.builder.tester.ActualSampler;
@@ -212,6 +213,7 @@ public class Tester {
         this.server.createContext("/score", scoreHandler);
         this.server.createContext("/log/", logStreamHandler);
         this.server.createContext("/finalize-request", finalizeRequestHandler);
+        this.server.createContext("/cancel-request", new CancelRequestHandler());
         int maxThreads = Math.max(1, config.getMaxConcurrentTests());
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }

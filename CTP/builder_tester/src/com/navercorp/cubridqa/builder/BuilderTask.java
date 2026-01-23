@@ -9,6 +9,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.logging.*;
 import java.util.stream.Collectors;
@@ -66,6 +67,16 @@ public class BuilderTask {
     // Thread-safe build cache shared across all tasks
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
 
+    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
+    private final AtomicBoolean deleteLogsOnCancel = new AtomicBoolean(false);
+    private final Set<HttpURLConnection> inflightConnections = ConcurrentHashMap.newKeySet();
+
+    private static final class CancelledException extends RuntimeException {
+        private CancelledException(String message) {
+            super(message);
+        }
+    }
+
     public BuilderTask(String taskId, JSONObject request, BuilderConfig config,
                        DockerBuildManager dockerManager) {
         this.taskId = taskId;
@@ -99,6 +110,7 @@ public class BuilderTask {
         long startTime = System.currentTimeMillis();
         
         try {
+            checkCancelled("startup");
             // Extract request parameters
             JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
             boolean buildOnly = request.optBoolean("buildOnly", false);
@@ -219,6 +231,7 @@ public class BuilderTask {
                     pr.baselineSha.substring(0, Math.min(7, pr.baselineSha.length()))));
 
                 // Build PR snapshot (no cherry-pick)
+                checkCancelled("before_pr_build");
                 builtPackages = buildPullRequest(pr, buildType);
             } else {
                 if (COMMIT_BUILD_MODE_CHECKOUT.equals(this.commitBuildMode)) {
@@ -233,20 +246,24 @@ public class BuilderTask {
                 }
 
                 // Build all commits SEQUENTIALLY using WorkloadDistributor
+                checkCancelled("before_commit_builds");
                 builtPackages = buildCommitsSequentially(commits, buildType, this.baselineCommit, this.baselineKey, this.commitBuildMode);
             }
 
             if (buildOnly) {
+                checkCancelled("before_build_only_upload");
                 this.currentPhase = "uploading";
                 uploadBuildOnlyPackages(builtPackages, request.getJSONObject("buildUpload"));
 
                 long duration = System.currentTimeMillis() - startTime;
                 this.currentPhase = "callback";
+                checkCancelled("before_build_only_callback");
                 sendCallback(callbackUrl, duration);
                 this.currentPhase = "done";
                 return;
             }
             
+            checkCancelled("before_test_distribution");
             // Distribute tests across multiple tester nodes
             Map<String, Integer> workerCapacities = new LinkedHashMap<>(); // current caps (start heavy)
             Map<String, Integer> workerPeakCaps = new LinkedHashMap<>();
@@ -294,15 +311,20 @@ public class BuilderTask {
             
             // Send finalize requests to all testers that received tests for this requestId
             if (testRequestId != null && !testRequestId.isEmpty() && !testersUsed.isEmpty()) {
+                checkCancelled("before_finalize_requests");
                 sendFinalizeRequests(testRequestId, testersUsed);
             }
             
             // Calculate execution time and send callback with results
             long duration = System.currentTimeMillis() - startTime;
             this.currentPhase = "callback";
+            checkCancelled("before_callback");
             sendCallback(callbackUrl, duration);
             this.currentPhase = "done";
             
+        } catch (CancelledException e) {
+            this.currentPhase = "cancelled";
+            taskLogger.warning("Builder task cancelled: " + e.getMessage());
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Builder task failed: " + taskId, e);
             try {
@@ -315,6 +337,80 @@ public class BuilderTask {
         long duration = System.currentTimeMillis() - startTime;
         taskLogger.info(String.format("Builder task %s completed in %d seconds", 
             taskId, duration / 1000));
+    }
+
+    public void requestCancel(boolean deleteLogs) {
+        cancelRequested.set(true);
+        if (deleteLogs) {
+            deleteLogsOnCancel.set(true);
+        }
+        closeInFlightConnections();
+        String requestId = request.optString("requestId", taskId);
+        CompletableFuture.runAsync(() -> {
+            try {
+                List<String> workerIps = resolveWorkerIpsForCancel();
+                if (!workerIps.isEmpty()) {
+                    sendCancelRequests(requestId, workerIps, true);
+                }
+            } catch (Exception e) {
+                if (taskLogger != null) {
+                    taskLogger.warning("Cancel request dispatch failed: " + e.getMessage());
+                }
+            }
+        });
+    }
+
+    public boolean isCancelRequested() {
+        return cancelRequested.get();
+    }
+
+    public boolean shouldDeleteLogsOnCancel() {
+        return deleteLogsOnCancel.get();
+    }
+
+    private void checkCancelled(String stage) {
+        if (cancelRequested.get()) {
+            this.currentPhase = "cancelled";
+            throw new CancelledException(stage);
+        }
+    }
+
+    private void closeInFlightConnections() {
+        for (HttpURLConnection conn : inflightConnections) {
+            try {
+                conn.disconnect();
+            } catch (Exception ignore) {
+                // ignore
+            }
+        }
+    }
+
+    private List<String> resolveWorkerIpsForCancel() {
+        boolean buildOnly = request.optBoolean("buildOnly", false);
+        if (buildOnly) {
+            return Collections.emptyList();
+        }
+        List<String> workerIps = new ArrayList<>();
+        if (request.has("workerIps")) {
+            try {
+                JSONArray ips = request.getJSONArray("workerIps");
+                for (int i = 0; i < ips.length(); i++) {
+                    String ip = String.valueOf(ips.get(i)).trim();
+                    if (!ip.isEmpty()) {
+                        workerIps.add(ip);
+                    }
+                }
+            } catch (Exception ignore) {
+                // fall back below
+            }
+        }
+        if (workerIps.isEmpty()) {
+            String workerIp = request.optString("workerIp", "localhost").trim();
+            if (!workerIp.isEmpty()) {
+                workerIps.add(workerIp);
+            }
+        }
+        return workerIps;
     }
 
     private static class PRResolution {
@@ -552,6 +648,9 @@ public class BuilderTask {
             final int index = i;
             
             Future<Void> future = executor.submit(() -> {
+                if (isCancelRequested()) {
+                    return null;
+                }
                 // Set the request context for this thread
                 if (requestId != null) {
                     RequestContext.setRequestId(requestId);
@@ -559,6 +658,9 @@ public class BuilderTask {
                 
                 try {
                     // Normalize commit to full SHA to make cache keys stable
+                    if (isCancelRequested()) {
+                        return null;
+                    }
                     String normalizedCommit = resolveFullCommitHashSafe(commit);
                     
                     // Skip the baseline commit itself - it should not be in the build targets
@@ -609,6 +711,9 @@ public class BuilderTask {
                         return null;
                     }
                     
+                    if (isCancelRequested()) {
+                        return null;
+                    }
                     progress.put(commit, 20); // Building
                     
                     // Create work directory for this commit
@@ -677,6 +782,10 @@ public class BuilderTask {
         // Build each commit one by one
         for (int i = 0; i < commits.length(); i++) {
             final String commit = commits.getString(i);
+            if (isCancelRequested()) {
+                taskLogger.warning("Cancellation requested; stopping build loop");
+                break;
+            }
 
             try {
                 // Set the request context
@@ -685,6 +794,9 @@ public class BuilderTask {
                 }
 
                 // Normalize commit to full SHA
+                if (isCancelRequested()) {
+                    break;
+                }
                 String normalizedCommit = resolveFullCommitHashSafe(commit);
 
                 // Skip the baseline commit itself (baseline mode only)
@@ -738,9 +850,15 @@ public class BuilderTask {
                     continue;
                 }
 
+                if (isCancelRequested()) {
+                    break;
+                }
                 progress.put(commit, 20); // Building
 
                 // Assign build to a node using WorkloadDistributor
+                if (isCancelRequested()) {
+                    break;
+                }
                 String assignedNode = workloadDistributor.assignBuild(normalizedCommit, buildType, baselineToken);
                 taskLogger.info(String.format("Build %d/%d: commit %s assigned to node %s",
                     i + 1, commits.length(), normalizedShort, assignedNode));
@@ -748,6 +866,10 @@ public class BuilderTask {
                 String buildPackage = null;
 
                 // Check if assigned node is localhost
+                if (isCancelRequested()) {
+                    workloadDistributor.completeBuild(assignedNode, normalizedCommit, null);
+                    break;
+                }
                 if (workloadDistributor.isNodeLocal(assignedNode)) {
                     // Build locally
                     taskLogger.info("Building locally on " + assignedNode);
@@ -1481,7 +1603,9 @@ public class BuilderTask {
 
     private JSONObject runTest(String commit, String buildPackage, String testPath,
                                String workerIp, String baselineKey, String buildType, TestInstance testInstance) {
+        HttpURLConnection conn = null;
         try {
+            checkCancelled("before_run_test");
             String baselineToken = (baselineKey == null || baselineKey.trim().isEmpty()) ? "unknown" : baselineKey;
             // Parse host and port from workerIp (supports "host:port" format)
             String host = workerIp;
@@ -1606,6 +1730,11 @@ public class BuilderTask {
             if (requestId != null) {
                 testRequest.put("requestId", requestId);
             }
+            String safeRequestId = requestId != null ? requestId.replaceAll("[^a-zA-Z0-9_.-]", "_") : "unknown";
+            String safeTestNameForContainer = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
+            String safeBuildType = (buildType != null && !buildType.trim().isEmpty()) ? buildType : "debug";
+            String containerName = "tester_" + safeBuildType + "_" + safeRequestId + "_" + safeTestNameForContainer + "_" + System.currentTimeMillis();
+            testRequest.put("containerName", containerName);
 
             // Add custom shell script if provided
             if (customShellScript != null && !customShellScript.isEmpty()) {
@@ -1627,9 +1756,11 @@ public class BuilderTask {
                 }
             } catch (Exception ignore) { }
 
+            checkCancelled("before_test_request_send");
             // Send HTTP request to tester
             URL url = new URL("http://" + host + ":" + port + "/test");
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn = (HttpURLConnection) url.openConnection();
+            inflightConnections.add(conn);
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setDoOutput(true);
@@ -1941,7 +2072,12 @@ public class BuilderTask {
             
             return result;
                 
+        } catch (CancelledException e) {
+            throw e;
         } catch (Exception e) {
+            if (isCancelRequested()) {
+                throw new CancelledException("cancelled");
+            }
             // Determine if this is a network/communication failure that should trigger circuit breaker
             boolean isNetworkFailure = isNetworkError(e);
 
@@ -1964,6 +2100,15 @@ public class BuilderTask {
                 .put("test", testPath)
                 .put("status", "error")
                 .put("message", e.getMessage());
+        } finally {
+            if (conn != null) {
+                inflightConnections.remove(conn);
+                try {
+                    conn.disconnect();
+                } catch (Exception ignore) {
+                    // ignore
+                }
+            }
         }
     }
 
@@ -2110,6 +2255,64 @@ public class BuilderTask {
                 
             } catch (Exception e) {
                 taskLogger.log(Level.WARNING, "Failed to send finalize request to " + testerIp + " for requestId: " + requestId, e);
+            }
+        }
+    }
+
+    private void sendCancelRequests(String requestId, List<String> workerIps, boolean killAll) {
+        if (requestId == null || requestId.trim().isEmpty() || workerIps == null || workerIps.isEmpty()) {
+            return;
+        }
+        Set<String> targets = new LinkedHashSet<>(workerIps);
+        if (taskLogger != null) {
+            taskLogger.info("Sending cancel requests for requestId: " + requestId + " to " + targets.size() + " tester(s)");
+        }
+
+        for (String testerIp : targets) {
+            try {
+                String host = testerIp;
+                int port = config.getTesterPort();
+
+                if (testerIp.contains(":")) {
+                    String[] parts = testerIp.split(":");
+                    host = parts[0];
+                    try {
+                        port = Integer.parseInt(parts[1]);
+                    } catch (NumberFormatException e) {
+                        if (taskLogger != null) {
+                            taskLogger.warning("Invalid port in testerIp: " + testerIp);
+                        }
+                    }
+                }
+
+                URL url = new URL("http://" + host + ":" + port + "/cancel-request");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(5000);
+
+                JSONObject requestBody = new JSONObject()
+                    .put("requestId", requestId)
+                    .put("killAll", killAll);
+
+                try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream())) {
+                    writer.write(requestBody.toString());
+                }
+
+                int responseCode = conn.getResponseCode();
+                if (taskLogger != null) {
+                    if (responseCode == 200) {
+                        taskLogger.info("Cancel request sent successfully to " + testerIp + " for requestId: " + requestId);
+                    } else {
+                        taskLogger.warning("Cancel request to " + testerIp + " returned HTTP " + responseCode + " for requestId: " + requestId);
+                    }
+                }
+            } catch (Exception e) {
+                if (taskLogger != null) {
+                    taskLogger.log(Level.WARNING, "Failed to send cancel request to " + testerIp + " for requestId: " + requestId, e);
+                }
             }
         }
     }
@@ -2558,6 +2761,10 @@ public class BuilderTask {
                                        Map<String, Integer> workerCapacities, Map<String, AtomicInteger> dispatchCounts,
                                        String buildType, String testRequestId, int totalTestExecutions,
                                        Set<String> testersUsed) {
+        if (isCancelRequested()) {
+            taskLogger.warning("Cancellation requested; skipping legacy test distribution");
+            return;
+        }
         ConcurrentLinkedQueue<TestJob> pendingJobs = new ConcurrentLinkedQueue<>();
         AtomicInteger globalTestIndex = new AtomicInteger(0);
 
@@ -2596,6 +2803,9 @@ public class BuilderTask {
                 final int slotIndex = slot;
                 slotFutures.add(testPool.submit(() -> {
                     while (true) {
+                        if (isCancelRequested()) {
+                            break;
+                        }
                         TestJob job = pendingJobs.poll();
                         if (job == null) break;
 
@@ -2618,6 +2828,9 @@ public class BuilderTask {
                             JSONObject testResult = runTest(job.commit, job.buildPackage, job.testPath,
                                 finalWorker, this.baselineKey, buildType);
                             results.add(testResult);
+                        } catch (CancelledException e) {
+                            taskLogger.warning("Cancellation requested; stopping legacy test dispatch");
+                            break;
                         } catch (Exception e) {
                             taskLogger.log(Level.WARNING, "Test execution threw", e);
                             results.add(new JSONObject()
@@ -2635,15 +2848,29 @@ public class BuilderTask {
             }
         }
 
-        // Wait for completion
+        // Wait for completion (allow early cancellation)
         for (Future<Void> f : slotFutures) {
-            try {
-                f.get();
-            } catch (Exception e) {
-                taskLogger.log(Level.WARNING, "Test dispatcher error", e);
+            while (true) {
+                if (isCancelRequested()) {
+                    f.cancel(true);
+                    break;
+                }
+                try {
+                    f.get(1, TimeUnit.SECONDS);
+                    break;
+                } catch (TimeoutException e) {
+                    // poll until done or cancelled
+                } catch (Exception e) {
+                    taskLogger.log(Level.WARNING, "Test dispatcher error", e);
+                    break;
+                }
             }
         }
-        testPool.shutdown();
+        if (isCancelRequested()) {
+            testPool.shutdownNow();
+        } else {
+            testPool.shutdown();
+        }
 
         // Log utilization summary
         taskLogger.info("Dynamic tester utilization summary:");
@@ -2664,6 +2891,10 @@ public class BuilderTask {
                                                      List<String> workerIps, String buildType, String testRequestId,
                                                      Map<String, Integer> workerCapacities, Map<String, Integer> workerPeakCaps,
                                                      Set<String> testersUsed) {
+        if (isCancelRequested()) {
+            taskLogger.warning("Cancellation requested; skipping smart scheduling");
+            return;
+        }
         taskLogger.info("[Smart Scheduling] Initializing scheduler...");
 
         // Load test profiles for heavy test classification from Tester's WAL system
@@ -2767,6 +2998,10 @@ public class BuilderTask {
         for (Map.Entry<String, String> entry : builtPackages.entrySet()) {
             String commit = entry.getKey();
             String buildPackage = entry.getValue();
+            if (isCancelRequested()) {
+                taskLogger.warning("Cancellation requested; stopping test instance build");
+                break;
+            }
 
             if (buildPackage == null || buildPackage.isEmpty()) {
                 for (int i = 0; i < tests.length(); i++) {
@@ -2789,6 +3024,9 @@ public class BuilderTask {
             }
 
             for (String testPath : normalizedTests) {
+                if (isCancelRequested()) {
+                    break;
+                }
                 ScorePrediction pred = scorePredictions.get(testPath);
 
                 // Create test instance with default predictions (actual prediction would query /score endpoint)
@@ -2867,6 +3105,10 @@ public class BuilderTask {
                 elephantThresholdMs));
 
         taskLogger.info("[Smart Scheduling] Offering " + testInstances.size() + " tests to scheduler");
+        if (isCancelRequested()) {
+            taskLogger.warning("Cancellation requested; skipping scheduler offer");
+            return;
+        }
         scheduler.offer(testInstances);
 
         // Poll scheduler and submit tests
@@ -2889,6 +3131,10 @@ public class BuilderTask {
         int noEligibleCount = 0;
         try {
             while (scheduler.hasPending()) {
+                if (isCancelRequested()) {
+                    taskLogger.warning("Cancellation requested; stopping scheduler loop");
+                    break;
+                }
                 boolean heavyBacklog = heavyAssigned.get() < heavyCandidates;
                 // Dynamically ramp permits only after heavies have been observed and drained
                 int desiredTotal = 0;
@@ -2921,9 +3167,16 @@ public class BuilderTask {
                 }
 
                 try {
-                    capacitySemaphore.acquire();
+                    while (!isCancelRequested()) {
+                        if (capacitySemaphore.tryAcquire(1, 1, TimeUnit.SECONDS)) {
+                            break;
+                        }
+                    }
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    break;
+                }
+                if (isCancelRequested()) {
                     break;
                 }
 
@@ -2972,6 +3225,9 @@ public class BuilderTask {
                         if (testRequestId != null) {
                             RequestContext.setRequestId(testRequestId);
                         }
+                        if (isCancelRequested()) {
+                            return;
+                        }
                         // Track that this tester received a test for this requestId
                         testersUsed.add(workerIp);
                         this.currentCommit = a.getCommit();
@@ -2979,6 +3235,8 @@ public class BuilderTask {
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
                             a.getTestKey(), workerIp, this.baselineKey, buildType, a.getTest());
                         results.add(testResult);
+                    } catch (CancelledException e) {
+                        taskLogger.warning("Cancellation requested; stopping smart scheduling test");
                     } catch (Exception e) {
                         taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);
                         results.add(new JSONObject()
@@ -2999,12 +3257,26 @@ public class BuilderTask {
                 inflightTests.add(future);
             }
         } finally {
-            testExecutor.shutdown();
+            if (isCancelRequested()) {
+                testExecutor.shutdownNow();
+            } else {
+                testExecutor.shutdown();
+            }
             for (Future<?> future : inflightTests) {
-                try {
-                    future.get();
-                } catch (Exception e) {
-                    taskLogger.log(Level.WARNING, "[Smart Scheduling] Test task interrupted", e);
+                while (true) {
+                    if (isCancelRequested()) {
+                        future.cancel(true);
+                        break;
+                    }
+                    try {
+                        future.get(1, TimeUnit.SECONDS);
+                        break;
+                    } catch (TimeoutException e) {
+                        // poll until done or cancelled
+                    } catch (Exception e) {
+                        taskLogger.log(Level.WARNING, "[Smart Scheduling] Test task interrupted", e);
+                        break;
+                    }
                 }
             }
             nodeDirectory.stop();

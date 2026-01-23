@@ -181,6 +181,27 @@ public class LogRotationManager {
             logger.warning("Failed to record request: " + e.getMessage());
         }
     }
+
+    /**
+     * Delete a specific request log directory
+     */
+    public boolean deleteRequestLogDir(String requestId) {
+        if (requestId == null || requestId.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            File dir = new File(config.getRequestDir(requestId));
+            if (!dir.exists()) {
+                return false;
+            }
+            deleteDirectory(dir);
+            logger.info("Deleted request log directory: " + dir.getName());
+            return true;
+        } catch (Exception e) {
+            logger.warning("Failed to delete request log directory for " + requestId + ": " + e.getMessage());
+            return false;
+        }
+    }
     
     /**
      * Recursively delete a directory

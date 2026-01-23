@@ -79,6 +79,30 @@ class BuilderController {
     }
 
     /**
+     * Remove a build request from queue or cancel a running request
+     */
+    async removeFromQueue(req, res) {
+        try {
+            const taskId = req.body && req.body.taskId ? String(req.body.taskId).trim() : '';
+            if (!taskId) {
+                return res.status(400).json({ error: 'Missing taskId' });
+            }
+
+            const builderUrl = `${config.builder.protocol}://${config.builder.host}:${config.builder.port}/queue/remove`;
+            const result = await proxyService.requestJson(builderUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ taskId })
+            });
+
+            res.status(result.statusCode).json(result.json);
+        } catch (err) {
+            console.error('Error removing build request:', err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    /**
      * Get Builder health status
      */
     async getHealth(req, res) {

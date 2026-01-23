@@ -66,6 +66,14 @@ public class TestHandler implements HttpHandler {
                 }
             }
 
+            if (CancelledRequests.isCancelled(requestId)) {
+                requestLogger.warning("Request cancelled before execution: " + requestId);
+                responsePayload = new JSONObject()
+                    .put("status", "cancelled")
+                    .put("message", "Request cancelled")
+                    .put("requestId", requestId);
+                httpStatus = 200;
+            } else {
             requestLogger.info("Test request for: " + request.getString("testPath") +
                        (request.has("requestId") ? " [" + request.optString("requestId") + "]" : ""));
             requestLogger.info("Build package: " + request.getString("buildPackage"));
@@ -78,6 +86,7 @@ public class TestHandler implements HttpHandler {
             if ("rejected".equals(responsePayload.optString("status"))) {
                 httpStatus = 409; // Conflict/Busy
                 requestLogger.warning("Test rejected: " + responsePayload.optString("error"));
+            }
             }
             
             // Extract log files to send
