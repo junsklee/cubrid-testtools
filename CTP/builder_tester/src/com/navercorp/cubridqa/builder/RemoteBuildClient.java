@@ -19,10 +19,12 @@ public class RemoteBuildClient {
      * @param commit The commit hash to build
      * @param buildType The build type (debug/release)
      * @param baselineCommit The baseline commit
+     * @param commitBuildMode The commit build mode (baseline_cherrypick or checkout)
      * @return JSONObject with build result (status, packagePath, etc.)
      * @throws IOException if the request fails
      */
-    public static JSONObject triggerRemoteBuild(String nodeId, String commit, String buildType, String baselineCommit)
+    public static JSONObject triggerRemoteBuild(String nodeId, String commit, String buildType, String baselineCommit,
+                                                String commitBuildMode)
             throws IOException {
 
         // Parse host and port
@@ -49,6 +51,9 @@ public class RemoteBuildClient {
         requestBody.put("buildType", buildType);
         if (baselineCommit != null) {
             requestBody.put("baselineCommit", baselineCommit);
+        }
+        if (commitBuildMode != null && !commitBuildMode.trim().isEmpty()) {
+            requestBody.put("commitBuildMode", commitBuildMode);
         }
 
         // Send HTTP POST request

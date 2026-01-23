@@ -76,6 +76,7 @@ public class BuilderConfig {
     private static final String PARALLEL_JOBS = "parallel_jobs";
     private static final String SHELL_TC_SYNC_INTERVAL_SECONDS = "shell_tc_sync_interval_seconds";
     private static final String SHELL_TC_SYNC_MODE = "shell_tc_sync_mode";
+    private static final String COMMIT_BUILD_MODE = "commit_build_mode";
 
     // Smart scheduling configuration
     private static final String SMART_SCHEDULING_ENABLED = "smart_scheduling_enabled";
@@ -1022,6 +1023,19 @@ public class BuilderConfig {
             value = Runtime.getRuntime().availableProcessors();
         }
         return Math.max(1, value);
+    }
+
+    public String getCommitBuildMode() {
+        String mode = properties.getProperty(COMMIT_BUILD_MODE, "checkout").trim().toLowerCase(Locale.ROOT);
+        if ("baseline_cherrypick".equals(mode) || "checkout".equals(mode)) {
+            return mode;
+        }
+        System.err.println("Invalid commit_build_mode '" + mode + "', defaulting to 'checkout'");
+        return "checkout";
+    }
+
+    public boolean isCommitBuildModeCheckout() {
+        return "checkout".equals(getCommitBuildMode());
     }
     
     /**

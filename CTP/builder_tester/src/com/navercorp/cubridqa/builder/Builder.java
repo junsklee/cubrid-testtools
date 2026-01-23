@@ -424,7 +424,8 @@ public class Builder {
                     .put("queuedRequests", pendingRequests.size())
                     .put("maxConcurrentBuilds", MAX_CONCURRENT_REQUESTS)
                     .put("workDir", config.getWorkDir())
-                    .put("dockerEnabled", config.useDocker());
+                    .put("dockerEnabled", config.useDocker())
+                    .put("commitBuildMode", config.getCommitBuildMode());
                 
                 // If requestId provided, check its position in queue
                 if (requestId != null) {
@@ -538,8 +539,20 @@ public class Builder {
                 String commit = request.getString("commit");
                 String buildType = request.optString("buildType", "debug");
                 String baselineCommit = request.optString("baselineCommit", null);
+                String commitBuildMode = request.optString("commitBuildMode", config.getCommitBuildMode());
+                // Backward-compatible alias: use_baseline_cherrypick=true implies baseline_cherrypick if commitBuildMode isn't provided.
+                if (!request.has("commitBuildMode") && request.has("use_baseline_cherrypick")) {
+                    Object rawMode = request.get("use_baseline_cherrypick");
+                    boolean useBaseline = rawMode instanceof Boolean ? (Boolean) rawMode : Boolean.parseBoolean(String.valueOf(rawMode));
+                    if (useBaseline) {
+                        commitBuildMode = "baseline_cherrypick";
+                    }
+                }
+                if (!"baseline_cherrypick".equals(commitBuildMode) && !"checkout".equals(commitBuildMode)) {
+                    commitBuildMode = config.getCommitBuildMode();
+                }
 
-                logger.info(String.format("Received single build request: commit=%s, type=%s", commit, buildType));
+                logger.info(String.format("Received single build request: commit=%s, type=%s, mode=%s", commit, buildType, commitBuildMode));
 
                 // Create unique work directory for this build
                 String workDirPath = config.getWorkDir() + "/build_" + commit.substring(0, 7) + "_" + System.currentTimeMillis();
@@ -548,7 +561,7 @@ public class Builder {
 
                 try {
                     // Execute build
-                    String packagePath = dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit);
+                    String packagePath = dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode);
 
                     if (packagePath != null && !packagePath.isEmpty()) {
                         // Build succeeded

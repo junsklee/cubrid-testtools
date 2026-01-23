@@ -34,7 +34,25 @@ public class BuilderTask {
     private final Map<String, Integer> progress;
     private Logger taskLogger;
     private String baselineCommit;
+    private String baselineKey;
+    private String commitBuildMode;
+    private List<String> commitOrder = Collections.emptyList();
+    private Map<String, Long> commitTimestamps = Collections.emptyMap();
     private WorkloadDistributor workloadDistributor;
+
+    private static final String COMMIT_BUILD_MODE_BASELINE_CHERRYPICK = "baseline_cherrypick";
+    private static final String COMMIT_BUILD_MODE_CHECKOUT = "checkout";
+    private static final String CHECKOUT_BASELINE_KEY = "history";
+
+    private static boolean isValidCommitBuildMode(String value) {
+        return COMMIT_BUILD_MODE_BASELINE_CHERRYPICK.equals(value) || COMMIT_BUILD_MODE_CHECKOUT.equals(value);
+    }
+
+    private static String normalizeCommitBuildMode(Object raw) {
+        if (raw == null) return null;
+        String value = String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
+        return isValidCommitBuildMode(value) ? value : null;
+    }
 
     // Progress tracking for dashboard
     private final AtomicInteger buildsCompleted = new AtomicInteger(0);
@@ -158,12 +176,44 @@ public class BuilderTask {
             // Ensure CUBRID source repository is set up
             setupCubridRepository();
 
+            // Request override: prefer commitBuildMode (string) everywhere. Keep use_baseline_cherrypick as a backward-compatible alias.
+            this.commitBuildMode = config.getCommitBuildMode();
+            if (request.has("commitBuildMode")) {
+                String override = normalizeCommitBuildMode(request.opt("commitBuildMode"));
+                if (override != null) {
+                    this.commitBuildMode = override;
+                    taskLogger.info("Request override: commitBuildMode=" + override);
+                } else {
+                    taskLogger.warning("Ignoring invalid request override commitBuildMode=" + request.opt("commitBuildMode"));
+                }
+            } else if (request.has("use_baseline_cherrypick")) {
+                Object rawMode = request.get("use_baseline_cherrypick");
+                boolean useBaseline = false;
+                if (rawMode instanceof Boolean) {
+                    useBaseline = (Boolean) rawMode;
+                } else {
+                    useBaseline = Boolean.parseBoolean(String.valueOf(rawMode));
+                }
+                if (useBaseline) {
+                    this.commitBuildMode = COMMIT_BUILD_MODE_BASELINE_CHERRYPICK;
+                    taskLogger.info("Request override (deprecated): use_baseline_cherrypick=true");
+                }
+            }
+
+            CommitOrderInfo orderInfo = null;
+            if (commits != null && commits.length() > 0) {
+                orderInfo = computeCommitOrderInfo(commits);
+                this.commitOrder = orderInfo.commitOrder;
+                this.commitTimestamps = orderInfo.commitTimestamps;
+            }
+
             this.currentPhase = "building";
             Map<String, String> builtPackages;
             if (prNumber != null) {
                 // Resolve PR head and baseline (merge-base against develop)
                 PRResolution pr = resolvePullRequest(prNumber);
                 this.baselineCommit = pr.baselineSha;
+                this.baselineKey = pr.baselineSha;
                 taskLogger.info(String.format("Resolved PR #%d → head=%s, baseline=%s", prNumber,
                     pr.headSha.substring(0, Math.min(7, pr.headSha.length())),
                     pr.baselineSha.substring(0, Math.min(7, pr.baselineSha.length()))));
@@ -171,12 +221,19 @@ public class BuilderTask {
                 // Build PR snapshot (no cherry-pick)
                 builtPackages = buildPullRequest(pr, buildType);
             } else {
-                // Determine common baseline = parent of earliest commit in the list
-                this.baselineCommit = determineBaselineCommit(commits);
-                taskLogger.info("Using baseline (parent of earliest commit): " + this.baselineCommit);
+                if (COMMIT_BUILD_MODE_CHECKOUT.equals(this.commitBuildMode)) {
+                    this.baselineCommit = null;
+                    this.baselineKey = CHECKOUT_BASELINE_KEY;
+                    taskLogger.info("Using commit build mode checkout (no baseline/cherry-pick isolation)");
+                } else {
+                    // Determine common baseline = parent of earliest commit in the list
+                    this.baselineCommit = determineBaselineCommit(orderInfo);
+                    this.baselineKey = this.baselineCommit;
+                    taskLogger.info("Using baseline (parent of earliest commit): " + this.baselineCommit);
+                }
 
                 // Build all commits SEQUENTIALLY using WorkloadDistributor
-                builtPackages = buildCommitsSequentially(commits, buildType, this.baselineCommit);
+                builtPackages = buildCommitsSequentially(commits, buildType, this.baselineCommit, this.baselineKey, this.commitBuildMode);
             }
 
             if (buildOnly) {
@@ -477,9 +534,11 @@ public class BuilderTask {
         }
     }
     
-    private Map<String, String> buildCommitsConcurrently(JSONArray commits, String buildType, String baselineCommit) 
+    private Map<String, String> buildCommitsConcurrently(JSONArray commits, String buildType, String baselineCommit,
+                                                         String baselineKey, String commitBuildMode) 
             throws Exception {
         Map<String, String> builtPackages = new ConcurrentHashMap<>();
+        final String baselineToken = (baselineKey == null || baselineKey.trim().isEmpty()) ? "unknown" : baselineKey;
         ExecutorService executor = Executors.newFixedThreadPool(
             Math.min(commits.length(), config.getMaxConcurrentBuilds()));
         
@@ -503,7 +562,7 @@ public class BuilderTask {
                     String normalizedCommit = resolveFullCommitHashSafe(commit);
                     
                     // Skip the baseline commit itself - it should not be in the build targets
-                    if (normalizedCommit.equals(baselineCommit)) {
+                    if (baselineCommit != null && normalizedCommit.equals(baselineCommit)) {
                         taskLogger.info("Skipping baseline commit " + commit + " - it should not be a build target");
                         return null;
                     }
@@ -512,12 +571,12 @@ public class BuilderTask {
                     String normalizedShort = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
                     
                     // Check in-memory cache first using normalized key (include baseline to avoid incorrect reuse)
-                    String baselineShort = baselineCommit.substring(0, Math.min(7, baselineCommit.length()));
+                    String baselineShort = baselineToken.substring(0, Math.min(7, baselineToken.length()));
                     String cacheKey = normalizedCommit + "_" + buildType + "_" + baselineShort;
                     String cachedPackage = buildCache.get(cacheKey);
                     if (cachedPackage != null && new File(cachedPackage).exists()) {
                         // Validate baseline matches before reusing
-                        if (validateCachedBaseline(cachedPackage, normalizedCommit, baselineCommit)) {
+                        if (validateCachedBaseline(cachedPackage, normalizedCommit, baselineToken)) {
                             taskLogger.info("Using cached build for commit " + normalizedCommit + " (baseline: " + baselineShort + ")");
                             builtPackages.put(commit, cachedPackage);
                             progress.put(commit, 100); // Complete
@@ -525,7 +584,7 @@ public class BuilderTask {
                             // Create build log for cached build
                             createCachedBuildLog(commit, cachedPackage, "memory cache");
                             // Ensure metadata exists for cached package so remote testers can validate without re-download
-                            try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
+                            try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineToken); } catch (Exception ignore) {}
                             
                             return null;
                         } else {
@@ -535,7 +594,7 @@ public class BuilderTask {
                     }
 
                     // Fall back to scanning disk for an existing package if memory cache missed
-                    String diskPackage = findExistingBuildPackageOnDisk(normalizedShort, buildType, baselineCommit, normalizedCommit);
+                    String diskPackage = findExistingBuildPackageOnDisk(normalizedShort, buildType, baselineToken, normalizedCommit);
                     if (diskPackage != null) {
                         taskLogger.info("Using cached build from disk for commit " + normalizedCommit);
                         builtPackages.put(commit, diskPackage);
@@ -545,7 +604,7 @@ public class BuilderTask {
                         // Create build log for cached build
                         createCachedBuildLog(commit, diskPackage, "disk cache");
                         // Ensure metadata exists for cached package on disk
-                        try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
+                        try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, baselineToken); } catch (Exception ignore) {}
                         
                         return null;
                     }
@@ -557,13 +616,13 @@ public class BuilderTask {
                         Paths.get(config.getWorkDir()), "build_" + normalizedShort + "_");
                     
                     // Build the commit (isolated on baseline via worktree + cherry-pick)
-                    String buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit);
+                    String buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit, commitBuildMode);
                     
                     if (buildPackage != null) {
                         builtPackages.put(commit, buildPackage);
                         buildCache.put(cacheKey, buildPackage);
                         // Persist metadata for validation in future requests
-                        writeBuildMetadata(buildPackage, normalizedCommit, buildType, baselineCommit);
+                        writeBuildMetadata(buildPackage, normalizedCommit, buildType, baselineToken);
                         cleanBuildCache(config.getBuildCacheSize());
                     }
                     
@@ -604,9 +663,11 @@ public class BuilderTask {
      * This ensures only one build runs at a time, maximizing ccache hit ratio
      * and avoiding concurrency issues with shared directories.
      */
-    private Map<String, String> buildCommitsSequentially(JSONArray commits, String buildType, String baselineCommit)
+    private Map<String, String> buildCommitsSequentially(JSONArray commits, String buildType, String baselineCommit,
+                                                         String baselineKey, String commitBuildMode)
             throws Exception {
         Map<String, String> builtPackages = new ConcurrentHashMap<>();
+        final String baselineToken = (baselineKey == null || baselineKey.trim().isEmpty()) ? "unknown" : baselineKey;
 
         // Capture the current request ID
         final String requestId = RequestContext.getRequestId();
@@ -626,8 +687,8 @@ public class BuilderTask {
                 // Normalize commit to full SHA
                 String normalizedCommit = resolveFullCommitHashSafe(commit);
 
-                // Skip the baseline commit itself
-                if (normalizedCommit.equals(baselineCommit)) {
+                // Skip the baseline commit itself (baseline mode only)
+                if (baselineCommit != null && normalizedCommit.equals(baselineCommit)) {
                     taskLogger.info("Skipping baseline commit " + commit + " - it should not be a build target");
                     continue;
                 }
@@ -636,13 +697,13 @@ public class BuilderTask {
                 String normalizedShort = normalizedCommit.substring(0, Math.min(7, normalizedCommit.length()));
 
                 // Check build cache first
-                String baselineShort = baselineCommit.substring(0, Math.min(7, baselineCommit.length()));
+                String baselineShort = baselineToken.substring(0, Math.min(7, baselineToken.length()));
                 String cacheKey = normalizedCommit + "_" + buildType + "_" + baselineShort;
                 String cachedPackage = buildCache.get(cacheKey);
 
                 if (cachedPackage != null && new File(cachedPackage).exists()) {
                     // Validate baseline matches before reusing
-                    if (validateCachedBaseline(cachedPackage, normalizedCommit, baselineCommit)) {
+                    if (validateCachedBaseline(cachedPackage, normalizedCommit, baselineToken)) {
                         taskLogger.info("Using cached build for commit " + normalizedCommit + " (baseline: " + baselineShort + ")");
                         builtPackages.put(commit, cachedPackage);
                         progress.put(commit, 100);
@@ -652,7 +713,7 @@ public class BuilderTask {
                         workloadDistributor.completeBuild("localhost:8089", normalizedCommit, cachedPackage);
 
                         createCachedBuildLog(commit, cachedPackage, "memory cache");
-                        try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
+                        try { ensureBuildMetadata(cachedPackage, normalizedCommit, buildType, baselineToken); } catch (Exception ignore) {}
                         continue;
                     } else {
                         taskLogger.warning("Cached build validation failed for commit " + normalizedCommit + ", will rebuild");
@@ -661,7 +722,7 @@ public class BuilderTask {
                 }
 
                 // Check disk cache
-                String diskPackage = findExistingBuildPackageOnDisk(normalizedShort, buildType, baselineCommit, normalizedCommit);
+                String diskPackage = findExistingBuildPackageOnDisk(normalizedShort, buildType, baselineToken, normalizedCommit);
                 if (diskPackage != null) {
                     taskLogger.info("Using cached build from disk for commit " + normalizedCommit);
                     builtPackages.put(commit, diskPackage);
@@ -673,14 +734,14 @@ public class BuilderTask {
                     workloadDistributor.completeBuild("localhost:8089", normalizedCommit, diskPackage);
 
                     createCachedBuildLog(commit, diskPackage, "disk cache");
-                    try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, baselineCommit); } catch (Exception ignore) {}
+                    try { ensureBuildMetadata(diskPackage, normalizedCommit, buildType, baselineToken); } catch (Exception ignore) {}
                     continue;
                 }
 
                 progress.put(commit, 20); // Building
 
                 // Assign build to a node using WorkloadDistributor
-                String assignedNode = workloadDistributor.assignBuild(normalizedCommit, buildType, baselineCommit);
+                String assignedNode = workloadDistributor.assignBuild(normalizedCommit, buildType, baselineToken);
                 taskLogger.info(String.format("Build %d/%d: commit %s assigned to node %s",
                     i + 1, commits.length(), normalizedShort, assignedNode));
 
@@ -692,13 +753,13 @@ public class BuilderTask {
                     taskLogger.info("Building locally on " + assignedNode);
                     Path workDir = Files.createTempDirectory(
                         Paths.get(config.getWorkDir()), "build_" + normalizedShort + "_");
-                    buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit);
+                    buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit, commitBuildMode);
                 } else {
                     // Build remotely
                     taskLogger.info("Triggering remote build on " + assignedNode);
                     try {
                         JSONObject result = RemoteBuildClient.triggerRemoteBuild(
-                            assignedNode, normalizedCommit, buildType, baselineCommit);
+                            assignedNode, normalizedCommit, buildType, baselineCommit, commitBuildMode);
 
                         if ("success".equals(result.optString("status"))) {
                             buildPackage = result.optString("packagePath");
@@ -717,7 +778,7 @@ public class BuilderTask {
                 if (buildPackage != null && !buildPackage.isEmpty()) {
                     builtPackages.put(commit, buildPackage);
                     buildCache.put(cacheKey, buildPackage);
-                    writeBuildMetadata(buildPackage, normalizedCommit, buildType, baselineCommit);
+                    writeBuildMetadata(buildPackage, normalizedCommit, buildType, baselineToken);
                     cleanBuildCache(config.getBuildCacheSize());
                     progress.put(commit, 100);
                     buildsCompleted.incrementAndGet();
@@ -840,13 +901,17 @@ public class BuilderTask {
         return new TesterCaps(4, 4);
     }
     
-    private String buildCommit(String commit, String buildType, File workDir, String baselineCommit) 
+    private String buildCommit(String commit, String buildType, File workDir, String baselineCommit, String commitBuildMode) 
             throws Exception {
         taskLogger.info("Building commit " + commit);
         
         // Use Docker if available
         if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
-            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit);
+            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode);
+        }
+
+        if (COMMIT_BUILD_MODE_CHECKOUT.equals(commitBuildMode)) {
+            return buildFromHeadDirect(commit, buildType, workDir);
         }
         
         // Direct build fallback using isolated worktree + cherry-pick
@@ -1037,7 +1102,7 @@ public class BuilderTask {
      * Write a small metadata JSON alongside the built package to allow safe reuse
      * across requests and validate buildType/baseline consistency quickly.
      */
-    private void writeBuildMetadata(String packagePath, String fullCommit, String buildType, String baselineCommit) {
+    private void writeBuildMetadata(String packagePath, String fullCommit, String buildType, String baselineKey) {
         try {
             File pkg = new File(packagePath);
             File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
@@ -1045,7 +1110,7 @@ public class BuilderTask {
             j.put("commit", fullCommit);
             j.put("commitShort", fullCommit.substring(0, Math.min(7, fullCommit.length())));
             j.put("buildType", buildType);
-            j.put("baseline", baselineCommit);
+            j.put("baseline", baselineKey);
             j.put("createdAt", System.currentTimeMillis());
             try (FileWriter w = new FileWriter(meta)) {
                 w.write(j.toString());
@@ -1056,7 +1121,7 @@ public class BuilderTask {
     /**
      * Ensure a .meta.json exists for a given package; if missing or empty, (re)write it.
      */
-    private void ensureBuildMetadata(String packagePath, String fullCommit, String buildType, String baselineCommit) {
+    private void ensureBuildMetadata(String packagePath, String fullCommit, String buildType, String baselineKey) {
         try {
             File pkg = new File(packagePath);
             File meta = new File(pkg.getParentFile(), pkg.getName() + ".meta.json");
@@ -1072,7 +1137,7 @@ public class BuilderTask {
                 }
             }
             if (needsWrite) {
-                writeBuildMetadata(packagePath, fullCommit, buildType, baselineCommit);
+                writeBuildMetadata(packagePath, fullCommit, buildType, baselineKey);
             }
         } catch (Exception ignore) { }
     }
@@ -1139,7 +1204,7 @@ public class BuilderTask {
      * buildType and baseline (when metadata is present). Returns null if not found
      * or if validation fails.
      */
-    private String findExistingBuildPackageOnDisk(String commitShort, String buildType, String baselineCommit, String fullCommit) {
+    private String findExistingBuildPackageOnDisk(String commitShort, String buildType, String baselineKey, String fullCommit) {
         try {
             File workDirRoot = new File(config.getWorkDir());
             if (!workDirRoot.exists() || !workDirRoot.isDirectory()) {
@@ -1195,10 +1260,10 @@ public class BuilderTask {
                     
                     // Validate baseline matches - this is the critical fix
                     String metaBaseline = j.optString("baseline", null);
-                    if (metaBaseline != null && baselineCommit != null && !metaBaseline.equals(baselineCommit)) {
+                    if (metaBaseline != null && baselineKey != null && !metaBaseline.equals(baselineKey)) {
                         taskLogger.warning(String.format("Cached build in %s rejected for %s: baseline mismatch (cached baseline: %s, current baseline: %s)", 
                             dir.getName(), commitShort, metaBaseline.substring(0, Math.min(7, metaBaseline.length())), 
-                            baselineCommit.substring(0, Math.min(7, baselineCommit.length()))));
+                            baselineKey.substring(0, Math.min(7, baselineKey.length()))));
                         continue;
                     }
                     
@@ -1218,7 +1283,7 @@ public class BuilderTask {
             if (bestCandidate != null) {
                 taskLogger.info(String.format("Cached build validation passed for %s (buildType: %s, baseline: %s) from %s", 
                     commitShort, buildType, 
-                    baselineCommit != null ? baselineCommit.substring(0, Math.min(7, baselineCommit.length())) : "null",
+                    baselineKey != null ? baselineKey.substring(0, Math.min(7, baselineKey.length())) : "null",
                     bestCandidate.getParentFile().getName()));
                 return bestCandidate.getAbsolutePath();
             }
@@ -1230,69 +1295,87 @@ public class BuilderTask {
         }
     }
 
-    private String determineBaselineCommit(JSONArray commits) throws Exception {
-        if (commits == null || commits.length() == 0) {
-            throw new IllegalArgumentException("No commits provided");
+    private static class CommitOrderInfo {
+        final List<String> commitOrder;
+        final Map<String, Long> commitTimestamps;
+
+        CommitOrderInfo(List<String> commitOrder, Map<String, Long> commitTimestamps) {
+            this.commitOrder = commitOrder;
+            this.commitTimestamps = commitTimestamps;
         }
-        
+    }
+
+    private CommitOrderInfo computeCommitOrderInfo(JSONArray commits) throws Exception {
+        if (commits == null || commits.length() == 0) {
+            return new CommitOrderInfo(Collections.emptyList(), Collections.emptyMap());
+        }
+
         File repoRoot = new File(config.getCubridSrcDir());
         ProcessBuilder pb = new ProcessBuilder();
         pb.directory(repoRoot);
-        
-        // If only one commit, use it directly
-        if (commits.length() == 1) {
-            String commit = commits.getString(0);
-            String base = executeCommandAndGetOutput(pb, "git", "rev-parse", commit + "^").trim();
-            if (base.isEmpty()) {
-                throw new RuntimeException("Failed to determine baseline for " + commit);
-            }
-            return base;
-        }
-        
-        // For multiple commits, find the chronologically earliest one
-        String earliestCommit = null;
-        long earliestTimestamp = Long.MAX_VALUE;
-        
-        taskLogger.info("Finding earliest commit among " + commits.length() + " commits by commit date...");
-        
+
+        Map<String, Long> timestamps = new LinkedHashMap<>();
+        taskLogger.info("Computing commit order for " + commits.length() + " commits by commit date...");
+
         for (int i = 0; i < commits.length(); i++) {
             String commit = commits.getString(i);
-            
+            if (timestamps.containsKey(commit)) {
+                continue;
+            }
+
+            long timestamp = 0;
             try {
-                // Get commit timestamp
                 String timestampStr = executeCommandAndGetOutput(pb, "git", "log", "-1", "--format=%ct", commit).trim();
-                long timestamp = Long.parseLong(timestampStr);
-                
-                taskLogger.info(String.format("Commit %s has timestamp %d", 
-                    commit.substring(0, Math.min(7, commit.length())), timestamp));
-                
-                if (timestamp < earliestTimestamp) {
-                    earliestTimestamp = timestamp;
-                    earliestCommit = commit;
+                if (!timestampStr.isEmpty()) {
+                    timestamp = Long.parseLong(timestampStr);
                 }
+                taskLogger.info(String.format("Commit %s has timestamp %d",
+                    commit.substring(0, Math.min(7, commit.length())), timestamp));
             } catch (Exception e) {
                 taskLogger.warning("Failed to get timestamp for commit " + commit + ": " + e.getMessage());
-                // If we can't get timestamp, treat it as very old to be conservative
-                if (earliestTimestamp == Long.MAX_VALUE) {
-                    earliestCommit = commit;
-                    earliestTimestamp = 0;
-                }
+                // Treat unknown timestamps as very old to keep ordering deterministic
+                timestamp = 0;
             }
+
+            timestamps.put(commit, timestamp);
         }
-        
-        if (earliestCommit == null) {
-            throw new RuntimeException("Could not determine earliest commit");
+
+        List<String> ordered = new ArrayList<>(timestamps.keySet());
+        ordered.sort((a, b) -> {
+            long ta = timestamps.getOrDefault(a, 0L);
+            long tb = timestamps.getOrDefault(b, 0L);
+            if (ta != tb) {
+                return Long.compare(ta, tb);
+            }
+            return a.compareTo(b);
+        });
+
+        return new CommitOrderInfo(ordered, timestamps);
+    }
+
+    private String determineBaselineCommit(CommitOrderInfo orderInfo) throws Exception {
+        if (orderInfo == null || orderInfo.commitOrder.isEmpty()) {
+            throw new IllegalArgumentException("No commits provided");
         }
-        
-        taskLogger.info(String.format("Earliest commit determined: %s (timestamp: %d)", 
+
+        String earliestCommit = orderInfo.commitOrder.get(0);
+        Long earliestTimestamp = orderInfo.commitTimestamps.get(earliestCommit);
+        if (earliestTimestamp == null) {
+            earliestTimestamp = 0L;
+        }
+
+        taskLogger.info(String.format("Earliest commit determined: %s (timestamp: %d)",
             earliestCommit.substring(0, Math.min(7, earliestCommit.length())), earliestTimestamp));
-        
-        // Get the parent of the earliest commit as baseline
+
+        File repoRoot = new File(config.getCubridSrcDir());
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(repoRoot);
+
         String base = executeCommandAndGetOutput(pb, "git", "rev-parse", earliestCommit + "^").trim();
         if (base.isEmpty()) {
             throw new RuntimeException("Failed to determine baseline for earliest commit " + earliestCommit);
         }
-        
+
         return base;
     }
 
@@ -1392,13 +1475,14 @@ public class BuilderTask {
     }
     
     private JSONObject runTest(String commit, String buildPackage, String testPath,
-                               String workerIp, String baselineCommit, String buildType) {
-        return runTest(commit, buildPackage, testPath, workerIp, baselineCommit, buildType, null);
+                               String workerIp, String baselineKey, String buildType) {
+        return runTest(commit, buildPackage, testPath, workerIp, baselineKey, buildType, null);
     }
 
     private JSONObject runTest(String commit, String buildPackage, String testPath,
-                               String workerIp, String baselineCommit, String buildType, TestInstance testInstance) {
+                               String workerIp, String baselineKey, String buildType, TestInstance testInstance) {
         try {
+            String baselineToken = (baselineKey == null || baselineKey.trim().isEmpty()) ? "unknown" : baselineKey;
             // Parse host and port from workerIp (supports "host:port" format)
             String host = workerIp;
             int port = config.getTesterPort();
@@ -1484,8 +1568,8 @@ public class BuilderTask {
                 .put("testKey", testPath)  // Add testKey for test tracking
                 .put("commit", commit)  // Add full commit hash
                 .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))  // Add short commit
-                .put("baseline", baselineCommit)  // Add baseline commit for Docker image differentiation
-                .put("baselineShort", baselineCommit.substring(0, Math.min(baselineCommit.length(), 7)))  // Add short baseline
+                .put("baseline", baselineToken)  // Add baseline key for Docker image differentiation
+                .put("baselineShort", baselineToken.substring(0, Math.min(baselineToken.length(), 7)))  // Add short baseline
                 .put("expectedBuildVersion", commit.substring(0, 7))
                 .put("buildType", buildType != null ? buildType : "debug")  // Add build type for container naming
                 .put("keepAlive", false)
@@ -2058,8 +2142,20 @@ public class BuilderTask {
                 .put("taskId", taskId)
                 .put("results", new JSONArray(results))
                 .put("baselineCommit", this.baselineCommit)
+                .put("commitBuildMode", this.commitBuildMode)
                 .put("executionTime", executionTime)
                 .put("timestamp", System.currentTimeMillis());
+
+            if (commitOrder != null && !commitOrder.isEmpty()) {
+                response.put("commitOrder", new JSONArray(commitOrder));
+            }
+            if (commitTimestamps != null && !commitTimestamps.isEmpty()) {
+                JSONObject timestamps = new JSONObject();
+                for (Map.Entry<String, Long> entry : commitTimestamps.entrySet()) {
+                    timestamps.put(entry.getKey(), entry.getValue());
+                }
+                response.put("commitTimestamps", timestamps);
+            }
             
             taskLogger.info("Sending results to " + callbackUrl);
             
@@ -2520,7 +2616,7 @@ public class BuilderTask {
                             this.currentCommit = job.commit;
                             this.currentTest = job.testPath;
                             JSONObject testResult = runTest(job.commit, job.buildPackage, job.testPath,
-                                finalWorker, this.baselineCommit, buildType);
+                                finalWorker, this.baselineKey, buildType);
                             results.add(testResult);
                         } catch (Exception e) {
                             taskLogger.log(Level.WARNING, "Test execution threw", e);
@@ -2686,8 +2782,10 @@ public class BuilderTask {
             Map<String, ScorePrediction> scorePredictions = Collections.emptyMap();
             if (!schedulerNodes.isEmpty()) {
                 String scorerNode = schedulerNodes.get(0);
-                scorePredictions = fetchScorePredictions(scorerNode, commit,
-                    baselineCommit != null ? baselineCommit : "unknown", normalizedTests);
+                String baselineToken = (this.baselineKey != null && !this.baselineKey.trim().isEmpty())
+                    ? this.baselineKey
+                    : "unknown";
+                scorePredictions = fetchScorePredictions(scorerNode, commit, baselineToken, normalizedTests);
             }
 
             for (String testPath : normalizedTests) {
@@ -2697,7 +2795,7 @@ public class BuilderTask {
                 TestInstance.Builder tib = TestInstance.builder()
                     .testKey(testPath)
                     .commit(commit)
-                    .baseline(this.baselineCommit != null ? this.baselineCommit : "unknown")
+                    .baseline(this.baselineKey != null && !this.baselineKey.trim().isEmpty() ? this.baselineKey : "unknown")
                     .buildPackage(buildPackage);
 
                 if (pred != null) {
@@ -2879,7 +2977,7 @@ public class BuilderTask {
                         this.currentCommit = a.getCommit();
                         this.currentTest = a.getTestKey();
                         JSONObject testResult = runTest(a.getCommit(), a.getTest().getBuildPackage(),
-                            a.getTestKey(), workerIp, this.baselineCommit, buildType, a.getTest());
+                            a.getTestKey(), workerIp, this.baselineKey, buildType, a.getTest());
                         results.add(testResult);
                     } catch (Exception e) {
                         taskLogger.log(Level.WARNING, "[Smart Scheduling] Test execution error", e);

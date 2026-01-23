@@ -69,11 +69,11 @@ public class DockerBuildManager {
         pullPrebuiltImage();
     }
     
-    public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit) 
+    public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode) 
             throws IOException, InterruptedException {
         
         if (!dockerAvailable || !imageReady) {
-            return buildCubridDirect(commitHash, workDir, buildType, baselineCommit);
+            return buildCubridDirect(commitHash, workDir, buildType, baselineCommit, commitBuildMode);
         }
         
         logger.info("Building CUBRID commit " + commitHash + " in Docker container");
@@ -112,8 +112,12 @@ public class DockerBuildManager {
             try { new File(ccacheDir, "tmp").mkdirs(); } catch (Exception ignore) {}
         }
         
+        boolean checkoutMode = "checkout".equalsIgnoreCase(commitBuildMode);
+
         // Create build script
-        File buildScript = createDockerBuildScript(commitHash, buildType, baselineCommit, workDir);
+        File buildScript = checkoutMode
+            ? createDockerCheckoutBuildScript(commitHash, buildType, workDir)
+            : createDockerBuildScript(commitHash, buildType, baselineCommit, workDir);
         
         // Prepare Docker command
         List<String> baseDockerCmd = new ArrayList<>();
@@ -140,8 +144,10 @@ public class DockerBuildManager {
         baseDockerCmd.add("COMMIT_HASH=" + commitHash);
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BUILD_TYPE=" + buildType);
-        baseDockerCmd.add("-e");
-        baseDockerCmd.add("BASELINE_COMMIT=" + baselineCommit);
+        if (!checkoutMode && baselineCommit != null) {
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("BASELINE_COMMIT=" + baselineCommit);
+        }
         
         // Add ccache environment variables if enabled
         if (config.isCcacheEnabled()) {
@@ -1016,9 +1022,195 @@ public class DockerBuildManager {
         script.setExecutable(true);
         return script;
     }
+
+    private File createDockerCheckoutBuildScript(String commitHash, String buildType, File workDir)
+            throws IOException {
+        File script = new File(workDir, "docker_build_checkout.sh");
+        final String finalBuildArgs = normalizeBuildArg(config.getBuildArg(), buildType);
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(script))) {
+            writer.println("#!/bin/bash");
+            writer.println("set -e");
+            writer.println();
+
+            if (config.isCcacheEnabled()) {
+                writer.println("# Configure ccache for faster builds (compatible with older ccache)");
+                writer.println("if command -v ccache &> /dev/null; then");
+                writer.println("  mkdir -p /work/.ccache/logs /work/.ccache/tmp || true");
+                writer.println("  ccache -M ${CCACHE_MAXSIZE:-5G} || true");
+                writer.println("  if [ -n \"$CCACHE_LOGFILE\" ]; then rm -f \"$CCACHE_LOGFILE\" || true; fi");
+                writer.println("  ccache -z || true");
+                writer.println("  echo 'Ccache status before build:'");
+                writer.println("  ccache -s || true");
+                writer.println("fi");
+                writer.println();
+            }
+
+            writer.println("create_package() {");
+            writer.println("  local dest=\"$1\"");
+            writer.println("  echo \"Creating build package at $dest\"");
+            writer.println("  if [ ! -d _install/CUBRID ]; then");
+            writer.println("    echo '[WARN] Expected _install/CUBRID not found; packaging entire build directory' >&2");
+            writer.println("    if command -v pigz >/dev/null 2>&1; then");
+            writer.println("      tar cf - . | pigz -1 > \"$dest\"");
+            writer.println("    else");
+            writer.println("      tar cf - . | gzip -1 > \"$dest\"");
+            writer.println("    fi");
+            writer.println("    return");
+            writer.println("  fi");
+            writer.println("  if command -v pigz >/dev/null 2>&1; then");
+            writer.println("    tar cf - _install/CUBRID | pigz -1 > \"$dest\"");
+            writer.println("  else");
+            writer.println("    tar cf - _install/CUBRID | gzip -1 > \"$dest\"");
+            writer.println("  fi");
+            writer.println("}");
+            writer.println();
+
+            writer.println("# Prepare an isolated working directory per build to avoid collisions");
+            writer.println("# Use fixed build directory for ccache optimization");
+            writer.println("if [ -d /work ]; then");
+            writer.println("  target=/work/cubrid-build");
+            writer.println("else");
+            writer.println("  target=/tmp/cubrid-build");
+            writer.println("fi");
+            writer.println("rm -rf \"$target\"");
+            writer.println("mkdir -p \"$target\"");
+            writer.println("echo \"Using build workspace: $target\"");
+            writer.println("cd \"$target\"");
+            writer.println();
+            writer.println("# Clone source into writable target using local reference to avoid network fetches");
+            writer.println("if ! git clone --no-checkout --reference /cubrid-src /cubrid-src repo; then");
+            writer.println("  echo '[WARN] Reference clone failed; falling back to standard clone' >&2");
+            writer.println("  rm -rf repo 2>/dev/null || true");
+            writer.println("  git clone --no-checkout /cubrid-src repo");
+            writer.println("fi");
+            writer.println("cd repo");
+            writer.println("git config advice.detachedHead false");
+            writer.println("git config user.email build@localhost");
+            writer.println("git config user.name Build Bot");
+            writer.println();
+            writer.println("# Checkout the requested commit directly");
+            writer.println("git checkout --detach \"${COMMIT_HASH}\"");
+            writer.println();
+
+            writer.println("GIT_VERSION_RAW=$(git --version 2>/dev/null)");
+            writer.println("GIT_VERSION=$(echo \"$GIT_VERSION_RAW\" | awk '{print $3}')");
+            writer.println("if [ -z \"$GIT_VERSION\" ]; then");
+            writer.println("  GIT_MAJOR=0");
+            writer.println("  GIT_MINOR=0");
+            writer.println("  GIT_VERSION_DISPLAY=${GIT_VERSION_RAW:-unknown}");
+            writer.println("else");
+            writer.println("  GIT_MAJOR=${GIT_VERSION%%.*}");
+            writer.println("  GIT_MINOR_TMP=${GIT_VERSION#*.}");
+            writer.println("  GIT_MINOR=${GIT_MINOR_TMP%%.*}");
+            writer.println("  GIT_VERSION_DISPLAY=$GIT_VERSION");
+            writer.println("fi");
+            writer.println("SUPPORTS_SUBMODULE_JOBS=0");
+            writer.println("SUPPORTS_SUBMODULE_DEPTH=0");
+            writer.println("if [ \"${GIT_MAJOR:-0}\" -gt 2 ] || { [ \"${GIT_MAJOR:-0}\" -eq 2 ] && [ \"${GIT_MINOR:-0}\" -ge 8 ]; }; then");
+            writer.println("  SUPPORTS_SUBMODULE_JOBS=1");
+            writer.println("fi");
+            writer.println("if [ \"${GIT_MAJOR:-0}\" -gt 2 ] || { [ \"${GIT_MAJOR:-0}\" -eq 2 ] && [ \"${GIT_MINOR:-0}\" -ge 9 ]; }; then");
+            writer.println("  SUPPORTS_SUBMODULE_DEPTH=1");
+            writer.println("fi");
+            writer.println("echo \"Detected git version: ${GIT_VERSION_DISPLAY}\"");
+            writer.println();
+            writer.println("git submodule sync --recursive");
+            writer.println("SUBMODULE_JOBS=${SUBMODULE_JOBS:-$(nproc 2>/dev/null || echo 4)}");
+            writer.println("SUBMODULE_ARGS=(--init --recursive --checkout --force)");
+            writer.println("if [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]; then");
+            writer.println("  SUBMODULE_ARGS+=(--jobs \"$SUBMODULE_JOBS\")");
+            writer.println("else");
+            writer.println("  echo \"[INFO] git submodule --jobs not supported in git ${GIT_VERSION_DISPLAY}\"");
+            writer.println("fi");
+            writer.println("if [ \"$SUPPORTS_SUBMODULE_DEPTH\" = \"1\" ]; then");
+            writer.println("  SUBMODULE_ARGS+=(--depth 1)");
+            writer.println("else");
+            writer.println("  echo \"[INFO] git submodule --depth not supported in git ${GIT_VERSION_DISPLAY}\"");
+            writer.println("fi");
+            writer.println("if ! git submodule update \"${SUBMODULE_ARGS[@]}\"; then");
+            writer.println("  echo '[WARN] Parallel/shallow submodule update failed; retrying with defaults' >&2");
+            writer.println("  git submodule update --init --recursive --checkout --force");
+            writer.println("fi");
+            writer.println();
+            writer.println("git clean -xdf");
+            writer.println("rm -rf build_x86_64_*");
+            writer.println();
+
+            if (config.isCcacheEnabled()) {
+                writer.println("# Create git shim for deterministic version (ccache optimization)");
+                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
+                writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
+                writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
+                writer.println("#!/usr/bin/env bash");
+                writer.println("if [[ \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ]]; then");
+                writer.println("  echo \"0000000\"");
+                writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
+                writer.println("  echo \"0\"");
+                writer.println("else");
+                writer.println("  exec /usr/bin/git \"$@\"");
+                writer.println("fi");
+                writer.println("GITSHIMEOF");
+                writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
+                writer.println("export PATH=\"$GIT_SHIM_DIR:$PATH\"");
+                writer.println("echo \"Git shim active for deterministic version\"");
+                writer.println();
+            }
+
+            writer.println("# Build CUBRID");
+            writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
+            writer.println("  echo 'Using devtoolset-8 for build'");
+            writer.println("  source /opt/rh/devtoolset-8/enable");
+            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("else");
+            writer.println("  echo 'Building with default toolchain'");
+            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("fi");
+            writer.println();
+
+            if (config.isCcacheEnabled()) {
+                writer.println("# Cleanup git shim");
+                writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
+                writer.println();
+            }
+
+            if (config.isCcacheEnabled()) {
+                writer.println("# Report ccache statistics after build");
+                writer.println("if command -v ccache &> /dev/null; then");
+                writer.println("  echo 'Ccache status after build:'");
+                writer.println("  ccache -s || true");
+                writer.println("  echo 'Ccache configuration (via environment):'");
+                writer.println("  echo \\\"  CCACHE_DIR=$CCACHE_DIR\\\"");
+                writer.println("  echo \\\"  CCACHE_MAXSIZE=$CCACHE_MAXSIZE\\\"");
+                writer.println("  echo \\\"  CCACHE_HARDLINK=$CCACHE_HARDLINK\\\"");
+                writer.println("  echo \\\"  CCACHE_COMPILERCHECK=$CCACHE_COMPILERCHECK\\\"");
+                writer.println("  echo \\\"  CCACHE_LOGFILE=$CCACHE_LOGFILE\\\"");
+                writer.println("fi");
+                writer.println();
+            }
+
+            writer.println("# Create package");
+            writer.println("cd " + config.getBuildDir(buildType));
+            writer.println("create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
+            writer.println();
+            writer.println("# Fix ownership of output files for host cleanup");
+            writer.println("if [ -n \"$HOST_UID\" ] && [ -n \"$HOST_GID\" ]; then");
+            writer.println("  chown -R \"$HOST_UID:$HOST_GID\" /output 2>/dev/null || true");
+            writer.println("fi");
+            writer.println();
+            writer.println("echo \"Build completed successfully\"");
+        }
+
+        script.setExecutable(true);
+        return script;
+    }
     
-    private String buildCubridDirect(String commitHash, File workDir, String buildType, String baselineCommit) 
-            throws IOException, InterruptedException {
+    private String buildCubridDirect(String commitHash, File workDir, String buildType, String baselineCommit,
+                                     String commitBuildMode) throws IOException, InterruptedException {
+        if ("checkout".equalsIgnoreCase(commitBuildMode)) {
+            return buildCubridDirectCheckout(commitHash, workDir, buildType);
+        }
+
         logger.warning("Building CUBRID directly on host");
         
         // Use the same isolated worktree + cherry-pick strategy on host
@@ -1197,6 +1389,94 @@ public class DockerBuildManager {
             return packageFile.getAbsolutePath();
         } finally {
             try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception ignore) {}
+            if (!ok) { try { deleteRecursively(wtDir); } catch (Exception ignore) {} }
+        }
+    }
+
+    private String buildCubridDirectCheckout(String commitHash, File workDir, String buildType)
+            throws IOException, InterruptedException {
+        logger.warning("Building CUBRID directly on host (checkout mode)");
+
+        File repoRoot = new File(config.getCubridSrcDir());
+        ProcessBuilder repoPb = new ProcessBuilder();
+        repoPb.directory(repoRoot);
+        try {
+            executeCommand(repoPb, "git", "fetch", "--all", "--recurse-submodules=on-demand");
+        } catch (Exception ignore) {}
+
+        String shortCommit = commitHash.substring(0, Math.min(commitHash.length(), 7));
+        String tempBranch = "checkout_" + shortCommit + "_tmp";
+        File wtDir = new File(workDir, "wt_" + shortCommit);
+        try {
+            executeCommand(repoPb, "git", "worktree", "add", "-b", tempBranch, wtDir.getAbsolutePath(), commitHash);
+        } catch (Exception e) {
+            executeCommand(repoPb, "git", "branch", "-f", tempBranch, commitHash);
+            executeCommand(repoPb, "git", "worktree", "add", wtDir.getAbsolutePath(), tempBranch);
+        }
+
+        boolean ok = false;
+        try {
+            ProcessBuilder wtPb = new ProcessBuilder();
+            wtPb.directory(wtDir);
+
+            executeCommand(wtPb, "git", "submodule", "sync", "--recursive");
+            executeCommand(wtPb, "git", "submodule", "update", "--init", "--recursive", "--checkout", "--force");
+            executeCommand(wtPb, "git", "clean", "-xdf");
+            executeCommand(wtPb, "rm", "-rf", config.getBuildDir(buildType));
+            executeCommand(wtPb, "rm", "-rf", "cubridmanager");
+
+            if (config.isCcacheEnabled()) {
+                try {
+                    File logsDir = new File(config.getCcacheDir(), "logs");
+                    if (!logsDir.exists()) {
+                        logsDir.mkdirs();
+                    }
+                    File tmpDir = new File(config.getCcacheDir(), "tmp");
+                    if (!tmpDir.exists()) {
+                        tmpDir.mkdirs();
+                    }
+                } catch (Exception ignore) {}
+                wtPb.environment().put("CC", "ccache gcc");
+                wtPb.environment().put("CXX", "ccache g++");
+                wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
+                wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
+                wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
+                wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
+                wtPb.environment().put("CCACHE_BASEDIR", new File(config.getWorkDir()).getAbsolutePath());
+                wtPb.environment().put("CCACHE_NOHASHDIR", "1");
+                wtPb.environment().put("CCACHE_LOGFILE", new File(config.getCcacheDir(), "logs/ccache_" + shortCommit + ".log").getAbsolutePath());
+                if (config.getCcacheReadonlyDirect()) {
+                    wtPb.environment().put("CCACHE_READONLY_DIRECT", "1");
+                }
+                wtPb.environment().put("CCACHE_STATS", config.getCcacheStatsEnabled() ? "true" : "false");
+                if (!config.getCcacheNamespace().isEmpty()) {
+                    wtPb.environment().put("CCACHE_NAMESPACE", config.getCcacheNamespace());
+                }
+                if (!config.getCcacheSloppiness().isEmpty()) {
+                    wtPb.environment().put("CCACHE_SLOPPINESS", config.getCcacheSloppiness());
+                }
+                try { executeCommand(wtPb, "ccache", "-M", config.getCcacheMaxSize()); } catch (Exception ignore) {}
+            }
+
+            wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
+            java.util.List<String> buildCmd = new java.util.ArrayList<>();
+            buildCmd.add("./build.sh");
+            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
+            for (String token : normalizedArgs.trim().split("\\s+")) {
+                if (!token.isEmpty()) buildCmd.add(token);
+            }
+            executeCommand(wtPb, buildCmd.toArray(new String[0]));
+
+            String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
+            File packageFile = new File(workDir, packageName);
+            ProcessBuilder tarPb = new ProcessBuilder();
+            tarPb.directory(new File(wtDir, config.getBuildDir(buildType)));
+            executeCommand(tarPb, "tar", "czf", packageFile.getAbsolutePath(), ".");
+            ok = true;
+            return packageFile.getAbsolutePath();
+        } finally {
+            try { executeCommand(repoPb, "git", "worktree", "remove", "--force", wtDir.getAbsolutePath()); } catch (Exception ignore) {}
+            try { executeCommand(repoPb, "git", "branch", "-D", tempBranch); } catch (Exception ignore) {}
             if (!ok) { try { deleteRecursively(wtDir); } catch (Exception ignore) {} }
         }
     }
