@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CUBRID Builder-Tester Dashboard</title>
-    <link rel="stylesheet" href="/css/dashboard.css">
+    <% const assetVersion = Date.now(); %>
+    <link rel="stylesheet" href="/css/dashboard.css?v=<%= assetVersion %>">
     <script>
         window.SERVER_CONFIG = {
             builderHost: '<%= config.builder.host %>',
@@ -126,10 +127,6 @@
                     </div>
                 </div>
 
-                <div class="baseline-info" id="baselineInfo">
-                    <span class="baseline-label">Baseline commit:</span>
-                    <span class="baseline-value" id="baselineSha">Select commits to determine baseline.</span>
-                </div>
             </div>
 
             <!-- Build-only Upload -->
@@ -259,6 +256,29 @@
                             <option value="fixed-runs">Fixed Runs</option>
                         </select>
                     </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Build Mode</label>
+                        <div class="baseline-info" id="baselineInfo">
+                            <div class="baseline-options">
+                            <label class="baseline-option" for="buildModeCheckout">
+                                <span class="baseline-choice">
+                                    <input type="radio" id="buildModeCheckout" name="buildMode" class="baseline-radio" value="checkout" checked>
+                                    <span class="baseline-label">Checkout (default)</span>
+                                    <span class="info-icon" title="Build each commit by direct checkout (no baseline cherry-pick).">ⓘ</span>
+                                </span>
+                            </label>
+                            <label class="baseline-option" for="buildModeBaseline">
+                                <span class="baseline-choice">
+                                    <input type="radio" id="buildModeBaseline" name="buildMode" class="baseline-radio" value="baseline_cherrypick">
+                                    <span class="baseline-label">Baseline cherry-pick</span>
+                                    <span class="info-icon" title="Builds each commit by cherry-picking on top of the baseline, which is the earliest commit's parent.&#10;Warning: Commits are not independent variables; later commits depend on earlier changes, so results can be unstable or non-linear.">ⓘ</span>
+                                </span>
+                            </label>
+                            </div>
+                            <span class="baseline-value" id="baselineSha">Select commits to determine baseline.</span>
+                        </div>
+                    </div>
                     
                     <div class="form-group">
                         <label class="form-label" for="envVars">Environment Variables (JSON)</label>
@@ -379,6 +399,6 @@
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/js/dashboard.js"></script>
+    <script src="/js/dashboard.js?v=<%= assetVersion %>"></script>
 </body>
 </html>

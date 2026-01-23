@@ -42,7 +42,10 @@ class ReportService {
                     maxRuns: data.maxRuns || requestConfig.maxRuns,
                     workerIps: data.workerIps || requestConfig.workerIps,
                     commits: data.commits || requestConfig.commits,
-                    baselineCommit: data.baselineCommit || requestConfig.baselineCommit
+                    baselineCommit: data.baselineCommit || requestConfig.baselineCommit,
+                    commitBuildMode: data.commitBuildMode || requestConfig.commitBuildMode,
+                    commitOrder: data.commitOrder || requestConfig.commitOrder,
+                    commitTimestamps: data.commitTimestamps || requestConfig.commitTimestamps
                 });
             } catch (err) {
                 console.warn('Could not read request.json, using callback data only:', err.message);
@@ -113,38 +116,86 @@ class ReportService {
     /**
      * Analyze test verdict based on results
      */
-    analyzeVerdict(commits, results) {
-        let failCount = 0;
-        let hasError = false;
+    analyzeVerdict(commits, results, commitOrder, commitBuildMode) {
+        const resultsArr = Array.isArray(results) ? results : [];
+        const order = Array.isArray(commitOrder) && commitOrder.length > 0 ? commitOrder : (Array.isArray(commits) ? commits : []);
+
+        // Aggregate per-commit so this function stays correct even if callers pass results across multiple tests.
+        // This avoids "last write wins" overwrites when multiple rows share the same commit.
+        const aggregated = new Map(); // commit -> { pass, fail, error, flaky, unknown }
+        for (const r of resultsArr) {
+            if (!r || !r.commit) continue;
+            const commit = r.commit;
+            const status = (r.status || 'unknown').toString().toLowerCase();
+            const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: false };
+
+            if (status === 'pass') slot.pass = true;
+            else if (status === 'fail') slot.fail = true;
+            else if (status === 'flaky') slot.flaky = true;
+            else if (status === 'error' || status === 'execution_error') slot.error = true;
+            else slot.unknown = true;
+
+            aggregated.set(commit, slot);
+        }
+
+        const commitStatus = new Map(); // commit -> pass|fail|error|flaky|unknown
         let hasFlaky = false;
+        let hasError = false;
+        for (const commit of order) {
+            const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: true };
+            let s = 'unknown';
+            if (slot.flaky) s = 'flaky';
+            else if (slot.error) s = 'error';
+            else if (slot.fail) s = 'fail';
+            else if (slot.unknown) s = 'unknown';
+            else if (slot.pass) s = 'pass';
+            commitStatus.set(commit, s);
+            if (s === 'flaky') hasFlaky = true;
+            if (s === 'error') hasError = true;
+        }
 
-        for (const result of results) {
-            if (result.status === 'flaky') {
-                hasFlaky = true;
-            } else if (result.status === 'error' || result.status === 'execution_error') {
-                hasError = true;
-            } else if (result.status === 'fail') {
-                failCount++;
+        if (hasFlaky) return { text: 'Flaky: Inconsistent results', class: 'verdict-flaky' };
+        if (hasError) return { text: 'Error: Test execution failed', class: 'verdict-error' };
+
+        const normalized = order.map((c) => (commitStatus.get(c) === 'pass' ? 'pass' : 'fail'));
+        if (normalized.length === 0) {
+            return { text: 'Unknown: No results', class: 'verdict-error' };
+        }
+
+        if (commitBuildMode === 'checkout') {
+            const allPass = normalized.every(s => s === 'pass');
+            const allFail = normalized.every(s => s === 'fail');
+            if (allPass) return { text: 'Pass: Not reproduced', class: 'verdict-success' };
+            if (allFail) return { text: 'Pre-existing Failure', class: 'verdict-preexisting' };
+
+            let transitions = 0;
+            for (let i = 1; i < normalized.length; i++) {
+                if (normalized[i] !== normalized[i - 1]) transitions++;
             }
+
+            if (transitions === 1) {
+                const firstFailIndex = normalized.indexOf('fail');
+                if (firstFailIndex > 0 && normalized[0] === 'pass') {
+                    const regressionCommit = order[firstFailIndex];
+                    const shortSha = regressionCommit ? regressionCommit.substring(0, 7) : '';
+                    return { text: `Regression introduced: ${shortSha}`, class: 'verdict-bug' };
+                }
+                const firstPassIndex = normalized.indexOf('pass');
+                if (firstPassIndex > 0 && normalized[0] === 'fail') {
+                    const fixCommit = order[firstPassIndex];
+                    const shortSha = fixCommit ? fixCommit.substring(0, 7) : '';
+                    return { text: `Fixed by later commit: ${shortSha}`, class: 'verdict-success' };
+                }
+            }
+
+            return { text: 'Unstable: Multiple transitions', class: 'verdict-unstable' };
         }
 
-        if (hasFlaky) {
-            return { text: 'Flaky: Inconsistent results', class: 'verdict-flaky' };
-        }
-        
-        if (hasError) {
-            return { text: 'Error: Test execution failed', class: 'verdict-error' };
-        }
-        
-        if (failCount === 0) {
-            return { text: 'Pass: Not reproduced', class: 'verdict-success' };
-        } else if (failCount === 1) {
-            return { text: 'Bug or Revise: Caused by commit', class: 'verdict-bug' };
-        } else if (failCount === commits.length) {
-            return { text: 'Pre-existing Failure', class: 'verdict-preexisting' };
-        } else {
-            return { text: 'Unstable: Fails intermittently', class: 'verdict-unstable' };
-        }
+        const failCount = normalized.filter(s => s === 'fail').length;
+        if (failCount === 0) return { text: 'Pass: Not reproduced', class: 'verdict-success' };
+        if (failCount === 1) return { text: 'Bug or Revise: Caused by commit', class: 'verdict-bug' };
+        if (failCount === normalized.length) return { text: 'Pre-existing Failure', class: 'verdict-preexisting' };
+        return { text: 'Unstable: Fails intermittently', class: 'verdict-unstable' };
     }
 }
 

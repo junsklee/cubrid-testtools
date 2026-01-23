@@ -4,9 +4,23 @@
         let workers = [];  // Initialize empty, will be populated on load
         let currentPage = 1;
         let isLoadingCommits = false;
+        let builderCommitBuildMode = null;
+        let baselineModeTouched = false;
         // Custom Script attachments (client-side buffer)
         let customScriptAttachments = []; // { name, size, targetPath, contentBase64 }
         let customScriptAttachmentsLoading = 0;
+
+        function onBuildModeRadioChange(event) {
+            const target = event && event.target;
+            if (!target || target.name !== 'buildMode') return;
+            baselineModeTouched = true;
+            updateBaselineDisplay();
+        }
+
+        // Bind at parse-time (not inside DOMContentLoaded) so it still works even if some init code throws.
+        // Capture phase makes it resilient across browsers and DOM structures.
+        document.addEventListener('change', onBuildModeRadioChange, true);
+        document.addEventListener('input', onBuildModeRadioChange, true);
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -32,6 +46,7 @@
             checkForActiveSessions();
             refreshBuildQueue();
             updateBaselineDisplay();
+            refreshBuilderCommitMode();
             applyBuildOnlyState();
         });
 
@@ -508,6 +523,10 @@
                 if (!response.ok) throw new Error('Failed to fetch commits');
                 
                 const data = await response.json();
+                if (data.commitBuildMode) {
+                    builderCommitBuildMode = data.commitBuildMode;
+                    updateBaselineDisplay();
+                }
                 
                 if (currentPage === 1) {
                     commits = data;
@@ -606,12 +625,13 @@
 
         // Toggle commit selection
         function toggleCommit(sha) {
+            const element = document.querySelector(`[data-sha="${sha}"]`);
             if (selectedCommits.has(sha)) {
                 selectedCommits.delete(sha);
-                document.querySelector(`[data-sha="${sha}"]`).classList.remove('selected');
+                if (element) element.classList.remove('selected');
             } else {
                 selectedCommits.add(sha);
-                document.querySelector(`[data-sha="${sha}"]`).classList.add('selected');
+                if (element) element.classList.add('selected');
             }
             updateCommitCount();
         }
@@ -635,41 +655,84 @@
             updateBaselineDisplay();
         }
 
+        async function refreshBuilderCommitMode() {
+            try {
+                const response = await fetch('/api/builder/health');
+                if (!response.ok) return;
+                const data = await response.json();
+                builderCommitBuildMode = data.commitBuildMode || null;
+                if (!baselineModeTouched && builderCommitBuildMode) {
+                    const checkoutRadio = document.getElementById('buildModeCheckout');
+                    const baselineRadio = document.getElementById('buildModeBaseline');
+                    if (builderCommitBuildMode === 'baseline_cherrypick' && baselineRadio) {
+                        baselineRadio.checked = true;
+                    } else if (checkoutRadio) {
+                        checkoutRadio.checked = true;
+                    }
+                }
+                updateBaselineDisplay();
+            } catch (e) {
+                // Ignore health fetch errors; baseline stays visible by default
+            }
+        }
+
         // Update baseline commit display
         function updateBaselineDisplay() {
             const baselineContainer = document.getElementById('baselineInfo');
             const baselineValue = document.getElementById('baselineSha');
             if (!baselineContainer || !baselineValue) return;
 
+            const selectedBuildMode = (document.querySelector('input[name="buildMode"]:checked') || {}).value || 'checkout';
+            const baselineEnabled = selectedBuildMode === 'baseline_cherrypick';
+
             baselineContainer.classList.remove('has-baseline', 'baseline-error');
             baselineValue.textContent = '';
+            baselineValue.style.display = '';
+            baselineValue.hidden = !baselineEnabled;
+            if (!baselineEnabled) return;
 
             if (commitMode !== 'select') {
-                baselineValue.textContent = 'Available in Browse & Select mode.';
+                baselineValue.textContent = 'Baseline: Available in Browse & Select mode.';
+                return;
+            }
+
+            if (selectedCommits.size === 0) {
+                baselineValue.textContent = 'Baseline: Select commits to determine baseline.';
                 return;
             }
 
             let earliestCommit = null;
-            let earliestIndex = -1;
+            let earliestTimestamp = Infinity;
 
-            commits.forEach((commit, index) => {
-                if (selectedCommits.has(commit.sha) && index > earliestIndex) {
+            commits.forEach((commit) => {
+                if (!selectedCommits.has(commit.sha)) return;
+                const dateStr = commit && commit.commit && commit.commit.author && commit.commit.author.date;
+                const ts = dateStr ? Date.parse(dateStr) : NaN;
+
+                if (Number.isFinite(ts)) {
+                    if (ts < earliestTimestamp) {
+                        earliestCommit = commit;
+                        earliestTimestamp = ts;
+                    }
+                } else if (!earliestCommit) {
+                    // Fallback: keep the first selected commit if timestamps are unavailable.
                     earliestCommit = commit;
-                    earliestIndex = index;
                 }
             });
 
             if (!earliestCommit) {
-                baselineValue.textContent = 'Select commits to determine baseline.';
+                baselineValue.textContent = 'Baseline: Select commits to determine baseline.';
                 return;
             }
 
-            const parent = Array.isArray(earliestCommit.parents) ? earliestCommit.parents[0] : null;
+            const parent = Array.isArray(earliestCommit.parents) && earliestCommit.parents.length > 0 ? earliestCommit.parents[0] : null;
             if (!parent || !parent.sha) {
-                baselineValue.textContent = 'Unable to determine baseline for selected commits.';
+                baselineValue.textContent = 'Baseline: Unable to determine baseline for selected commits.';
                 baselineContainer.classList.add('baseline-error');
                 return;
             }
+
+            baselineValue.appendChild(document.createTextNode('Baseline: '));
 
             const link = document.createElement('a');
             link.href = `https://github.com/CUBRID/cubrid/commit/${parent.sha}`;
@@ -1084,6 +1147,12 @@
                     payload.prNumber = prNumberPayload;
                 } else {
                     payload.commits = payloadCommits;
+                }
+
+                // Prefer commitBuildMode everywhere; builder also supports use_baseline_cherrypick for backward compatibility.
+                const selectedBuildMode = (document.querySelector('input[name="buildMode"]:checked') || {}).value;
+                if (selectedBuildMode) {
+                    payload.commitBuildMode = selectedBuildMode;
                 }
 
                 // Add custom script if in custom mode
