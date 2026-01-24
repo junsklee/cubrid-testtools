@@ -197,6 +197,112 @@ class ReportService {
         if (failCount === normalized.length) return { text: 'Pre-existing Failure', class: 'verdict-preexisting' };
         return { text: 'Unstable: Fails intermittently', class: 'verdict-unstable' };
     }
+
+    /**
+     * Calculate test statistics from results
+     * This matches the logic from report.js's calculateStatistics function
+     *
+     * @param {Array} resultsArray - Array of test results
+     * @returns {Object} Statistics with counts
+     */
+    calculateTestStatistics(resultsArray) {
+        if (!resultsArray || !Array.isArray(resultsArray) || resultsArray.length === 0) {
+            return {
+                total: 0,
+                passed: 0,
+                failed: 0,
+                error: 0,
+                flaky: 0,
+                unstable: 0
+            };
+        }
+
+        // First, convert array format to map format like report.js expects
+        // resultsMap: { testName: { commit: { status, flaky, ... }, ... }, ... }
+        const resultsMap = {};
+
+        // Check if this is build-only mode
+        const buildOnlyMode = resultsArray.length > 0 && resultsArray.some(r =>
+            r.status === 'build_success' || r.status === 'upload_failed' || r.test === 'build_only'
+        );
+
+        for (const item of resultsArray) {
+            const testName = item.test || 'unknown_test';
+            const commit = item.commit || 'unknown_commit';
+
+            if (!resultsMap[testName]) {
+                resultsMap[testName] = {};
+            }
+
+            // In build-only mode, prioritize build_success over upload_failed
+            const existingData = resultsMap[testName][commit];
+            const shouldSkip = buildOnlyMode &&
+                              existingData &&
+                              existingData.status === 'build_success' &&
+                              item.status === 'upload_failed';
+
+            if (!shouldSkip) {
+                resultsMap[testName][commit] = {
+                    status: item.status || 'unknown',
+                    flaky: !!item.flaky,
+                    message: item.message || '',
+                    attempts: item.attempts || 0
+                };
+            }
+        }
+
+        // Now apply the EXACT same logic as report.js's calculateStatistics
+        let totalTests = 0;
+        let passedTests = 0;
+        let failedTests = 0;
+        let errorTests = 0;
+        let flakyTests = 0;
+        let unstableTests = 0;
+
+        for (const testName in resultsMap) {
+            totalTests++;
+            const testResults = resultsMap[testName];
+
+            let hasPass = false;
+            let hasFail = false;
+            let hasError = false;
+            let hasFlaky = false;
+
+            for (const commit in testResults) {
+                const result = testResults[commit];
+                const status = result.status || '';
+
+                // Recognize both test statuses and build-only statuses
+                if (status === 'pass' || status === 'build_success') hasPass = true;
+                if (status === 'fail' || status === 'build_failed') hasFail = true;
+                if (status === 'error' || status === 'execution_error') hasError = true;
+                if (result.flaky) hasFlaky = true;
+            }
+
+            // Classify this test (using report.js logic + unstable)
+            if (hasError) {
+                errorTests++;
+            } else if (hasFlaky) {
+                flakyTests++;
+            } else if (hasPass && hasFail) {
+                // Test passed on some commits and failed on others = unstable
+                unstableTests++;
+            } else if (hasPass && !hasFail) {
+                passedTests++;
+            } else {
+                failedTests++;
+            }
+        }
+
+        return {
+            total: totalTests,
+            passed: passedTests,
+            failed: failedTests,
+            error: errorTests,
+            flaky: flakyTests,
+            unstable: unstableTests
+        };
+    }
 }
 
 module.exports = new ReportService();

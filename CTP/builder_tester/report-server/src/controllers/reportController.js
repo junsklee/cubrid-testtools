@@ -195,7 +195,7 @@ class ReportController {
             const { taskId, offset, maxBytes, knownMtimeMs } = req.query;
             const start = parseInt(offset) || 0;
             const limit = parseInt(maxBytes) || 1024 * 64; // Default 64KB per chunk
-            
+
             if (!taskId) {
                 return res.status(400).json({ status: 'invalid', message: 'taskId is required' });
             }
@@ -206,7 +206,7 @@ class ReportController {
             }
 
             const logPath = path.join(config.paths.requests, taskId, 'builder.log');
-            
+
             if (!await fileService.fileExists(logPath)) {
                 return res.json({ status: 'not_found', taskId, message: 'builder.log not found yet' });
             }
@@ -252,6 +252,198 @@ class ReportController {
         } catch (err) {
             console.error('Error tailing builder log:', err);
             res.status(500).json({ status: 'error', message: err.message });
+        }
+    }
+
+    /**
+     * Get reports list as JSON with pagination and filtering
+     */
+    async getReportsListJson(req, res) {
+        try {
+            const options = {
+                page: parseInt(req.query.page) || 1,
+                pageSize: parseInt(req.query.pageSize) || 25,
+                q: req.query.q || '',
+                sort: req.query.sort || 'modified',
+                order: req.query.order || 'desc',
+                from: req.query.from || null,
+                to: req.query.to || null,
+                buildType: req.query.buildType || null,
+                runMode: req.query.runMode || null
+            };
+
+            const result = await fileService.queryReports(options);
+
+            // Add verdict analysis and test counts to each item
+            for (const item of result.items) {
+                // Use the same calculateTestStatistics logic as report.js
+                const stats = reportService.calculateTestStatistics(item.results || []);
+
+                item.testCounts = {
+                    pass: stats.passed,
+                    fail: stats.failed,
+                    error: stats.error,
+                    flaky: stats.flaky,
+                    unstable: stats.unstable
+                };
+
+                // Still add overall verdict for compatibility
+                if (item.results && item.commitOrder) {
+                    const verdict = reportService.analyzeVerdict(
+                        item.commits,
+                        item.results,
+                        item.commitOrder,
+                        item.commitBuildMode
+                    );
+                    item.verdict = verdict;
+                }
+            }
+
+            res.json(result);
+        } catch (err) {
+            console.error('Error getting reports list JSON:', err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    /**
+     * Delete a single report
+     */
+    async deleteReport(req, res) {
+        try {
+            const { id } = req.params;
+
+            if (!id) {
+                return res.status(400).json({ error: 'Request ID is required' });
+            }
+
+            const result = await fileService.deleteRequestDir(id);
+
+            if (result.status === 'not_found') {
+                return res.status(404).json(result);
+            }
+
+            if (result.status === 'error') {
+                return res.status(500).json(result);
+            }
+
+            res.json(result);
+        } catch (err) {
+            console.error('Error deleting report:', err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    /**
+     * Bulk delete reports
+     */
+    async bulkDeleteReports(req, res) {
+        try {
+            const { mode, ids, count, from, to, dryRun } = req.body;
+
+            if (!mode) {
+                return res.status(400).json({ error: 'Delete mode is required' });
+            }
+
+            // Safety cap to prevent accidental deletion of too many reports
+            const MAX_BULK_DELETE = 500;
+
+            let targetIds = [];
+
+            // Determine which IDs to delete based on mode
+            if (mode === 'selected') {
+                if (!ids || !Array.isArray(ids)) {
+                    return res.status(400).json({ error: 'ids array is required for selected mode' });
+                }
+                targetIds = ids;
+            } else if (mode === 'newest' || mode === 'oldest') {
+                if (!count || count <= 0) {
+                    return res.status(400).json({ error: 'count is required for newest/oldest mode' });
+                }
+                // Get all reports sorted
+                const sortOrder = mode === 'newest' ? 'desc' : 'asc';
+                const result = await fileService.queryReports({
+                    page: 1,
+                    pageSize: Math.min(count, MAX_BULK_DELETE),
+                    sort: 'modified',
+                    order: sortOrder
+                });
+                targetIds = result.items.map(item => item.id);
+            } else if (mode === 'dateRange') {
+                if (!from || !to) {
+                    return res.status(400).json({ error: 'from and to dates are required for dateRange mode' });
+                }
+                const result = await fileService.queryReports({
+                    page: 1,
+                    pageSize: MAX_BULK_DELETE,
+                    from,
+                    to,
+                    sort: 'modified',
+                    order: 'desc'
+                });
+                targetIds = result.items.map(item => item.id);
+            } else if (mode === 'keepLast') {
+                if (!count || count <= 0) {
+                    return res.status(400).json({ error: 'count is required for keepLast mode' });
+                }
+                // Get all reports
+                const allResult = await fileService.queryReports({
+                    page: 1,
+                    pageSize: 10000, // Get all
+                    sort: 'modified',
+                    order: 'desc'
+                });
+                // Skip the first N (keep them), delete the rest
+                targetIds = allResult.items.slice(count).map(item => item.id);
+            } else {
+                return res.status(400).json({ error: 'Invalid mode' });
+            }
+
+            // Apply safety cap
+            if (targetIds.length > MAX_BULK_DELETE) {
+                return res.status(400).json({
+                    error: `Too many items to delete (${targetIds.length}). Maximum is ${MAX_BULK_DELETE} per request.`
+                });
+            }
+
+            // If dry run, just return what would be deleted
+            if (dryRun) {
+                return res.json({
+                    dryRun: true,
+                    mode,
+                    targetIds,
+                    count: targetIds.length,
+                    message: `Would delete ${targetIds.length} reports`
+                });
+            }
+
+            // Perform actual deletion
+            const deletedIds = [];
+            const failed = [];
+
+            for (const id of targetIds) {
+                const result = await fileService.deleteRequestDir(id);
+                if (result.status === 'deleted') {
+                    deletedIds.push(id);
+                } else {
+                    failed.push({ id, error: result.message });
+                }
+            }
+
+            res.json({
+                dryRun: false,
+                mode,
+                deletedIds,
+                failed,
+                summary: {
+                    deleted: deletedIds.length,
+                    failed: failed.length,
+                    total: targetIds.length
+                }
+            });
+        } catch (err) {
+            console.error('Error bulk deleting reports:', err);
+            res.status(500).json({ error: err.message });
         }
     }
 

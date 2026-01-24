@@ -1374,30 +1374,34 @@
             </div>
         </div>
         
+        <div id="buildOnlyBanner" style="display: none; background: rgba(59, 130, 246, 0.1); border-left: 4px solid var(--info-color); padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
+            <strong>Build-Only Mode:</strong> This report shows build results only. No tests were executed.
+        </div>
+
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value" style="color: var(--success-color);" id="passedCount">0</div>
-                <div class="stat-label">Tests Passed</div>
+                <div class="stat-label" id="passedLabel">Tests Passed</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: var(--error-color);" id="failedCount">0</div>
-                <div class="stat-label">Tests Failed</div>
+                <div class="stat-label" id="failedLabel">Tests Failed</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: var(--warning-color);" id="unstableCount">0</div>
-                <div class="stat-label">Unstable Tests</div>
+                <div class="stat-label" id="unstableLabel">Unstable Tests</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: #92400e;" id="errorCount">0</div>
-                <div class="stat-label">Error Tests</div>
+                <div class="stat-label" id="errorLabel">Error Tests</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: #0c4a6e;" id="flakyCount">0</div>
-                <div class="stat-label">Flaky Tests</div>
+                <div class="stat-label" id="flakyLabel">Flaky Tests</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color: var(--info-color);" id="passRate">0%</div>
-                <div class="stat-label">Pass Rate</div>
+                <div class="stat-label" id="passRateLabel">Pass Rate</div>
             </div>
         </div>
         
@@ -1442,6 +1446,7 @@
         // Parse the embedded JSON data
         const rawData = {{RESULTS_JSON}};
         const commitBuildMode = rawData.commitBuildMode || 'baseline_cherrypick';
+        const buildOnlyMode = rawData.buildOnly || rawData.buildOnlyMode || false;
         let processedData = {};
         let commits = [];
         let currentFilter = 'all';
@@ -1488,14 +1493,24 @@
                     if (!testGroups[test]) {
                         testGroups[test] = {};
                     }
-                    
-                    // Always store full result object to preserve attemptLogMetadata
-                    testGroups[test][commit] = {
-                        status: status,
-                        flaky: flaky,
-                        attempts: attempts,
-                        attemptLogMetadata: attemptLogMetadata
-                    };
+
+                    // In build-only mode, prioritize build_success over upload_failed
+                    // Don't overwrite build_success with upload_failed
+                    const existingData = testGroups[test][commit];
+                    const shouldSkip = buildOnlyMode &&
+                                      existingData &&
+                                      existingData.status === 'build_success' &&
+                                      status === 'upload_failed';
+
+                    if (!shouldSkip) {
+                        // Always store full result object to preserve attemptLogMetadata
+                        testGroups[test][commit] = {
+                            status: status,
+                            flaky: flaky,
+                            attempts: attempts,
+                            attemptLogMetadata: attemptLogMetadata
+                        };
+                    }
                 });
             }
             const providedOrder = Array.isArray(rawData.commitOrder) ? rawData.commitOrder : null;
@@ -1518,7 +1533,28 @@
                 const baselineSection = document.getElementById('baselineCommitSection');
                 if (baselineSection) baselineSection.style.display = 'none';
             }
-            
+
+            // Handle build-only mode
+            if (buildOnlyMode) {
+                const banner = document.getElementById('buildOnlyBanner');
+                if (banner) banner.style.display = 'block';
+
+                // Update stat labels for build-only mode
+                const passedLabel = document.getElementById('passedLabel');
+                const failedLabel = document.getElementById('failedLabel');
+                const unstableLabel = document.getElementById('unstableLabel');
+                const errorLabel = document.getElementById('errorLabel');
+                const flakyLabel = document.getElementById('flakyLabel');
+                const passRateLabel = document.getElementById('passRateLabel');
+
+                if (passedLabel) passedLabel.textContent = 'Builds Successful';
+                if (failedLabel) failedLabel.textContent = 'Builds Failed';
+                if (unstableLabel) unstableLabel.textContent = 'Unstable Builds';
+                if (errorLabel) errorLabel.textContent = 'Build Errors';
+                if (flakyLabel) flakyLabel.textContent = 'Flaky Builds';
+                if (passRateLabel) passRateLabel.textContent = 'Success Rate';
+            }
+
             // Update basic counts
             // Calculate and display execution time
             const executionTime = calculateExecutionTime();
@@ -1763,7 +1799,9 @@
                 } else {
                     status = resultData || 'error';
                 }
-                if (status !== 'pass') failCount++;
+                const statusLower = status.toString().toLowerCase();
+                // Treat build_success as pass for build-only mode
+                if (statusLower !== 'pass' && statusLower !== 'build_success') failCount++;
             });
             return failCount;
         }
@@ -1846,6 +1884,10 @@
                 const statusLower = status.toString().toLowerCase();
                 if (statusLower === 'build_failed') {
                     buildErrs.push(commit.substring(0,7));
+                } else if (statusLower === 'upload_failed') {
+                    // Upload failures are treated as build errors only if the build itself didn't succeed
+                    // In build-only mode, upload_failed should already be filtered out if build_success exists
+                    buildErrs.push(commit.substring(0,7));
                 } else if (statusLower === 'execution_error' || statusLower === 'environment_error' || statusLower === 'error') {
                     errorCommits.push(commit.substring(0,7));
                 }
@@ -1867,7 +1909,9 @@
                     } else {
                         status = resultData || 'error';
                     }
-                    return status === 'pass' ? 'pass' : 'fail';
+                    const statusLower = status.toString().toLowerCase();
+                    // Treat build_success as pass for build-only mode
+                    return (statusLower === 'pass' || statusLower === 'build_success') ? 'pass' : 'fail';
                 });
 
                 const allPass = normalized.every(s => s === 'pass');
@@ -1905,8 +1949,11 @@
             // Fall back to traditional verdict logic
             const failCount = calculateFailCount(testName);
             const numCommits = commits.length;
-            
+
             if (failCount === 0) {
+                if (buildOnlyMode) {
+                    return { text: 'Build Successful', class: 'verdict-success' };
+                }
                 return { text: 'Pass: Not reproduced across listed commits', class: 'verdict-success' };
             } else if (failCount === 1) {
                 let failedCommit = null;
@@ -1919,15 +1966,26 @@
                     } else {
                         status = resultData || 'error';
                     }
-                    if (status !== 'pass') { 
-                        failedCommit = c.substring(0,7); 
-                        break; 
+                    const statusLower = status.toString().toLowerCase();
+                    // Treat build_success as pass
+                    if (statusLower !== 'pass' && statusLower !== 'build_success') {
+                        failedCommit = c.substring(0,7);
+                        break;
                     }
+                }
+                if (buildOnlyMode) {
+                    return { text: 'Build Failed: ' + failedCommit, class: 'verdict-bug' };
                 }
                 return { text: 'Bug or Revise: Caused by ' + failedCommit, class: 'verdict-bug' };
             } else if (failCount === numCommits) {
+                if (buildOnlyMode) {
+                    return { text: 'All Builds Failed', class: 'verdict-preexisting' };
+                }
                 return { text: 'Pre-existing Failure: Likely not caused by listed commits', class: 'verdict-preexisting' };
             } else {
+                if (buildOnlyMode) {
+                    return { text: 'Build Unstable', class: 'verdict-unstable' };
+                }
                 return { text: 'Unstable: Fails intermittently across commits', class: 'verdict-unstable' };
             }
         }
@@ -1947,7 +2005,10 @@
             }
             // Rebuild header explicitly to ensure correct order and column visibility
             headerRow.innerHTML = '';
-            const thTest = document.createElement('th'); thTest.textContent = 'Test Case'; thTest.style.width = '40%'; thTest.style.minWidth = '300px'; thTest.style.maxWidth = '640px'; headerRow.appendChild(thTest);
+            const thTest = document.createElement('th');
+            thTest.textContent = buildOnlyMode ? 'Build Target' : 'Test Case';
+            thTest.style.width = '40%'; thTest.style.minWidth = '300px'; thTest.style.maxWidth = '640px';
+            headerRow.appendChild(thTest);
             commits.forEach(commit => {
                 const th = document.createElement('th');
                 th.className = 'commit-col';
@@ -1956,7 +2017,9 @@
                 headerRow.appendChild(th);
             });
             const thFail = document.createElement('th'); thFail.textContent = 'Fail Num'; headerRow.appendChild(thFail);
-            const thVerdict = document.createElement('th'); thVerdict.textContent = 'Verdict'; headerRow.appendChild(thVerdict);
+            const thVerdict = document.createElement('th');
+            thVerdict.textContent = buildOnlyMode ? 'Build Status' : 'Verdict';
+            headerRow.appendChild(thVerdict);
             tbody.innerHTML = '';
             const tests = Object.keys(processedData).sort();
             if (tests.length === 0) {

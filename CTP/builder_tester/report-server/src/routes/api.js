@@ -7,6 +7,7 @@ const router = express.Router();
 const githubController = require('../controllers/githubController');
 const builderController = require('../controllers/builderController');
 const testerController = require('../controllers/testerController');
+const reportController = require('../controllers/reportController');
 const config = require('../config');
 
 // GitHub API routes
@@ -24,6 +25,11 @@ router.all('/builder/*', (req, res) => builderController.proxy(req, res));
 
 // Tester API routes
 router.get('/tester/health', (req, res) => testerController.getHealth(req, res));
+
+// Report management API routes
+router.get('/reports', (req, res) => reportController.getReportsListJson(req, res));
+router.delete('/reports/:id', (req, res) => reportController.deleteReport(req, res));
+router.post('/reports/bulk-delete', (req, res) => reportController.bulkDeleteReports(req, res));
 
 // Local info route
 router.get('/local-ip', (req, res) => {

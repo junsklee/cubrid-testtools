@@ -46,8 +46,9 @@ router.get('/ui/overrides.js', (req, res) => {
 });
 
 router.get('/ui/reports.js', (req, res) => {
+    // Serve the reports management JavaScript file
     res.type('application/javascript');
-    res.render('reports', { config });
+    res.sendFile(path.join(config.paths.publicDir, 'js', 'reports.js'));
 });
 
 module.exports = router;

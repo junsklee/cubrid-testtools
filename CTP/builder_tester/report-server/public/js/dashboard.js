@@ -420,7 +420,7 @@
                 if (input) input.disabled = !enabled;
             });
 
-            applyBuildOnlyState();
+            applyTestCasesDisabledState();
         }
 
         function arrayBufferToBase64(buffer) {
@@ -2085,33 +2085,30 @@
         async function loadRecentReports() {
             const container = document.getElementById('recentReports');
             if (!container) return;
-            
+
             container.innerHTML = '<div class="spinner"></div>';
-            
+
             try {
-                const res = await fetch('/reports');
-                const html = await res.text();
-                
-                // Parse report links from HTML
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-                const links = doc.querySelectorAll('a[href^="/report?id="]');
-                
-                if (links.length === 0) {
+                const res = await fetch('/api/reports?page=1&pageSize=5');
+                const data = await res.json();
+
+                if (!data.items || data.items.length === 0) {
                     container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No reports available yet.<br>Submit a build request to generate reports.</p>';
                     return;
                 }
-                
+
                 // Show first 5 reports with better formatting
                 const reportsList = document.createElement('div');
                 reportsList.className = 'reports-list';
-                
-                for (let i = 0; i < Math.min(5, links.length); i++) {
-                    const link = links[i];
+
+                for (const report of data.items) {
                     const reportItem = document.createElement('div');
                     reportItem.className = 'report-item';
-                    
-                    const reportLink = link.cloneNode(true);
+
+                    const reportLink = document.createElement('a');
+                    reportLink.href = `/report?id=${report.id}`;
+                    reportLink.textContent = report.id;
+                    reportLink.target = '_blank';
                     reportLink.style.color = 'var(--primary)';
                     reportLink.style.textDecoration = 'none';
                     reportLink.addEventListener('mouseenter', function() {
@@ -2120,14 +2117,22 @@
                     reportLink.addEventListener('mouseleave', function() {
                         this.style.color = 'var(--primary)';
                     });
-                    
+
+                    // Add date info
+                    const dateSpan = document.createElement('span');
+                    dateSpan.style.color = 'var(--text-secondary)';
+                    dateSpan.style.fontSize = '0.875rem';
+                    dateSpan.style.marginLeft = '0.5rem';
+                    dateSpan.textContent = new Date(report.modified).toLocaleString();
+
                     reportItem.appendChild(reportLink);
+                    reportItem.appendChild(dateSpan);
                     reportsList.appendChild(reportItem);
                 }
-                
+
                 container.innerHTML = '';
                 container.appendChild(reportsList);
-                
+
                 showToast('Reports loaded successfully', 'success');
             } catch (e) {
                 console.error('Error loading reports:', e);

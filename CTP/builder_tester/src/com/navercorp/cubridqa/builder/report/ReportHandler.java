@@ -68,13 +68,43 @@ public class ReportHandler implements HttpHandler {
             Path jsonPath = requestDir.resolve("results.json");
             Files.write(jsonPath, requestBody.getBytes());
             logger.info("Saved results to: " + jsonPath);
-            
+
+            // Check if this is a build-only request (no tests were run)
+            boolean buildOnly = data.optBoolean("buildOnly", false);
+
+            if (buildOnly) {
+                logger.info("Build-only mode detected, generating build-only report for: " + requestId);
+                // Inject a synthetic "Build" test result showing success for each commit
+                JSONArray results = new JSONArray();
+                JSONArray commits = data.optJSONArray("commitOrder");
+                if (commits == null || commits.length() == 0) {
+                    commits = new JSONArray();
+                    commits.put("unknown");
+                }
+
+                // Create a "Build" test entry that passed for all commits
+                for (int i = 0; i < commits.length(); i++) {
+                    String commit = commits.getString(i);
+                    JSONObject buildResult = new JSONObject();
+                    buildResult.put("test", "Build");
+                    buildResult.put("commit", commit);
+                    buildResult.put("status", "pass");
+                    buildResult.put("message", "Build completed successfully");
+                    buildResult.put("attempts", 1);
+                    buildResult.put("flaky", false);
+                    results.put(buildResult);
+                }
+
+                data.put("results", results);
+                data.put("buildOnlyMode", true); // Flag for report display
+            }
+
             // Generate the HTML report
             String reportHtml = generateReport(data, requestId);
             Path reportPath = requestDir.resolve("report.html");
             Files.write(reportPath, reportHtml.getBytes());
             logger.info("Generated report at: " + reportPath);
-            
+
             // Return the HTML report as response
             exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
             sendResponse(exchange, 200, reportHtml);

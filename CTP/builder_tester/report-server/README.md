@@ -203,12 +203,15 @@ Reports are stored in `~/cubrid-testtools/CTP/builder_tester/log/requests/` (dir
 | GET | `/reports` | Reports listing page |
 | GET | `/report?id=<req_id>` | Specific report viewer |
 | GET | `/ui/overrides.js` | Dashboard override scripts |
-| GET | `/ui/reports.js` | Reports page scripts |
+| GET | `/ui/reports.js` | Reports management page scripts |
 
-#### Reports & Callbacks
+#### Reports Management & Callbacks
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/callback` | Test results callback handler (prefers taskId for directory) |
+| GET | `/api/reports` | List reports with pagination, filtering, and enrichment |
+| DELETE | `/api/reports/:id` | Delete a single report directory |
+| POST | `/api/reports/bulk-delete` | Bulk delete reports (supports selected, newest/oldest N, date range, keep last N) |
 | GET | `/api/logs/<req_id>/tests` | List test logs (array of filenames) |
 | GET | `/api/log/<req_id>/tests/<filename>` | Get specific test log |
 | GET | `/api/logs/<req_id>/builds` | List build logs (array of filenames) |

@@ -35,12 +35,15 @@ async function processReportData(data) {
         // Normalize payload (now async to sort commits)
         const normalized = await normalizePayload(data);
 
+        // Check if build-only mode
+        const buildOnlyMode = data.buildOnlyMode || data.buildOnly || false;
+
         // Create statistics grid
         const stats = calculateStatistics(normalized);
-        const statsHtml = createStatisticsGrid(stats);
+        const statsHtml = createStatisticsGrid(stats, buildOnlyMode);
 
         // Create results table
-        const tableHtml = createResultsTable(normalized);
+        const tableHtml = createResultsTable(normalized, buildOnlyMode);
 
         container.innerHTML = statsHtml + tableHtml;
 
@@ -171,9 +174,12 @@ async function sortCommitsChronologically(commits) {
             
             for (const commit in testResults) {
                 const result = testResults[commit];
-                if (result.status === 'pass') hasPass = true;
-                if (result.status === 'fail') hasFail = true;
-                if (result.status === 'error') hasError = true;
+                const status = result.status || '';
+
+                // Handle both test statuses and build-only statuses
+                if (status === 'pass' || status === 'build_success') hasPass = true;
+                if (status === 'fail' || status === 'upload_failed' || status === 'build_failed') hasFail = true;
+                if (status === 'error') hasError = true;
                 if (result.flaky) flakyTests++;
             }
             
@@ -196,7 +202,33 @@ async function sortCommitsChronologically(commits) {
 /**
  * Create statistics grid HTML
  */
-function createStatisticsGrid(stats) {
+function createStatisticsGrid(stats, buildOnlyMode = false) {
+    if (buildOnlyMode) {
+        return `
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: var(--success-color)">${stats.total}</div>
+                    <div class="stat-label">Builds Completed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: var(--success-color)">${stats.passed}</div>
+                    <div class="stat-label">Successful</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: var(--error-color)">${stats.failed}</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${stats.passRate}%</div>
+                    <div class="stat-label">Success Rate</div>
+                </div>
+            </div>
+            <div style="background: rgba(59, 130, 246, 0.1); border-left: 4px solid var(--primary); padding: 1rem; margin: 1rem 0; border-radius: 4px;">
+                <strong>Build-Only Mode:</strong> This report shows build results only. No tests were executed.
+            </div>
+        `;
+    }
+
     return `
         <div class="stats-grid">
             <div class="stat-card">
@@ -222,26 +254,28 @@ function createStatisticsGrid(stats) {
 /**
  * Create results table HTML
  */
-function createResultsTable(data) {
+function createResultsTable(data, buildOnlyMode = false) {
     if (!data.results || Object.keys(data.results).length === 0) {
         return '<p>No test results available</p>';
     }
-    
+
     const commits = data.commits || [];
     const tests = Object.keys(data.results);
-    
+
     let html = '<div class="results-table"><table class="results">';
     // Add colgroup to enforce first column width under table-layout: fixed
     html += '<colgroup><col class="col-test">';
     commits.forEach(() => { html += '<col>'; });
     html += '<col></colgroup>';
-    
-    // Header
-    html += '<thead><tr><th>Test Case</th>';
+
+    // Header - adjust labels for build-only mode
+    const firstColumnLabel = buildOnlyMode ? 'Build Target' : 'Test Case';
+    const verdictLabel = buildOnlyMode ? 'Build Status' : 'Verdict';
+    html += `<thead><tr><th>${firstColumnLabel}</th>`;
     commits.forEach(commit => {
         html += `<th title="${commit}">${commit.substring(0, 7)}</th>`;
     });
-    html += '<th>Verdict</th></tr></thead>';
+    html += `<th>${verdictLabel}</th></tr></thead>`;
     
     // Body
     html += '<tbody>';

@@ -3,171 +3,178 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><%= title %> - CUBRID Test Reports</title>
-    <link rel="stylesheet" href="/css/dashboard.css">
-    <style>
-        /* Reports specific styles using dashboard theme */
-        .reports-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
-
-        .reports-grid {
-            display: grid;
-            gap: 1rem;
-            margin-top: 2rem;
-        }
-
-        .report-card {
-            background: rgba(30, 41, 59, 0.5);
-            backdrop-filter: blur(10px);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1.5rem;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .report-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 1px;
-            background: var(--gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-
-        .report-card:hover {
-            transform: translateY(-4px);
-            border-color: var(--primary);
-            box-shadow: 0 20px 40px rgba(99, 102, 241, 0.1);
-        }
-
-        .report-card:hover::before {
-            opacity: 1;
-        }
-
-        .report-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-
-        .report-id {
-            font-family: 'Courier New', monospace;
-            color: var(--primary);
-            font-size: 1.1rem;
-            font-weight: 600;
-            text-decoration: none;
-            transition: color 0.3s ease;
-        }
-
-        .report-id:hover {
-            color: var(--primary-hover);
-        }
-
-        .report-date {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-        }
-
-        .report-meta {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-        }
-
-        .report-icon {
-            font-size: 1.2rem;
-            margin-right: 0.5rem;
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 4rem 2rem;
-            color: var(--text-secondary);
-        }
-
-        .empty-state h3 {
-            color: var(--text-primary);
-            margin-bottom: 1rem;
-        }
-
-        .back-button {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.75rem 1.5rem;
-            background: rgba(51, 65, 85, 0.3);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-primary);
-            text-decoration: none;
-            transition: all 0.3s ease;
-            margin-bottom: 2rem;
-        }
-
-        .back-button:hover {
-            background: rgba(51, 65, 85, 0.5);
-            border-color: var(--primary);
-            transform: translateY(-1px);
-        }
-    </style>
+    <title>Test Reports - CUBRID Builder/Tester</title>
+    <link rel="stylesheet" href="/css/dashboard.css?v=<%= Date.now() %>">
 </head>
 <body>
     <div class="bg-animation"></div>
-    
+
     <header class="header">
         <div class="logo">
             <div class="logo-icon">BT</div>
-            <h1>CUBRID Test Reports</h1>
+            <h1>Test Reports Management</h1>
         </div>
     </header>
 
     <div class="reports-container">
-        <a href="/" class="back-button">
-            ← Back to Dashboard
-        </a>
+        <div class="page-header">
+            <a href="/" class="back-button">← Back to Dashboard</a>
+            <div class="page-title">
+                <h2>All Reports</h2>
+                <p class="page-subtitle">Manage and filter test execution reports</p>
+            </div>
+        </div>
 
-        <% if (reports && reports.length > 0) { %>
-            <div class="reports-grid">
-                <% reports.forEach(function(report) { %>
-                    <div class="report-card">
-                        <div class="report-header">
-                            <a href="/report?id=<%= report.id %>" class="report-id">
-                                <span class="report-icon">📋</span>
-                                <%= report.id %>
-                            </a>
-                            <div class="report-date">
-                                <%= new Date(report.modified).toLocaleString() %>
-                            </div>
-                        </div>
-                        
-                        <div class="report-meta">
-                            <span>📅 Generated <%= new Date(report.modified).toLocaleDateString() %></span>
-                            <span>🕒 <%= new Date(report.modified).toLocaleTimeString() %></span>
-                        </div>
+        <!-- Filters Toolbar -->
+        <div class="filters-toolbar">
+            <div class="filters-row">
+                <div class="filter-group">
+                    <label for="filter-search">Search</label>
+                    <input type="text" id="filter-search" placeholder="Search by request ID..." />
+                </div>
+
+                <div class="filter-group">
+                    <label for="filter-from">From Date</label>
+                    <input type="date" id="filter-from" />
+                </div>
+
+                <div class="filter-group">
+                    <label for="filter-to">To Date</label>
+                    <input type="date" id="filter-to" />
+                </div>
+
+                <div class="filter-group">
+                    <label for="filter-sort">Sort By</label>
+                    <select id="filter-sort">
+                        <option value="modified-desc">Newest First</option>
+                        <option value="modified-asc">Oldest First</option>
+                        <option value="id-asc">ID (A-Z)</option>
+                        <option value="id-desc">ID (Z-A)</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label for="filter-pagesize">Per Page</label>
+                    <select id="filter-pagesize">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="filters-actions">
+                <button id="btn-apply-filters" class="btn btn-primary">Apply Filters</button>
+                <button id="btn-reset-filters" class="btn btn-secondary">Reset</button>
+            </div>
+        </div>
+
+        <!-- Bulk Actions Toolbar -->
+        <div class="bulk-toolbar">
+            <div class="bulk-select">
+                <input type="checkbox" id="select-all" />
+                <label for="select-all">Select All on Page</label>
+                <span id="selected-count" class="selected-count">0 selected</span>
+            </div>
+
+            <div class="bulk-actions">
+                <button id="btn-delete-selected" class="btn btn-danger" disabled>Delete Selected</button>
+
+                <div class="bulk-dropdown">
+                    <button id="btn-bulk-menu" class="btn btn-secondary">Bulk Actions ▼</button>
+                    <div id="bulk-menu" class="bulk-menu">
+                        <button data-action="delete-newest">Delete Newest N</button>
+                        <button data-action="delete-oldest">Delete Oldest N</button>
+                        <button data-action="delete-daterange">Delete by Date Range</button>
+                        <button data-action="keep-last">Keep Last N (Delete Rest)</button>
                     </div>
-                <% }); %>
+                </div>
             </div>
-        <% } else { %>
-            <div class="empty-state">
-                <h3>No Reports Available</h3>
-                <p>No test reports have been generated yet.</p>
-                <p>Submit a build request from the dashboard to generate reports.</p>
-                <a href="/" class="back-button" style="margin-top: 2rem;">
-                    Go to Dashboard
-                </a>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="loading-indicator" style="display: none;">
+            <div class="spinner"></div>
+            <p>Loading reports...</p>
+        </div>
+
+        <!-- Reports Table -->
+        <div class="reports-table-wrapper">
+            <table id="reports-table" class="reports-table">
+                <thead>
+                    <tr>
+                        <th width="40">
+                            <input type="checkbox" id="th-select-all" />
+                        </th>
+                        <th>Request ID</th>
+                        <th>Date & Time</th>
+                        <th>Build Type</th>
+                        <th>Run Mode</th>
+                        <th>Commits</th>
+                        <th>Test Results</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="reports-tbody">
+                    <!-- Rows will be populated by JavaScript -->
+                </tbody>
+            </table>
+
+            <div id="empty-state" class="empty-state" style="display: none;">
+                <h3>No Reports Found</h3>
+                <p>No test reports match your current filters.</p>
+                <p>Try adjusting your search criteria or submit a new build request.</p>
             </div>
-        <% } %>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination-wrapper">
+            <div class="pagination-info">
+                <span id="pagination-info-text">Showing 0-0 of 0 reports</span>
+            </div>
+            <div id="pagination-controls" class="pagination-controls">
+                <!-- Pagination buttons will be generated by JavaScript -->
+            </div>
+        </div>
     </div>
+
+    <!-- Confirmation Modal -->
+    <div id="modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3 id="modal-title">Confirm Action</h3>
+            <p id="modal-message"></p>
+            <div id="modal-preview" class="modal-preview"></div>
+            <div class="modal-actions">
+                <button id="modal-confirm" class="btn btn-danger">Confirm</button>
+                <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Action Input Modal -->
+    <div id="input-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3 id="input-modal-title">Bulk Action</h3>
+            <p id="input-modal-message"></p>
+            <div class="modal-input-group">
+                <label id="input-modal-label" for="input-modal-value"></label>
+                <input type="number" id="input-modal-value" min="1" />
+            </div>
+            <div class="modal-checkbox">
+                <input type="checkbox" id="input-modal-dryrun" checked />
+                <label for="input-modal-dryrun">Dry run (preview only)</label>
+            </div>
+            <div class="modal-actions">
+                <button id="input-modal-confirm" class="btn btn-primary">Continue</button>
+                <button id="input-modal-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="/js/reports.js?v=<%= Date.now() %>"></script>
 </body>
 </html>

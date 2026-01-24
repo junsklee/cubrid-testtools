@@ -2346,6 +2346,7 @@ public class BuilderTask {
                 .put("results", new JSONArray(results))
                 .put("baselineCommit", this.baselineCommit)
                 .put("commitBuildMode", this.commitBuildMode)
+                .put("buildOnly", request.optBoolean("buildOnly", false))
                 .put("executionTime", executionTime)
                 .put("timestamp", System.currentTimeMillis());
 
