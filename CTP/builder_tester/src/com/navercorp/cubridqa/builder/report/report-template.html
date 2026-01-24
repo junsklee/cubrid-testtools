@@ -1562,9 +1562,9 @@
             
             // Extract and display configuration data from rawData
             document.getElementById('runMode').textContent = rawData.runMode || 'until-pass';
-            document.getElementById('buildType').textContent = rawData.buildType || 'debug';
+            document.getElementById('buildType').textContent = rawData.buildType || 'release';
             document.getElementById('minRuns').textContent = rawData.minRuns || '1';
-            document.getElementById('maxRuns').textContent = rawData.maxRuns || '3';
+            document.getElementById('maxRuns').textContent = rawData.maxRuns || '2';
             
             // Display worker IPs
             if (rawData.workerIps && rawData.workerIps.length > 0) {

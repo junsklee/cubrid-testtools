@@ -95,7 +95,7 @@ Builder accepts **one request** and can handle many commits/tests in a single ru
   "buildType": "debug",
   "runMode": "fixed-runs",
   "minRuns": 3,
-  "maxRuns": 5
+  "maxRuns": 2
 }
 ```
 

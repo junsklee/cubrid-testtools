@@ -361,7 +361,7 @@ Result: Scheduler WON'T assign more tests (even though slots are free)
   "buildPackage": "cubrid_b3a0c2d.tar.gz",
   "runMode": "until-pass",
   "minRuns": 1,
-  "maxRuns": 3
+  "maxRuns": 2
 }
 ```
 
@@ -374,7 +374,7 @@ Result: Scheduler WON'T assign more tests (even though slots are free)
   "buildPackage": "cubrid_b3a0c2d.tar.gz",
   "runMode": "until-pass",
   "minRuns": 1,
-  "maxRuns": 3,
+  "maxRuns": 2,
 
   // NEW: Predicted resource demands
   "predicted": {

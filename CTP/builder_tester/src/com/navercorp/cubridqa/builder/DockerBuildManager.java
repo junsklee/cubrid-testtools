@@ -1576,8 +1576,8 @@ public class DockerBuildManager {
         } else if ("debug".equalsIgnoreCase(normalizedType)) {
             mode = "debug";
         } else {
-            // Default to debug when buildType is missing or unrecognized
-            mode = "debug";
+            // Default to release when buildType is missing or unrecognized
+            mode = "release";
         }
 
         List<String> options = new ArrayList<>();

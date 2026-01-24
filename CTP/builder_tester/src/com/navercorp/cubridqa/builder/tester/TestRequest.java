@@ -49,7 +49,7 @@ public class TestRequest {
         this.testName = json.optString("testName", null);
         this.containerName = json.optString("containerName", null);
         this.attemptNumber = json.optInt("attemptNumber", 1);
-        this.buildType = json.optString("buildType", "debug");
+        this.buildType = json.optString("buildType", "release");
         this.customShellScript = json.optString("customShellScript", null);
         this.customAttachments = parseCustomAttachments(json);
 

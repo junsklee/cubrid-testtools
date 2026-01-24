@@ -518,18 +518,18 @@ public class BuilderConfig {
      */
     public String getBuildDir(String buildType) {
         if (buildType == null || buildType.trim().isEmpty()) {
-            buildType = "debug";
+            buildType = "release";
         }
-        String mode = buildType.trim().equalsIgnoreCase("release") ? "release" : "debug";
+        String mode = buildType.trim().equalsIgnoreCase("debug") ? "debug" : "release";
         return "build_x86_64_" + mode;
     }
 
     /**
-     * Get build directory with default type (debug).
+     * Get build directory with default type (release).
      * Kept for backward compatibility.
      */
     public String getBuildDir() {
-        return getBuildDir("debug");
+        return getBuildDir("release");
     }
     
     public String getWorkDir() {

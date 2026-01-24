@@ -215,7 +215,7 @@ public class Builder {
                 
                 // buildType is used by BuilderTask via the request JSON
                 @SuppressWarnings("unused")
-                String buildType = request.optString("buildType", "debug");
+                String buildType = request.optString("buildType", "release");
                 
                 // Check tester reachability for all worker IPs
                 if (!buildOnly) {
@@ -620,7 +620,7 @@ public class Builder {
 
                 // Extract parameters
                 String commit = request.getString("commit");
-                String buildType = request.optString("buildType", "debug");
+                String buildType = request.optString("buildType", "release");
                 String baselineCommit = request.optString("baselineCommit", null);
                 String commitBuildMode = request.optString("commitBuildMode", config.getCommitBuildMode());
                 // Backward-compatible alias: use_baseline_cherrypick=true implies baseline_cherrypick if commitBuildMode isn't provided.

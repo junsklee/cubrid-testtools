@@ -164,7 +164,7 @@ Configure your Builder to use the callback URL:
   "buildType": "debug",
   "runMode": "until-pass",
   "minRuns": 1,
-  "maxRuns": 3
+  "maxRuns": 2
 }
 ```
 

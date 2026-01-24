@@ -55,7 +55,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             }
 
             // Extract build type for container naming
-            String buildType = request.getBuildType() != null ? request.getBuildType() : "debug";
+            String buildType = request.getBuildType() != null ? request.getBuildType() : "release";
 
             // Generate unique container name with timestamp to avoid conflicts
             String uniqueId = String.valueOf(System.currentTimeMillis());

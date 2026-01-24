@@ -160,7 +160,7 @@ Execute a test with configurable retry and execution strategies.
   "requestId": "req_20231201_143022_abc123",
   "runMode": "until-pass",
   "minRuns": 1,
-  "maxRuns": 3,
+  "maxRuns": 2,
   "timeBudgetMs": 300000,
   "keepAlive": false,
   "containerName": "debug_select_test_123456789"

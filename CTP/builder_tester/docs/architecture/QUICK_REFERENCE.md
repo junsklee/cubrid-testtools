@@ -109,7 +109,7 @@ Docker management:
   "testScript": "shell/test.sh",
   "buildPackage": "http://builder:8089/download/build/...",
   "minRuns": 3,
-  "maxRuns": 5,
+  "maxRuns": 2,
   "runMode": "until-pass",
   "commitShort": "abc1234"
 }

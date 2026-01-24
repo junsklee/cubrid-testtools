@@ -115,7 +115,7 @@ public class BuilderTask {
             JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
             boolean buildOnly = request.optBoolean("buildOnly", false);
             JSONArray tests = buildOnly ? new JSONArray() : request.getJSONArray("tests");
-            String buildType = request.optString("buildType", "debug");
+            String buildType = request.optString("buildType", "release");
 
             // Initialize progress totals
             this.buildsTotal = request.has("prNumber") ? 1 : commits.length();
@@ -1695,7 +1695,7 @@ public class BuilderTask {
                 .put("baseline", baselineToken)  // Add baseline key for Docker image differentiation
                 .put("baselineShort", baselineToken.substring(0, Math.min(baselineToken.length(), 7)))  // Add short baseline
                 .put("expectedBuildVersion", commit.substring(0, 7))
-                .put("buildType", buildType != null ? buildType : "debug")  // Add build type for container naming
+                .put("buildType", buildType != null ? buildType : "release")  // Add build type for container naming
                 .put("keepAlive", false)
                 .put("runMode", runModeOverride)
                 .put("minRuns", minRunsOverride)
