@@ -53,6 +53,15 @@ public class TestHandler implements HttpHandler {
 
             // Extract request ID if provided
             String requestId = request.optString("requestId", null);
+
+            if (CancelledRequests.isCancelled(requestId)) {
+                requestLogger.warning("Request cancelled before execution: " + requestId);
+                responsePayload = new JSONObject()
+                    .put("status", "cancelled")
+                    .put("message", "Request cancelled")
+                    .put("requestId", requestId);
+                httpStatus = 200;
+            } else {
             if (requestId != null) {
                 RequestContext.setRequestId(requestId);
 
@@ -65,15 +74,6 @@ public class TestHandler implements HttpHandler {
                     logger.warning("Failed to create request logger: " + e.getMessage());
                 }
             }
-
-            if (CancelledRequests.isCancelled(requestId)) {
-                requestLogger.warning("Request cancelled before execution: " + requestId);
-                responsePayload = new JSONObject()
-                    .put("status", "cancelled")
-                    .put("message", "Request cancelled")
-                    .put("requestId", requestId);
-                httpStatus = 200;
-            } else {
             requestLogger.info("Test request for: " + request.getString("testPath") +
                        (request.has("requestId") ? " [" + request.optString("requestId") + "]" : ""));
             requestLogger.info("Build package: " + request.getString("buildPackage"));

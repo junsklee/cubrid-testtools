@@ -9,6 +9,7 @@ import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
+import com.navercorp.cubridqa.builder.tester.CancelledRequests;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -179,6 +180,18 @@ public class DirectExecutor implements ExecutorStrategy {
         String testOutput = outputGobbler.getOutput();
         String testError = errorGobbler.getOutput();
         
+        String requestIdForLogs = RequestContext.getRequestId();
+        if (CancelledRequests.isCancelled(requestIdForLogs)) {
+            return finalizeResult(TestResult.builder()
+                .testName(request.getTestName())
+                .status("cancelled")
+                .message("Request cancelled")
+                .commit(request.getCommit() != null ? request.getCommit() : "unknown")
+                .commitShort(request.getCommitShort())
+                .timestamp(System.currentTimeMillis()),
+                metricsBuilder, startNs);
+        }
+
         // Combine output and error for log content
         String directLogContent = "=== STDOUT ===\n" + testOutput + "\n\n=== STDERR ===\n" + testError;
         String directLogFileName = null;
@@ -187,7 +200,7 @@ public class DirectExecutor implements ExecutorStrategy {
         // Save logs to file
         try {
             String requestId = RequestContext.getRequestId();
-            if (requestId != null && config.isRequestGroupingEnabled()) {
+            if (requestId != null && !CancelledRequests.isCancelled(requestId) && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 String safeTestName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
                 String commitShortForLog = request.getCommitShort() != null ? request.getCommitShort() : "unknown";

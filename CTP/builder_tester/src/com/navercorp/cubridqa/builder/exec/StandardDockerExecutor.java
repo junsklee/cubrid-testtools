@@ -11,6 +11,7 @@ import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 import com.navercorp.cubridqa.builder.docker.SecureDockerEnv;
+import com.navercorp.cubridqa.builder.tester.CancelledRequests;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -161,7 +162,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         
         try {
             String requestId = RequestContext.getRequestId();
-            if (requestId != null && config.isRequestGroupingEnabled()) {
+            if (requestId != null && !CancelledRequests.isCancelled(requestId) && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 String safeTestNameForScript = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
                 // Include commit in the script name for uniqueness
@@ -410,6 +411,19 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         String dockerOutput = outputGobbler.getOutput();
         testLogger.info("Docker test completed with exit code: " + exitCode);
         DockerStatsCollector.StatsSummary statsSummary = stopCollector(statsCollector);
+
+        String requestIdForLogs = RequestContext.getRequestId();
+        if (CancelledRequests.isCancelled(requestIdForLogs)) {
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status("cancelled")
+                    .message("Request cancelled")
+                    .commit(request.getCommit() != null ? request.getCommit() : "unknown")
+                    .commitShort(request.getCommitShort())
+                    .timestamp(System.currentTimeMillis()),
+                metricsBuilder, startNs, "docker", statsSummary);
+        }
 
         // Persist full docker output for diagnostics
         Path logFilePath = null;

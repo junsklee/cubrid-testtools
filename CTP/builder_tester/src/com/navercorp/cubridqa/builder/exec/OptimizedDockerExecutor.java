@@ -11,6 +11,7 @@ import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 import com.navercorp.cubridqa.builder.docker.SecureDockerEnv;
+import com.navercorp.cubridqa.builder.tester.CancelledRequests;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -215,7 +216,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         // Save script for debugging
         try {
             String requestId = RequestContext.getRequestId();
-            if (requestId != null && config.isRequestGroupingEnabled()) {
+            if (requestId != null && !CancelledRequests.isCancelled(requestId) && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 String safeTestName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
                 Path scriptLogPath = Paths.get(testsDir, 
@@ -470,6 +471,19 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         String dockerOutput = outputGobbler.getOutput();
         testLogger.info("Docker test completed with exit code: " + exitCode);
         DockerStatsCollector.StatsSummary statsSummary = stopCollector(statsCollector);
+
+        String requestIdForLogs = RequestContext.getRequestId();
+        if (CancelledRequests.isCancelled(requestIdForLogs)) {
+            return finalizeResult(
+                TestResult.builder()
+                    .testName(request.getTestName())
+                    .status("cancelled")
+                    .message("Request cancelled")
+                    .commit(request.getCommit() != null ? request.getCommit() : "unknown")
+                    .commitShort(request.getCommitShort())
+                    .timestamp(System.currentTimeMillis()),
+                metricsBuilder, startNs, dockerImage, dockerImageCached, statsSummary);
+        }
         
         // Save output log
         Path dockerOptLogFilePath = null;
@@ -478,7 +492,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         String safeTestName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
         try {
             String requestId = RequestContext.getRequestId();
-            if (requestId != null && config.isRequestGroupingEnabled()) {
+            if (requestId != null && !CancelledRequests.isCancelled(requestId) && config.isRequestGroupingEnabled()) {
                 String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                 requestTestsDir = Paths.get(testsDir);
                 // Include attempt number in the log file name for uniqueness

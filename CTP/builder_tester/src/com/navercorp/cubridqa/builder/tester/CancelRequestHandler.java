@@ -2,6 +2,7 @@ package com.navercorp.cubridqa.builder.tester;
 
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
 import com.navercorp.cubridqa.builder.http.HttpUtils;
+import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import org.json.JSONObject;
@@ -9,6 +10,7 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -45,6 +47,7 @@ public class CancelRequestHandler implements HttpHandler {
             if (!requestId.isEmpty()) {
                 CancelledRequests.cancel(requestId);
                 logger.info("Marked request as cancelled: " + requestId);
+                deleteRequestLogs(requestId);
             }
 
             if (!DockerUtils.isDockerAvailable()) {
@@ -117,6 +120,17 @@ public class CancelRequestHandler implements HttpHandler {
         cmd.addAll(ids);
         runCommand(cmd, "remove containers");
         return ids.size();
+    }
+
+    private void deleteRequestLogs(String requestId) {
+        try {
+            Path logDir = RequestLogManager.getInstance().getRequestLogDirectory(requestId);
+            if (logDir != null) {
+                SafeIo.deleteDirectoryWithPrivileges(logDir.toFile(), logger);
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to delete request logs for " + requestId + ": " + e.getMessage());
+        }
     }
 
     private void killRunningContainers(List<String> ids) throws IOException, InterruptedException {
