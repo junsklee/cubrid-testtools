@@ -78,7 +78,7 @@ echo ""
 
 # Track restart count to prevent infinite restart loops
 RESTART_COUNT=0
-MAX_RESTARTS=10
+MAX_RESTARTS=100
 RESTART_DELAY=5  # seconds to wait before restarting
 
 server_pid=""
