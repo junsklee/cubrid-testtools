@@ -338,8 +338,11 @@
         tr.appendChild(tdCommits);
 
         // Test Results (counts)
+        // For build-only reports, show a dash since there are no actual tests
         const tdResults = document.createElement('td');
-        if (report.testCounts) {
+        if (report.buildOnly) {
+            tdResults.textContent = '-';
+        } else if (report.testCounts) {
             const countsContainer = document.createElement('div');
             countsContainer.className = 'test-counts';
 

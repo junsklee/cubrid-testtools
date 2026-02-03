@@ -223,7 +223,7 @@ class ReportService {
 
         // Check if this is build-only mode
         const buildOnlyMode = resultsArray.length > 0 && resultsArray.some(r =>
-            r.status === 'build_success' || r.status === 'upload_failed' || r.test === 'build_only'
+            r.status === 'build_success' || r.status === 'upload_success' || r.status === 'upload_failed' || r.test === 'build_only'
         );
 
         for (const item of resultsArray) {
@@ -234,12 +234,13 @@ class ReportService {
                 resultsMap[testName] = {};
             }
 
-            // In build-only mode, prioritize build_success over upload_failed
+            // In build-only mode, prioritize build_success over upload statuses
+            // Don't overwrite build_success with upload_success or upload_failed
             const existingData = resultsMap[testName][commit];
             const shouldSkip = buildOnlyMode &&
                               existingData &&
                               existingData.status === 'build_success' &&
-                              item.status === 'upload_failed';
+                              (item.status === 'upload_failed' || item.status === 'upload_success');
 
             if (!shouldSkip) {
                 resultsMap[testName][commit] = {
@@ -273,8 +274,8 @@ class ReportService {
                 const status = result.status || '';
 
                 // Recognize both test statuses and build-only statuses
-                if (status === 'pass' || status === 'build_success') hasPass = true;
-                if (status === 'fail' || status === 'build_failed') hasFail = true;
+                if (status === 'pass' || status === 'build_success' || status === 'upload_success') hasPass = true;
+                if (status === 'fail' || status === 'build_failed' || status === 'upload_failed') hasFail = true;
                 if (status === 'error' || status === 'execution_error') hasError = true;
                 if (result.flaky) hasFlaky = true;
             }

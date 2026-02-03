@@ -1494,13 +1494,13 @@
                         testGroups[test] = {};
                     }
 
-                    // In build-only mode, prioritize build_success over upload_failed
-                    // Don't overwrite build_success with upload_failed
+                    // In build-only mode, prioritize build_success over upload statuses
+                    // Don't overwrite build_success with upload_success or upload_failed
                     const existingData = testGroups[test][commit];
                     const shouldSkip = buildOnlyMode &&
                                       existingData &&
                                       existingData.status === 'build_success' &&
-                                      status === 'upload_failed';
+                                      (status === 'upload_failed' || status === 'upload_success');
 
                     if (!shouldSkip) {
                         // Always store full result object to preserve attemptLogMetadata
@@ -1800,8 +1800,8 @@
                     status = resultData || 'error';
                 }
                 const statusLower = status.toString().toLowerCase();
-                // Treat build_success as pass for build-only mode
-                if (statusLower !== 'pass' && statusLower !== 'build_success') failCount++;
+                // Treat build_success and upload_success as pass for build-only mode
+                if (statusLower !== 'pass' && statusLower !== 'build_success' && statusLower !== 'upload_success') failCount++;
             });
             return failCount;
         }
@@ -1910,8 +1910,8 @@
                         status = resultData || 'error';
                     }
                     const statusLower = status.toString().toLowerCase();
-                    // Treat build_success as pass for build-only mode
-                    return (statusLower === 'pass' || statusLower === 'build_success') ? 'pass' : 'fail';
+                    // Treat build_success and upload_success as pass for build-only mode
+                    return (statusLower === 'pass' || statusLower === 'build_success' || statusLower === 'upload_success') ? 'pass' : 'fail';
                 });
 
                 const allPass = normalized.every(s => s === 'pass');
@@ -1967,8 +1967,8 @@
                         status = resultData || 'error';
                     }
                     const statusLower = status.toString().toLowerCase();
-                    // Treat build_success as pass
-                    if (statusLower !== 'pass' && statusLower !== 'build_success') {
+                    // Treat build_success and upload_success as pass
+                    if (statusLower !== 'pass' && statusLower !== 'build_success' && statusLower !== 'upload_success') {
                         failedCommit = c.substring(0,7);
                         break;
                     }
@@ -1994,6 +1994,17 @@
             const headerRow = document.getElementById('tableHeader');
             const tbody = document.getElementById('tableBody');
             const table = document.getElementById('resultsTable');
+            const tableContainer = table ? table.closest('.results-table') : null;
+
+            // For build-only mode, hide the test results table if the only "test" is build_only
+            let tests = Object.keys(processedData);
+            if (buildOnlyMode && tests.length === 1 && tests[0] === 'build_only') {
+                if (tableContainer) {
+                    tableContainer.style.display = 'none';
+                }
+                return;
+            }
+
             // Ensure a colgroup exists to enforce first column width
             if (table && table.querySelector('colgroup') === null) {
                 const colgroup = document.createElement('colgroup');
@@ -2021,7 +2032,7 @@
             thVerdict.textContent = buildOnlyMode ? 'Build Status' : 'Verdict';
             headerRow.appendChild(thVerdict);
             tbody.innerHTML = '';
-            const tests = Object.keys(processedData).sort();
+            tests = Object.keys(processedData).sort();
             if (tests.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="' + (commits.length + 3) + '" class="no-results">No test results found</td></tr>';
                 return;
@@ -2461,7 +2472,28 @@
             content += '<p style="margin-bottom: 1rem;">Multiple execution logs found across commits and attempts:</p>';
             
             // Group by commit
-            Object.keys(logGroups).sort().forEach(commit => {
+            const commitOrderIndex = new Map();
+            const providedOrder = Array.isArray(rawData.commitOrder) ? rawData.commitOrder : null;
+            const orderSource = (providedOrder && providedOrder.length > 0) ? providedOrder : commits;
+            if (Array.isArray(orderSource)) {
+                orderSource.forEach((sha, idx) => {
+                    if (typeof sha !== 'string') return;
+                    const shortSha = sha.substring(0, 7);
+                    // In the extremely rare case of prefix collisions, keep the earliest index
+                    if (!commitOrderIndex.has(shortSha)) {
+                        commitOrderIndex.set(shortSha, idx);
+                    }
+                });
+            }
+            
+            const sortedCommits = Object.keys(logGroups).sort((a, b) => {
+                const ai = commitOrderIndex.has(a) ? commitOrderIndex.get(a) : Number.MAX_SAFE_INTEGER;
+                const bi = commitOrderIndex.has(b) ? commitOrderIndex.get(b) : Number.MAX_SAFE_INTEGER;
+                if (ai !== bi) return ai - bi;
+                return a.localeCompare(b); // stable fallback
+            });
+            
+            sortedCommits.forEach(commit => {
                 const isClickedCommit = commit === clickedCommitShort;
                 content += '<div style="margin-bottom: 1.5rem; padding: 1rem; border: 2px solid ' + 
                           (isClickedCommit ? '#667eea' : '#e5e7eb') + '; border-radius: 0.5rem; background: ' +
