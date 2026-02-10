@@ -58,6 +58,7 @@ public class BuilderTask {
     // Progress tracking for dashboard
     private final AtomicInteger buildsCompleted = new AtomicInteger(0);
     private final AtomicInteger testsCompleted = new AtomicInteger(0);
+    private final AtomicInteger containerSequence = new AtomicInteger(0);
     private volatile int buildsTotal = 0;
     private volatile int testsTotal = 0;
     private volatile String currentPhase = "initializing";
@@ -1731,9 +1732,13 @@ public class BuilderTask {
                 testRequest.put("requestId", requestId);
             }
             String safeRequestId = requestId != null ? requestId.replaceAll("[^a-zA-Z0-9_.-]", "_") : "unknown";
+            String safeCommit = (commit != null && !commit.trim().isEmpty())
+                ? commit.substring(0, Math.min(commit.length(), 7)).replaceAll("[^a-zA-Z0-9_.-]", "_")
+                : "unknown";
             String safeTestNameForContainer = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
             String safeBuildType = (buildType != null && !buildType.trim().isEmpty()) ? buildType : "debug";
-            String containerName = "tester_" + safeBuildType + "_" + safeRequestId + "_" + safeTestNameForContainer + "_" + System.currentTimeMillis();
+            long uniqueSeq = containerSequence.incrementAndGet();
+            String containerName = "tester_" + safeBuildType + "_" + safeRequestId + "_" + safeCommit + "_" + safeTestNameForContainer + "_" + uniqueSeq + "_" + System.currentTimeMillis();
             testRequest.put("containerName", containerName);
 
             // Add custom shell script if provided
@@ -1750,8 +1755,8 @@ public class BuilderTask {
                 if (requestId != null && config.isRequestGroupingEnabled()) {
                     String testsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
                     String safeTest = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                    String safeCommit = commit.substring(0, Math.min(commit.length(), 7));
-                    java.nio.file.Path reqFile = Paths.get(testsDir, String.format("test_%s_%s.json", safeCommit, safeTest));
+                    String safeCommitForFile = commit.substring(0, Math.min(commit.length(), 7));
+                    java.nio.file.Path reqFile = Paths.get(testsDir, String.format("test_%s_%s.json", safeCommitForFile, safeTest));
                     java.nio.file.Files.write(reqFile, testRequest.toString(2).getBytes("UTF-8"));
                 }
             } catch (Exception ignore) { }
@@ -1765,9 +1770,17 @@ public class BuilderTask {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setDoOutput(true);
             conn.setConnectTimeout(5000);
-            // Read timeout is configurable via tester.conf (reported by Tester and used by BuilderConfig)
-            int testTimeoutMin = config.getTestReadTimeoutMinutes();
-            conn.setReadTimeout(testTimeoutMin * 60 * 1000);
+            // Read timeout must cover the FULL /test request duration.
+            // With retry modes (until-pass/until-fail) the tester may run up to max_runs attempts,
+            // so a per-attempt timeout must be expanded to a worst-case total.
+            //
+            // Note: getTestReadTimeoutMinutes() is used by tester-side executors as a per-attempt wall clock
+            // cap (e.g., Docker process wait), so for the Builder -> Tester HTTP call we multiply by max_runs.
+            int perAttemptTimeoutMin = config.getTestReadTimeoutMinutes();
+            int maxRuns = Math.max(1, config.getMaxRuns());
+            long readTimeoutMsLong = (long) perAttemptTimeoutMin * 60_000L * (long) maxRuns;
+            int readTimeoutMs = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, readTimeoutMsLong));
+            conn.setReadTimeout(readTimeoutMs);
             taskLogger.info("Sending test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length())) + ") to tester " + host + ":" + port);
             
             try (OutputStream os = conn.getOutputStream()) {
@@ -2120,7 +2133,16 @@ public class BuilderTask {
         if (e == null) return false;
 
         // Check exception types that indicate network issues
-        if (e instanceof java.net.SocketTimeoutException) return true;
+        if (e instanceof java.net.SocketTimeoutException) {
+            // Distinguish connect timeouts (node unreachable) from read timeouts (tester busy/slow/long-running).
+            // Marking a node failed on read timeout is too aggressive; /test can legitimately run for hours
+            // with retry modes or long testcases.
+            String msg = e.getMessage();
+            if (msg != null && msg.toLowerCase().contains("connect timed out")) {
+                return true;
+            }
+            return false;
+        }
         if (e instanceof java.net.ConnectException) return true;
         if (e instanceof java.net.UnknownHostException) return true;
         if (e instanceof java.net.NoRouteToHostException) return true;
