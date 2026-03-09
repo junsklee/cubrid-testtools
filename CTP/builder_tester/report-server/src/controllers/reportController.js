@@ -293,7 +293,9 @@ class ReportController {
                         item.commits,
                         item.results,
                         item.commitOrder,
-                        item.commitBuildMode
+                        item.commitBuildMode,
+                        item.runMode,
+                        item.buildOnly
                     );
                     item.verdict = verdict;
                 }

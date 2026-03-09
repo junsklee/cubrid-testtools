@@ -116,9 +116,66 @@ class ReportService {
     /**
      * Analyze test verdict based on results
      */
-    analyzeVerdict(commits, results, commitOrder, commitBuildMode) {
+    analyzeVerdict(commits, results, commitOrder, commitBuildMode, runMode, buildOnlyMode) {
         const resultsArr = Array.isArray(results) ? results : [];
         const order = Array.isArray(commitOrder) && commitOrder.length > 0 ? commitOrder : (Array.isArray(commits) ? commits : []);
+        const commitCount = order.length;
+
+        const mode = (runMode || 'until-pass').toString().toLowerCase();
+        const isCheckout = (commitBuildMode || '').toString().toLowerCase() === 'checkout';
+        const isBuildOnly = !!buildOnlyMode || resultsArr.some(r => {
+            const status = (r && r.status ? r.status : '').toString().toLowerCase();
+            return status === 'build_success' ||
+                   status === 'build_failed' ||
+                   status === 'upload_success' ||
+                   status === 'upload_failed' ||
+                   (r && r.test === 'build_only');
+        });
+        const modeSuffix = (!isBuildOnly && mode !== 'until-pass') ? ` (${mode})` : '';
+        const baselineSuffix = isCheckout ? '' : ' (baseline mode)';
+
+        const singleCommitPassText = () => {
+            if (isBuildOnly) return 'Build successful (single commit)';
+            if (mode === 'until-fail') return `Not reproduced on tested commit${modeSuffix}`;
+            if (mode === 'fixed-runs') return `All runs passed on tested commit${modeSuffix}`;
+            return 'Pass on tested commit';
+        };
+        const singleCommitFailText = () => {
+            if (isBuildOnly) return 'Build failed (single commit)';
+            if (mode === 'until-fail') return `Failure reproduced on tested commit${modeSuffix}`;
+            if (mode === 'fixed-runs') return `Failures observed on tested commit${modeSuffix}`;
+            return 'Failure observed on tested commit';
+        };
+        const multiCommitPassText = () => {
+            if (isBuildOnly) return `Builds successful across tested commits${baselineSuffix}`;
+            if (mode === 'until-fail') return `Not reproduced across tested commits${modeSuffix}${baselineSuffix}`;
+            if (mode === 'fixed-runs') return `All runs passed across tested commits${modeSuffix}${baselineSuffix}`;
+            return `Pass: No failures across tested commits${baselineSuffix}`;
+        };
+        const multiCommitAllFailText = () => {
+            if (isBuildOnly) return `Builds failed across tested commits${baselineSuffix}`;
+            if (mode === 'until-fail') return `Failure reproduced across tested commits${modeSuffix}${baselineSuffix}`;
+            if (mode === 'fixed-runs') return `Failures observed across tested commits${modeSuffix}${baselineSuffix}`;
+            return `Pre-existing failure across tested commits${baselineSuffix}`;
+        };
+        const regressionText = (shortSha) => {
+            if (isBuildOnly) return `Build regression introduced: ${shortSha}`;
+            if (mode === 'until-fail') return `Failure reproduced starting: ${shortSha}${modeSuffix}`;
+            if (mode === 'fixed-runs') return `Failure observed starting: ${shortSha}${modeSuffix}`;
+            return `Regression introduced: ${shortSha}`;
+        };
+        const fixText = (shortSha) => {
+            if (isBuildOnly) return `Build fixed by later commit: ${shortSha}`;
+            if (mode === 'until-fail') return `Failure no longer reproduced after: ${shortSha}${modeSuffix}`;
+            if (mode === 'fixed-runs') return `Failure no longer observed after: ${shortSha}${modeSuffix}`;
+            return `Fixed by later commit: ${shortSha}`;
+        };
+        const isolatedFailureText = (shortSha) => {
+            if (isBuildOnly) return `Build failed on ${shortSha}${baselineSuffix}`;
+            if (mode === 'until-fail') return `Failure reproduced only on ${shortSha}${modeSuffix}${baselineSuffix}`;
+            if (mode === 'fixed-runs') return `Failures observed only on ${shortSha}${modeSuffix}${baselineSuffix}`;
+            return `Isolated failure on ${shortSha}${baselineSuffix}`;
+        };
 
         // Aggregate per-commit so this function stays correct even if callers pass results across multiple tests.
         // This avoids "last write wins" overwrites when multiple rows share the same commit.
@@ -129,10 +186,10 @@ class ReportService {
             const status = (r.status || 'unknown').toString().toLowerCase();
             const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: false };
 
-            if (status === 'pass') slot.pass = true;
-            else if (status === 'fail') slot.fail = true;
-            else if (status === 'flaky') slot.flaky = true;
-            else if (status === 'error' || status === 'execution_error') slot.error = true;
+            if (r.flaky || status === 'flaky') slot.flaky = true;
+            else if (status === 'error' || status === 'execution_error' || status === 'environment_error') slot.error = true;
+            else if (status === 'pass' || status === 'build_success' || status === 'upload_success') slot.pass = true;
+            else if (status === 'fail' || status === 'build_failed' || status === 'upload_failed') slot.fail = true;
             else slot.unknown = true;
 
             aggregated.set(commit, slot);
@@ -154,7 +211,7 @@ class ReportService {
             if (s === 'error') hasError = true;
         }
 
-        if (hasFlaky) return { text: 'Flaky: Inconsistent results', class: 'verdict-flaky' };
+        if (hasFlaky) return { text: 'Flaky: Mixed pass/fail across attempts', class: 'verdict-flaky' };
         if (hasError) return { text: 'Error: Test execution failed', class: 'verdict-error' };
 
         const normalized = order.map((c) => (commitStatus.get(c) === 'pass' ? 'pass' : 'fail'));
@@ -162,11 +219,16 @@ class ReportService {
             return { text: 'Unknown: No results', class: 'verdict-error' };
         }
 
-        if (commitBuildMode === 'checkout') {
+        if (commitCount === 1) {
+            if (normalized[0] === 'pass') return { text: singleCommitPassText(), class: 'verdict-success' };
+            return { text: singleCommitFailText(), class: 'verdict-bug' };
+        }
+
+        if (isCheckout) {
             const allPass = normalized.every(s => s === 'pass');
             const allFail = normalized.every(s => s === 'fail');
-            if (allPass) return { text: 'Pass: Not reproduced', class: 'verdict-success' };
-            if (allFail) return { text: 'Pre-existing Failure', class: 'verdict-preexisting' };
+            if (allPass) return { text: multiCommitPassText(), class: 'verdict-success' };
+            if (allFail) return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
 
             let transitions = 0;
             for (let i = 1; i < normalized.length; i++) {
@@ -178,13 +240,13 @@ class ReportService {
                 if (firstFailIndex > 0 && normalized[0] === 'pass') {
                     const regressionCommit = order[firstFailIndex];
                     const shortSha = regressionCommit ? regressionCommit.substring(0, 7) : '';
-                    return { text: `Regression introduced: ${shortSha}`, class: 'verdict-bug' };
+                    return { text: regressionText(shortSha), class: 'verdict-bug' };
                 }
                 const firstPassIndex = normalized.indexOf('pass');
                 if (firstPassIndex > 0 && normalized[0] === 'fail') {
                     const fixCommit = order[firstPassIndex];
                     const shortSha = fixCommit ? fixCommit.substring(0, 7) : '';
-                    return { text: `Fixed by later commit: ${shortSha}`, class: 'verdict-success' };
+                    return { text: fixText(shortSha), class: 'verdict-success' };
                 }
             }
 
@@ -192,10 +254,16 @@ class ReportService {
         }
 
         const failCount = normalized.filter(s => s === 'fail').length;
-        if (failCount === 0) return { text: 'Pass: Not reproduced', class: 'verdict-success' };
-        if (failCount === 1) return { text: 'Bug or Revise: Caused by commit', class: 'verdict-bug' };
-        if (failCount === normalized.length) return { text: 'Pre-existing Failure', class: 'verdict-preexisting' };
-        return { text: 'Unstable: Fails intermittently', class: 'verdict-unstable' };
+        if (failCount === 0) return { text: multiCommitPassText(), class: 'verdict-success' };
+        if (failCount === 1) {
+            const failIndex = normalized.indexOf('fail');
+            const failedCommit = order[failIndex] || '';
+            const shortSha = failedCommit ? failedCommit.substring(0, 7) : '';
+            return { text: isolatedFailureText(shortSha), class: 'verdict-bug' };
+        }
+        if (failCount === normalized.length) return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
+        if (isBuildOnly) return { text: `Build unstable across commits${baselineSuffix}`, class: 'verdict-unstable' };
+        return { text: `Unstable: Mixed results across commits${baselineSuffix}`, class: 'verdict-unstable' };
     }
 
     /**

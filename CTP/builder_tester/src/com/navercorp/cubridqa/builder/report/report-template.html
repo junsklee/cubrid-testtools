@@ -1853,35 +1853,100 @@
         }
         
         function getTestVerdict(testName) {
+            const runMode = (rawData.runMode || 'until-pass').toString().toLowerCase();
+            const isCheckout = (commitBuildMode || '').toString().toLowerCase() === 'checkout';
+            const commitCount = commits.length;
+            const isSingleCommit = commitCount === 1;
+            const runModeSuffix = (!buildOnlyMode && runMode !== 'until-pass') ? ' (' + runMode + ')' : '';
+            const baselineSuffix = isCheckout ? '' : ' (baseline mode)';
+
+            const attemptsNote = (attempts) => {
+                if (!attempts || attempts <= 1) return '';
+                if (runMode === 'fixed-runs') {
+                    return ' in ' + attempts + ' run' + (attempts > 1 ? 's' : '');
+                }
+                return ' after ' + attempts + ' attempt' + (attempts > 1 ? 's' : '');
+            };
+
+            const singleCommitPassText = (attempts) => {
+                if (buildOnlyMode) return 'Build successful (single commit)';
+                if (runMode === 'until-fail') return 'Not reproduced on tested commit' + attemptsNote(attempts) + runModeSuffix;
+                if (runMode === 'fixed-runs') return 'All runs passed on tested commit' + attemptsNote(attempts) + runModeSuffix;
+                return 'Pass on tested commit' + attemptsNote(attempts);
+            };
+            const singleCommitFailText = (attempts) => {
+                if (buildOnlyMode) return 'Build failed (single commit)';
+                if (runMode === 'until-fail') return 'Failure reproduced on tested commit' + attemptsNote(attempts) + runModeSuffix;
+                if (runMode === 'fixed-runs') return 'Failures observed on tested commit' + attemptsNote(attempts) + runModeSuffix;
+                return 'Failure observed on tested commit' + attemptsNote(attempts);
+            };
+            const multiCommitPassText = () => {
+                if (buildOnlyMode) return 'Builds successful across tested commits' + baselineSuffix;
+                if (runMode === 'until-fail') return 'Not reproduced across tested commits' + runModeSuffix + baselineSuffix;
+                if (runMode === 'fixed-runs') return 'All runs passed across tested commits' + runModeSuffix + baselineSuffix;
+                return 'Pass: No failures across tested commits' + baselineSuffix;
+            };
+            const multiCommitAllFailText = () => {
+                if (buildOnlyMode) return 'Builds failed across tested commits' + baselineSuffix;
+                if (runMode === 'until-fail') return 'Failure reproduced across tested commits' + runModeSuffix + baselineSuffix;
+                if (runMode === 'fixed-runs') return 'Failures observed across tested commits' + runModeSuffix + baselineSuffix;
+                return 'Pre-existing failure across tested commits' + baselineSuffix;
+            };
+            const regressionText = (shortSha) => {
+                if (buildOnlyMode) return 'Build regression introduced: ' + shortSha;
+                if (runMode === 'until-fail') return 'Failure reproduced starting: ' + shortSha + runModeSuffix;
+                if (runMode === 'fixed-runs') return 'Failure observed starting: ' + shortSha + runModeSuffix;
+                return 'Regression introduced: ' + shortSha;
+            };
+            const fixText = (shortSha) => {
+                if (buildOnlyMode) return 'Build fixed by later commit: ' + shortSha;
+                if (runMode === 'until-fail') return 'Failure no longer reproduced after: ' + shortSha + runModeSuffix;
+                if (runMode === 'fixed-runs') return 'Failure no longer observed after: ' + shortSha + runModeSuffix;
+                return 'Fixed by later commit: ' + shortSha;
+            };
+            const isolatedFailureText = (shortSha) => {
+                if (buildOnlyMode) return 'Build failed on ' + shortSha + baselineSuffix;
+                if (runMode === 'until-fail') return 'Failure reproduced only on ' + shortSha + runModeSuffix + baselineSuffix;
+                if (runMode === 'fixed-runs') return 'Failures observed only on ' + shortSha + runModeSuffix + baselineSuffix;
+                return 'Isolated failure on ' + shortSha + baselineSuffix;
+            };
+
             // Check for flaky test first - look for any result marked as flaky
             let hasFlaky = false;
             let maxAttempts = 1;
+            const perCommit = {};
             
             commits.forEach(commit => {
                 const resultData = processedData[testName][commit];
+                let status;
+                let attempts = 1;
+                let flaky = false;
                 if (resultData && typeof resultData === 'object') {
-                    if (resultData.flaky) hasFlaky = true;
-                    if (resultData.attempts > maxAttempts) maxAttempts = resultData.attempts;
+                    status = resultData.status || 'error';
+                    attempts = resultData.attempts || 1;
+                    flaky = !!resultData.flaky;
+                } else {
+                    status = resultData || 'error';
                 }
+                const statusLower = status.toString().toLowerCase();
+                if (flaky || statusLower === 'flaky') hasFlaky = true;
+                if (attempts > maxAttempts) maxAttempts = attempts;
+                perCommit[commit] = { statusLower, attempts };
             });
             
             if (hasFlaky) {
-                return { text: 'Flaky: Passed after ' + maxAttempts + ' attempts', class: 'verdict-flaky' };
+                if (isSingleCommit && commits[0]) {
+                    const attempts = perCommit[commits[0]] ? perCommit[commits[0]].attempts : maxAttempts;
+                    return { text: 'Flaky: Mixed pass/fail' + attemptsNote(attempts), class: 'verdict-flaky' };
+                }
+                return { text: 'Flaky: Mixed pass/fail across attempts', class: 'verdict-flaky' };
             }
             
             // Check for errors (execution_error, environment_error, build_error)
             const errorCommits = [];
             const buildErrs = [];
             commits.forEach(commit => {
-                const resultData = processedData[testName][commit];
-                let status;
-                if (typeof resultData === 'object' && resultData.status) {
-                    status = resultData.status;
-                } else {
-                    status = resultData || 'error';
-                }
-                
-                const statusLower = status.toString().toLowerCase();
+                const statusLower = perCommit[commit] ? perCommit[commit].statusLower : 'error';
                 if (statusLower === 'build_failed') {
                     buildErrs.push(commit.substring(0,7));
                 } else if (statusLower === 'upload_failed') {
@@ -1900,27 +1965,32 @@
                 return { text: 'Error: Test execution failed', class: 'verdict-error' };
             }
 
-            if (commitBuildMode === 'checkout' && commits.length > 0) {
-                const normalized = commits.map(commit => {
-                    const resultData = processedData[testName][commit];
-                    let status;
-                    if (typeof resultData === 'object' && resultData.status) {
-                        status = resultData.status;
-                    } else {
-                        status = resultData || 'error';
-                    }
-                    const statusLower = status.toString().toLowerCase();
-                    // Treat build_success and upload_success as pass for build-only mode
-                    return (statusLower === 'pass' || statusLower === 'build_success' || statusLower === 'upload_success') ? 'pass' : 'fail';
-                });
+            if (commitCount === 0) {
+                return { text: 'Unknown: No results', class: 'verdict-error' };
+            }
 
+            const normalized = commits.map(commit => {
+                const statusLower = perCommit[commit] ? perCommit[commit].statusLower : 'error';
+                // Treat build_success and upload_success as pass for build-only mode
+                return (statusLower === 'pass' || statusLower === 'build_success' || statusLower === 'upload_success') ? 'pass' : 'fail';
+            });
+
+            if (isSingleCommit) {
+                const attempts = commits[0] && perCommit[commits[0]] ? perCommit[commits[0]].attempts : maxAttempts;
+                if (normalized[0] === 'pass') {
+                    return { text: singleCommitPassText(attempts), class: 'verdict-success' };
+                }
+                return { text: singleCommitFailText(attempts), class: 'verdict-bug' };
+            }
+
+            if (isCheckout) {
                 const allPass = normalized.every(s => s === 'pass');
                 const allFail = normalized.every(s => s === 'fail');
                 if (allPass) {
-                    return { text: 'Pass: Not reproduced across listed commits', class: 'verdict-success' };
+                    return { text: multiCommitPassText(), class: 'verdict-success' };
                 }
                 if (allFail) {
-                    return { text: 'Pre-existing Failure: Likely not caused by listed commits', class: 'verdict-preexisting' };
+                    return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
                 }
 
                 let transitions = 0;
@@ -1934,60 +2004,40 @@
                     if (normalized[0] === 'pass') {
                         const firstFailIndex = normalized.indexOf('fail');
                         const failedCommit = commits[firstFailIndex] || '';
-                        return { text: 'Regression introduced: ' + failedCommit.substring(0, 7), class: 'verdict-bug' };
+                        return { text: regressionText(failedCommit.substring(0, 7)), class: 'verdict-bug' };
                     }
                     if (normalized[0] === 'fail') {
                         const firstPassIndex = normalized.indexOf('pass');
                         const fixedCommit = commits[firstPassIndex] || '';
-                        return { text: 'Fixed by later commit: ' + fixedCommit.substring(0, 7), class: 'verdict-success' };
+                        return { text: fixText(fixedCommit.substring(0, 7)), class: 'verdict-success' };
                     }
                 }
 
                 return { text: 'Unstable: Multiple transitions', class: 'verdict-unstable' };
             }
 
-            // Fall back to traditional verdict logic
-            const failCount = calculateFailCount(testName);
-            const numCommits = commits.length;
+            // Baseline build mode verdict logic
+            const failCount = normalized.filter(s => s === 'fail').length;
 
             if (failCount === 0) {
-                if (buildOnlyMode) {
-                    return { text: 'Build Successful', class: 'verdict-success' };
-                }
-                return { text: 'Pass: Not reproduced across listed commits', class: 'verdict-success' };
+                return { text: multiCommitPassText(), class: 'verdict-success' };
             } else if (failCount === 1) {
                 let failedCommit = null;
-                for (let i=0;i<commits.length;i++) {
-                    const c = commits[i];
-                    const resultData = processedData[testName][c];
-                    let status;
-                    if (typeof resultData === 'object' && resultData.status) {
-                        status = resultData.status;
-                    } else {
-                        status = resultData || 'error';
-                    }
-                    const statusLower = status.toString().toLowerCase();
-                    // Treat build_success and upload_success as pass
-                    if (statusLower !== 'pass' && statusLower !== 'build_success' && statusLower !== 'upload_success') {
-                        failedCommit = c.substring(0,7);
+                for (let i = 0; i < commits.length; i++) {
+                    if (normalized[i] === 'fail') {
+                        failedCommit = commits[i];
                         break;
                     }
                 }
-                if (buildOnlyMode) {
-                    return { text: 'Build Failed: ' + failedCommit, class: 'verdict-bug' };
-                }
-                return { text: 'Bug or Revise: Caused by ' + failedCommit, class: 'verdict-bug' };
-            } else if (failCount === numCommits) {
-                if (buildOnlyMode) {
-                    return { text: 'All Builds Failed', class: 'verdict-preexisting' };
-                }
-                return { text: 'Pre-existing Failure: Likely not caused by listed commits', class: 'verdict-preexisting' };
-            } else {
-                if (buildOnlyMode) {
-                    return { text: 'Build Unstable', class: 'verdict-unstable' };
-                }
-                return { text: 'Unstable: Fails intermittently across commits', class: 'verdict-unstable' };
+                return { text: isolatedFailureText(failedCommit ? failedCommit.substring(0, 7) : ''), class: 'verdict-bug' };
+            } else if (failCount === commitCount) {
+                return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
             }
+            
+            if (buildOnlyMode) {
+                return { text: 'Build unstable across commits' + baselineSuffix, class: 'verdict-unstable' };
+            }
+            return { text: 'Unstable: Mixed results across commits' + baselineSuffix, class: 'verdict-unstable' };
         }
         
         function renderTable() {
