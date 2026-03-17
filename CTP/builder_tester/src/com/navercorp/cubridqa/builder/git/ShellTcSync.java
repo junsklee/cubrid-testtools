@@ -2,8 +2,14 @@ package com.navercorp.cubridqa.builder.git;
 
 import com.navercorp.cubridqa.builder.BuilderConfig;
 import com.navercorp.cubridqa.builder.exec.ProcessIO;
+import com.navercorp.cubridqa.builder.tester.SafeIo;
+import org.json.JSONObject;
 import java.io.*;
+import java.nio.file.*;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -17,6 +23,8 @@ public class ShellTcSync {
     // Request-scoped sync tracking: maps requestId -> timestamp of successful sync
     private static final ConcurrentHashMap<String, Long> syncedRequests = new ConcurrentHashMap<>();
     private static final long REQUEST_TTL_MS = TimeUnit.HOURS.toMillis(1); // Clean up after 1 hour
+    private static final ConcurrentHashMap<String, Object> requestWorkspaceLocks = new ConcurrentHashMap<>();
+    private static final long REQUEST_WORKSPACE_TTL_MS = TimeUnit.HOURS.toMillis(24);
     
     /**
      * Sync mode options for shell testcases repository.
@@ -113,6 +121,77 @@ public class ShellTcSync {
             }
         }
     }
+
+    public Path prepareRequestWorkspace(Logger log, String requestId, String requestedBranch, String requestedCommit)
+            throws IOException, InterruptedException {
+        String safeRequestId = sanitizeRequestId(requestId);
+        String branch = normalizeRequestedBranch(requestedBranch);
+        String commit = requestedCommit == null ? "" : requestedCommit.trim();
+
+        Object lock = requestWorkspaceLocks.computeIfAbsent(safeRequestId, k -> new Object());
+        synchronized (lock) {
+            cleanupOldRequests();
+            Files.createDirectories(getShellTcRequestsRoot());
+
+            if (commit.isEmpty()) {
+                commit = resolveBranchHead(log, branch);
+            } else {
+                ensureBaseRepoHasCommit(log, branch, commit);
+            }
+
+            Path requestRoot = getRequestWorkspaceRoot(safeRequestId);
+            Path repoRoot = requestRoot.resolve("repo");
+            if (isReusableRequestWorkspace(repoRoot, commit)) {
+                syncedRequests.put(safeRequestId, System.currentTimeMillis());
+                log.fine("Reusing testcase workspace for request " + safeRequestId + ": " + repoRoot);
+                return repoRoot;
+            }
+
+            cleanupRequestWorkspaceInternal(log, safeRequestId);
+            createRequestWorkspace(log, safeRequestId, branch, commit);
+            syncedRequests.put(safeRequestId, System.currentTimeMillis());
+            return getRequestWorkspaceRoot(safeRequestId).resolve("repo");
+        }
+    }
+
+    public void cleanupRequestWorkspace(Logger log, String requestId) {
+        if (requestId == null || requestId.trim().isEmpty()) {
+            return;
+        }
+        String safeRequestId = sanitizeRequestId(requestId);
+        Object lock = requestWorkspaceLocks.computeIfAbsent(safeRequestId, k -> new Object());
+        synchronized (lock) {
+            cleanupRequestWorkspaceInternal(log, safeRequestId);
+        }
+        requestWorkspaceLocks.remove(safeRequestId);
+    }
+
+    public void cleanupStaleRequestWorkspaces(Logger log) {
+        cleanupStaleRequestWorkspaces(log, REQUEST_WORKSPACE_TTL_MS);
+    }
+
+    public void cleanupStaleRequestWorkspaces(Logger log, long staleAgeMillis) {
+        Path root = getShellTcRequestsRoot();
+        if (!Files.exists(root) || !Files.isDirectory(root)) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - Math.max(0L, staleAgeMillis);
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(root)) {
+            for (Path requestRoot : stream) {
+                if (!Files.isDirectory(requestRoot)) {
+                    continue;
+                }
+                long lastModified = Files.getLastModifiedTime(requestRoot).toMillis();
+                if (lastModified < cutoff) {
+                    String requestId = requestRoot.getFileName().toString();
+                    log.info("Cleaning stale testcase workspace for request " + requestId);
+                    cleanupRequestWorkspace(log, requestId);
+                }
+            }
+        } catch (Exception e) {
+            log.warning("Failed to cleanup stale testcase workspaces: " + e.getMessage());
+        }
+    }
     
     /**
      * Ensure the shell testcases repository at shell_tc_dir is checked out to the configured
@@ -146,6 +225,254 @@ public class ShellTcSync {
             
             doSync(log);
         }
+    }
+
+    private Path getShellTcRequestsRoot() {
+        return Paths.get(config.getShellTcRequestsRootDir()).toAbsolutePath().normalize();
+    }
+
+    private Path getRequestWorkspaceRoot(String safeRequestId) {
+        return getShellTcRequestsRoot().resolve(safeRequestId);
+    }
+
+    private String sanitizeRequestId(String requestId) {
+        String value = requestId == null ? "" : requestId.trim();
+        if (value.isEmpty()) {
+            value = "adhoc_" + System.currentTimeMillis();
+        }
+        return value.replaceAll("[^a-zA-Z0-9_.-]", "_");
+    }
+
+    private String normalizeRequestedBranch(String requestedBranch) {
+        String branch = requestedBranch == null ? "" : requestedBranch.trim();
+        if (!branch.isEmpty()) {
+            return branch;
+        }
+        String configured = config.getShellTcBranch();
+        if (configured == null || configured.trim().isEmpty()) {
+            return "develop";
+        }
+        return configured.trim();
+    }
+
+    private Path getBaseRepoRoot() {
+        return Paths.get(config.getShellTcDir()).toAbsolutePath().normalize();
+    }
+
+    private boolean isReusableRequestWorkspace(Path repoRoot, String commit) {
+        if (repoRoot == null || commit == null || commit.trim().isEmpty()) {
+            return false;
+        }
+        if (!Files.exists(repoRoot) || !Files.exists(repoRoot.resolve(".git"))) {
+            return false;
+        }
+        try {
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(repoRoot.toFile());
+            if (ProcessIO.runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
+                return false;
+            }
+            String head = runAndGetOutput(pb, "git", "rev-parse", "HEAD").trim();
+            return commit.equals(head);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void createRequestWorkspace(Logger log, String safeRequestId, String branch, String commit)
+            throws IOException, InterruptedException {
+        Path requestRoot = getRequestWorkspaceRoot(safeRequestId);
+        Path repoRoot = requestRoot.resolve("repo");
+        Path baseRepoRoot = getBaseRepoRoot();
+        Files.createDirectories(requestRoot);
+
+        ProcessBuilder basePb = new ProcessBuilder();
+        basePb.directory(baseRepoRoot.toFile());
+        ProcessIO.runAndExitCode(basePb, new String[]{"git", "worktree", "prune"});
+        ProcessIO.runOrThrow(basePb, new String[]{"git", "worktree", "add", "--force", "--detach", repoRoot.toString(), commit});
+
+        ProcessBuilder wtPb = new ProcessBuilder();
+        wtPb.directory(repoRoot.toFile());
+        ProcessIO.runOrThrow(wtPb, new String[]{"git", "reset", "--hard", commit});
+        ProcessIO.runOrThrow(wtPb, new String[]{"git", "clean", "-fdx"});
+        try {
+            ProcessIO.runOrThrow(wtPb, new String[]{"git", "submodule", "sync", "--recursive"});
+            ProcessIO.runOrThrow(wtPb, new String[]{"git", "submodule", "update", "--init", "--recursive", "--checkout", "--force"});
+        } catch (Exception e) {
+            log.fine("No testcase submodules to update for request " + safeRequestId + ": " + e.getMessage());
+        }
+
+        writeWorkspaceMetadata(requestRoot, branch, commit);
+        log.info("Prepared testcase workspace for request " + safeRequestId + " at " + repoRoot);
+    }
+
+    private void cleanupRequestWorkspaceInternal(Logger log, String safeRequestId) {
+        Path requestRoot = getRequestWorkspaceRoot(safeRequestId);
+        Path repoRoot = requestRoot.resolve("repo");
+        Path baseRepoRoot = getBaseRepoRoot();
+
+        try {
+            if (Files.exists(repoRoot)) {
+                ProcessBuilder basePb = new ProcessBuilder();
+                basePb.directory(baseRepoRoot.toFile());
+                ProcessIO.runAndExitCode(basePb, new String[]{"git", "worktree", "remove", "--force", repoRoot.toString()});
+                ProcessIO.runAndExitCode(basePb, new String[]{"git", "worktree", "prune"});
+            }
+        } catch (Exception e) {
+            log.warning("Failed to unregister testcase worktree for request " + safeRequestId + ": " + e.getMessage());
+        }
+
+        try {
+            if (Files.exists(requestRoot)) {
+                SafeIo.deleteDirectory(requestRoot.toFile());
+            }
+            if (Files.exists(requestRoot)) {
+                SafeIo.deleteDirectoryWithPrivileges(requestRoot.toFile(), log);
+            }
+        } catch (Exception e) {
+            log.warning("Failed to delete testcase workspace for request " + safeRequestId + ": " + e.getMessage());
+        }
+
+        syncedRequests.remove(safeRequestId);
+    }
+
+    private void writeWorkspaceMetadata(Path requestRoot, String branch, String commit) throws IOException {
+        JSONObject metadata = new JSONObject()
+            .put("branch", branch)
+            .put("commit", commit)
+            .put("createdAtMs", System.currentTimeMillis());
+        Files.write(requestRoot.resolve("metadata.json"), metadata.toString(2).getBytes("UTF-8"));
+    }
+
+    private String resolveBranchHead(Logger log, String branch) throws IOException, InterruptedException {
+        Path baseRepoRoot = getBaseRepoRoot();
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(baseRepoRoot.toFile());
+
+        String remote = selectRemoteForBranch(pb, branch);
+        log.info("Resolving testcase branch '" + branch + "' via remote '" + remote + "'");
+        ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", remote, branch});
+        String commit = runAndGetOutput(pb, "git", "rev-parse", "FETCH_HEAD").trim();
+        if (commit.isEmpty()) {
+            throw new IOException("Failed to resolve testcase branch head for " + branch);
+        }
+        return commit;
+    }
+
+    private void ensureBaseRepoHasCommit(Logger log, String branch, String commit) throws IOException, InterruptedException {
+        Path baseRepoRoot = getBaseRepoRoot();
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(baseRepoRoot.toFile());
+
+        if (ProcessIO.runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
+            throw new IOException("shell_tc_dir is not a git repository: " + baseRepoRoot);
+        }
+
+        if (isCommitAvailable(pb, commit)) {
+            return;
+        }
+
+        List<String> remotes = candidateRemotes(pb);
+        for (String remote : remotes) {
+            if (!remoteBranchExists(pb, remote, branch)) {
+                continue;
+            }
+            try {
+                log.info("Fetching testcase branch '" + branch + "' from remote '" + remote + "' to materialize commit " + abbreviateCommit(commit));
+                ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", remote, branch});
+                if (isCommitAvailable(pb, commit)) {
+                    return;
+                }
+            } catch (Exception e) {
+                log.warning("Failed to fetch testcase branch '" + branch + "' from " + remote + ": " + e.getMessage());
+            }
+        }
+
+        for (String remote : remotes) {
+            try {
+                log.info("Fetching testcase commit " + abbreviateCommit(commit) + " from remote '" + remote + "'");
+                ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", remote, commit});
+                if (isCommitAvailable(pb, commit)) {
+                    return;
+                }
+            } catch (Exception e) {
+                log.fine("Direct testcase commit fetch failed from " + remote + ": " + e.getMessage());
+            }
+        }
+
+        throw new IOException("Testcase commit " + commit + " is not available in tester base repo after fetch attempts");
+    }
+
+    private boolean isCommitAvailable(ProcessBuilder pb, String commit) throws IOException, InterruptedException {
+        if (commit == null || commit.trim().isEmpty()) {
+            return false;
+        }
+        return ProcessIO.runAndExitCode(pb, new String[]{"git", "cat-file", "-e", commit + "^{commit}"}) == 0;
+    }
+
+    private String selectRemoteForBranch(ProcessBuilder pb, String branch) throws IOException, InterruptedException {
+        String preferred = config.getShellTcPreferredRemote();
+        if (preferred == null || preferred.trim().isEmpty()) {
+            preferred = "upstream";
+        }
+        if (remoteExists(pb, preferred) && remoteBranchExists(pb, preferred, branch)) {
+            return preferred;
+        }
+        if (!"origin".equals(preferred) && remoteExists(pb, "origin") && remoteBranchExists(pb, "origin", branch)) {
+            return "origin";
+        }
+        if (!"upstream".equals(preferred) && remoteExists(pb, "upstream") && remoteBranchExists(pb, "upstream", branch)) {
+            return "upstream";
+        }
+        throw new IOException("Testcase branch '" + branch + "' not found on configured remotes");
+    }
+
+    private List<String> candidateRemotes(ProcessBuilder pb) throws IOException, InterruptedException {
+        LinkedHashSet<String> remotes = new LinkedHashSet<>();
+        String preferred = config.getShellTcPreferredRemote();
+        if (preferred != null && !preferred.trim().isEmpty()) {
+            remotes.add(preferred.trim());
+        }
+        remotes.add("origin");
+        remotes.add("upstream");
+
+        List<String> available = new ArrayList<>();
+        for (String remote : remotes) {
+            if (remoteExists(pb, remote)) {
+                available.add(remote);
+            }
+        }
+        return available;
+    }
+
+    private boolean remoteExists(ProcessBuilder pb, String remote) throws IOException, InterruptedException {
+        return ProcessIO.runAndExitCode(pb, new String[]{"git", "remote", "get-url", remote}) == 0;
+    }
+
+    private String abbreviateCommit(String commit) {
+        if (commit == null) {
+            return "unknown";
+        }
+        return commit.substring(0, Math.min(12, commit.length()));
+    }
+
+    private String runAndGetOutput(ProcessBuilder basePb, String... cmd) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.directory(basePb.directory());
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append('\n');
+            }
+        }
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            throw new IOException("Command failed (" + exitCode + "): " + String.join(" ", cmd));
+        }
+        return output.toString();
     }
     
     /**

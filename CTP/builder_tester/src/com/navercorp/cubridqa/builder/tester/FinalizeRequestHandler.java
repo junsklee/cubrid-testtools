@@ -1,6 +1,7 @@
 package com.navercorp.cubridqa.builder.tester;
 
 import com.navercorp.cubridqa.builder.http.HttpUtils;
+import com.navercorp.cubridqa.builder.git.ShellTcSync;
 import com.navercorp.cubridqa.builder.tester.stats.TestStatsStore;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -20,10 +21,12 @@ public class FinalizeRequestHandler implements HttpHandler {
     private static final Logger logger = Logger.getLogger(FinalizeRequestHandler.class.getName());
 
     private final TestStatsStore testStatsStore;
+    private final ShellTcSync shellTcSync;
     private final HttpResponseWriter responseWriter;
 
-    public FinalizeRequestHandler(TestStatsStore testStatsStore) {
+    public FinalizeRequestHandler(TestStatsStore testStatsStore, ShellTcSync shellTcSync) {
         this.testStatsStore = testStatsStore;
+        this.shellTcSync = shellTcSync;
         this.responseWriter = new HttpResponseWriter();
     }
 
@@ -43,6 +46,9 @@ public class FinalizeRequestHandler implements HttpHandler {
 
             // Flush the request journal
             testStatsStore.flushRequestJournal(requestId);
+            if (shellTcSync != null) {
+                shellTcSync.cleanupRequestWorkspace(logger, requestId);
+            }
 
             JSONObject response = new JSONObject()
                 .put("status", "success")

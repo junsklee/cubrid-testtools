@@ -1280,6 +1280,36 @@
                                 <div class="card-value" id="workerIps">-</div>
                             </div>
                         </div>
+
+                        <div class="execution-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M3 7L12 3L21 7L12 11L3 7Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M3 17L12 21L21 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M3 12L12 16L21 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">TC Branch</div>
+                                <div class="card-value" id="shellTcBranch">-</div>
+                            </div>
+                        </div>
+
+                        <div class="execution-card">
+                            <div class="card-icon">
+                                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M9 12L11 14L15 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="card-content">
+                                <div class="card-label">TC Commit</div>
+                                <div class="card-value">
+                                    <a id="shellTcCommitLink" href="#" target="_blank" rel="noopener noreferrer"
+                                       style="color: inherit; text-decoration: none;">-</a>
+                                </div>
+                            </div>
+                        </div>
                         
                         <!-- Baseline Commit Section -->
                         <div class="execution-card" id="baselineCommitSection" style="display: none;">
@@ -1442,9 +1472,10 @@
         </div>
     </div>
     
+    <script id="report-data" type="application/json">{{RESULTS_JSON}}</script>
     <script>
         // Parse the embedded JSON data
-        const rawData = {{RESULTS_JSON}};
+        const rawData = JSON.parse(document.getElementById('report-data').textContent);
         const commitBuildMode = rawData.commitBuildMode || 'baseline_cherrypick';
         const buildOnlyMode = rawData.buildOnly || rawData.buildOnlyMode || false;
         let processedData = {};
@@ -1565,6 +1596,16 @@
             document.getElementById('buildType').textContent = rawData.buildType || 'release';
             document.getElementById('minRuns').textContent = rawData.minRuns || '1';
             document.getElementById('maxRuns').textContent = rawData.maxRuns || '2';
+            document.getElementById('shellTcBranch').textContent = rawData.shellTcBranch || '-';
+
+            const shellTcCommitLink = document.getElementById('shellTcCommitLink');
+            if (rawData.shellTcCommit) {
+                shellTcCommitLink.href = `https://github.com/CUBRID/cubrid-testcases-private-ex/commit/${rawData.shellTcCommit}`;
+                shellTcCommitLink.textContent = rawData.shellTcCommit.substring(0, 12);
+            } else {
+                shellTcCommitLink.href = '#';
+                shellTcCommitLink.textContent = '-';
+            }
             
             // Display worker IPs
             if (rawData.workerIps && rawData.workerIps.length > 0) {
@@ -2491,25 +2532,110 @@
                 alert('Error loading test log.');
             }
         }
-        
+
+        function getSafeTestNameForLogs(testName) {
+            const testScript = testName.substring(testName.lastIndexOf('/') + 1);
+            const extractedTestName = testScript.replace('.sh', '');
+            return extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        }
+
+        function escapeRegExp(text) {
+            return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function getCommitLabel(commit) {
+            if (commit === null || commit === undefined) return '';
+            const commitText = String(commit);
+            return commitText.substring(0, Math.min(7, commitText.length));
+        }
+
+        function getCommitOrderIndex() {
+            const commitOrderIndex = new Map();
+            const providedOrder = Array.isArray(rawData.commitOrder) ? rawData.commitOrder : null;
+            const orderSource = (providedOrder && providedOrder.length > 0) ? providedOrder : commits;
+            if (Array.isArray(orderSource)) {
+                orderSource.forEach((sha, idx) => {
+                    const shortSha = getCommitLabel(sha);
+                    if (shortSha && !commitOrderIndex.has(shortSha)) {
+                        commitOrderIndex.set(shortSha, idx);
+                    }
+                });
+            }
+            return commitOrderIndex;
+        }
+
+        function collectAttemptLogEntries(testName, availableFiles) {
+            const entries = [];
+            const fileSet = new Set(Array.isArray(availableFiles) ? availableFiles : []);
+            const testResults = processedData && processedData[testName] ? processedData[testName] : null;
+
+            if (testResults) {
+                Object.keys(testResults).forEach(fullCommit => {
+                    const result = testResults[fullCommit];
+                    if (!result || typeof result !== 'object' || !Array.isArray(result.attemptLogMetadata)) {
+                        return;
+                    }
+                    const commitLabel = getCommitLabel(fullCommit);
+                    result.attemptLogMetadata.forEach(meta => {
+                        if (!meta || !meta.logFileName) return;
+                        if (fileSet.size > 0 && !fileSet.has(meta.logFileName)) return;
+                        entries.push({
+                            commit: commitLabel,
+                            file: meta.logFileName,
+                            attempt: meta.attempt ? parseInt(meta.attempt, 10) : 1,
+                            status: meta.status || 'unknown'
+                        });
+                    });
+                });
+            }
+
+            if (entries.length > 0) {
+                return entries;
+            }
+
+            const safeTestName = getSafeTestNameForLogs(testName);
+            const commitLabels = Array.isArray(commits) ? commits.map(getCommitLabel).filter(Boolean) : [];
+            const prefixes = ['docker_opt_', 'docker_', 'direct_', 'test_'];
+
+            (availableFiles || []).forEach(file => {
+                let matchedCommit = null;
+                for (const prefix of prefixes) {
+                    for (const commitLabel of commitLabels) {
+                        const baseName = prefix + commitLabel + '_' + safeTestName;
+                        const attemptMatch = file.match(new RegExp('^' + escapeRegExp(baseName) + '(?:\\.(\\d+))?\\.log$'));
+                        if (attemptMatch) {
+                            matchedCommit = commitLabel;
+                            entries.push({
+                                commit: commitLabel,
+                                file: file,
+                                attempt: attemptMatch[1] ? parseInt(attemptMatch[1], 10) : 1,
+                                status: 'unknown'
+                            });
+                            break;
+                        }
+                    }
+                    if (matchedCommit) break;
+                }
+            });
+
+            return entries;
+        }
+
         // Show multiple log file options for tests across commits and attempts
         function showMultipleLogOptions(testName, clickedCommitShort, logFiles, requestId) {
             const testScript = testName.substring(testName.lastIndexOf('/') + 1);
             
-            // Parse and group log files by commit and attempt
             const logGroups = {};
-            logFiles.forEach(file => {
-                // Extract commit and attempt from filename (e.g., docker_opt_b8505c4_cbrd_25894.2.log)
-                const match = file.match(/.*_([a-f0-9]{7})_.*?(?:\.(\d+))?\.log$/);
-                if (match) {
-                    const commit = match[1];
-                    const attempt = match[2] ? parseInt(match[2]) : 1;
-                    
-                    if (!logGroups[commit]) {
-                        logGroups[commit] = [];
-                    }
-                    logGroups[commit].push({ file, attempt });
+            const attemptEntries = collectAttemptLogEntries(testName, logFiles);
+
+            attemptEntries.forEach(entry => {
+                if (!entry.commit) {
+                    return;
                 }
+                if (!logGroups[entry.commit]) {
+                    logGroups[entry.commit] = [];
+                }
+                logGroups[entry.commit].push(entry);
             });
             
             // Sort commits and attempts
@@ -2520,21 +2646,29 @@
             let content = '<div style="padding: 1.5rem;">';
             content += '<h3>Test Execution Logs: ' + testScript + '</h3>';
             content += '<p style="margin-bottom: 1rem;">Multiple execution logs found across commits and attempts:</p>';
+
+            if (Object.keys(logGroups).length === 0) {
+                content += '<p style="color: #b45309; margin-bottom: 1rem;">Log files were found, but they could not be mapped to attempts for this test.</p>';
+                if (Array.isArray(logFiles) && logFiles.length > 0) {
+                    logFiles.forEach(file => {
+                        content += '<div style="margin-bottom: 0.5rem;">';
+                        content += '<button onclick="loadSpecificTestLog(\'' + requestId + '\', \'' + file + '\', \'' + testName + '\', \'' + clickedCommitShort + '\', 1)" ';
+                        content += 'style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; background: #f9fafb; color: #374151; ';
+                        content += 'border-radius: 0.25rem; cursor: pointer; text-align: left; font-family: monospace; font-size: 0.85rem;">';
+                        content += file;
+                        content += '</button>';
+                        content += '</div>';
+                    });
+                }
+                content += '</div>';
+                document.getElementById('modalTitle').textContent = 'Multiple Test Logs Available';
+                document.getElementById('modalBody').innerHTML = content;
+                document.getElementById('detailModal').style.display = 'block';
+                return;
+            }
             
             // Group by commit
-            const commitOrderIndex = new Map();
-            const providedOrder = Array.isArray(rawData.commitOrder) ? rawData.commitOrder : null;
-            const orderSource = (providedOrder && providedOrder.length > 0) ? providedOrder : commits;
-            if (Array.isArray(orderSource)) {
-                orderSource.forEach((sha, idx) => {
-                    if (typeof sha !== 'string') return;
-                    const shortSha = sha.substring(0, 7);
-                    // In the extremely rare case of prefix collisions, keep the earliest index
-                    if (!commitOrderIndex.has(shortSha)) {
-                        commitOrderIndex.set(shortSha, idx);
-                    }
-                });
-            }
+            const commitOrderIndex = getCommitOrderIndex();
             
             const sortedCommits = Object.keys(logGroups).sort((a, b) => {
                 const ai = commitOrderIndex.has(a) ? commitOrderIndex.get(a) : Number.MAX_SAFE_INTEGER;
@@ -2553,19 +2687,7 @@
                 if (isClickedCommit) content += ' <span style="font-size: 0.8rem;">(clicked)</span>';
                 content += '</h4>';
                 
-                // Get attempt metadata for this commit if available
-                const metadata = getAttemptMetadata(testName, commit);
-                
-                logGroups[commit].forEach(({ file, attempt }) => {
-                    // Try to find status from metadata
-                    let status = 'unknown';
-                    if (metadata) {
-                        const attemptData = metadata.find(m => m.attempt === attempt);
-                        if (attemptData && attemptData.status) {
-                            status = attemptData.status;
-                        }
-                    }
-                    
+                logGroups[commit].forEach(({ file, attempt, status }) => {
                     const colors = getStatusColors(status);
                     
                     content += '<div style="margin-bottom: 0.5rem;">';

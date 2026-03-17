@@ -1,6 +1,7 @@
 package com.navercorp.cubridqa.builder.tester;
 
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
+import com.navercorp.cubridqa.builder.git.ShellTcSync;
 import com.navercorp.cubridqa.builder.http.HttpUtils;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.sun.net.httpserver.HttpExchange;
@@ -23,6 +24,11 @@ import java.util.logging.Logger;
 public class CancelRequestHandler implements HttpHandler {
     private static final Logger logger = Logger.getLogger(CancelRequestHandler.class.getName());
     private final HttpResponseWriter responseWriter = new HttpResponseWriter();
+    private final ShellTcSync shellTcSync;
+
+    public CancelRequestHandler(ShellTcSync shellTcSync) {
+        this.shellTcSync = shellTcSync;
+    }
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
@@ -48,6 +54,9 @@ public class CancelRequestHandler implements HttpHandler {
                 CancelledRequests.cancel(requestId);
                 logger.info("Marked request as cancelled: " + requestId);
                 deleteRequestLogs(requestId);
+                if (shellTcSync != null) {
+                    shellTcSync.cleanupRequestWorkspace(logger, requestId);
+                }
             }
 
             if (!DockerUtils.isDockerAvailable()) {

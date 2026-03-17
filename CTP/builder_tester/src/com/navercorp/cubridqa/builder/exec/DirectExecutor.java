@@ -74,14 +74,6 @@ public class DirectExecutor implements ExecutorStrategy {
                 metricsBuilder, startNs);
         }
 
-        // Ensure shell testcases repository is on the requested branch (once per request)
-        try {
-            String requestId = RequestContext.getRequestId();
-            shellTcSync.syncOncePerRequest(testLogger, requestId);
-        } catch (Exception e) {
-            testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
-        }
-        
         // Install CUBRID
         Path installDir = null;
         try {
@@ -122,12 +114,26 @@ public class DirectExecutor implements ExecutorStrategy {
         Path sourceTestDir;
         try {
             Path shellRepoRoot = Paths.get(config.getShellTcDir()).toAbsolutePath().normalize();
+            if (!"custom_script_test".equals(request.getTestPath())) {
+                shellRepoRoot = shellTcSync.prepareRequestWorkspace(
+                    testLogger,
+                    request.getRequestId(),
+                    request.getShellTcBranch(),
+                    request.getShellTcCommit()
+                );
+            }
             sourceTestDir = TestDirectoryResolver.resolve(shellRepoRoot, request, testLogger);
         } catch (IllegalArgumentException e) {
             return finalizeResult(TestResult.builder()
                 .testName(request.getTestName())
                 .status(TestStatus.ENVIRONMENT_ERROR)
                 .message(e.getMessage()),
+                metricsBuilder, startNs);
+        } catch (Exception e) {
+            return finalizeResult(TestResult.builder()
+                .testName(request.getTestName())
+                .status(TestStatus.ENVIRONMENT_ERROR)
+                .message("Failed to prepare testcase workspace: " + e.getMessage()),
                 metricsBuilder, startNs);
         }
 

@@ -535,6 +535,10 @@ public class BuilderConfig {
     public String getWorkDir() {
         return properties.getProperty(WORK_DIR, "/tmp/builder_work");
     }
+
+    public String getShellTcRequestsRootDir() {
+        return Paths.get(getWorkDir()).resolve("shell_tc_requests").toString();
+    }
     
     public int getTesterPort() {
         return Integer.parseInt(properties.getProperty(TESTER_PORT, "8090"));

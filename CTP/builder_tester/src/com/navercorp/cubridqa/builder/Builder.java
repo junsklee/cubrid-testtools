@@ -30,6 +30,7 @@ public class Builder {
     // The builder runs build requests sequentially: at most 1 BuilderTask at a time.
     // (We still keep an explicit queue for additional requests.)
     private static final int MAX_CONCURRENT_REQUESTS = 1;
+    private static final String DEFAULT_CUBRID_BRANCH = "develop";
     // Supported shell testcase roots (request "tests" must start with one of these)
     private static final String[] ALLOWED_SHELL_TEST_ROOTS = new String[] { "shell/", "shell_heavy/", "shell_perf/" };
     // Custom script attachments safety limits (JSON base64 payloads)
@@ -720,6 +721,8 @@ public class Builder {
     
     private void validateRequest(JSONObject request) throws IllegalArgumentException {
         boolean buildOnly = request.optBoolean("buildOnly", false);
+        normalizeCubridBranch(request);
+        normalizeShellTcBranch(request, buildOnly);
         boolean hasCommits = request.has("commits") && request.getJSONArray("commits").length() > 0;
         boolean hasPrNumber = request.has("prNumber") && (
             (request.get("prNumber") instanceof Number && ((Number) request.get("prNumber")).intValue() > 0) ||
@@ -820,6 +823,74 @@ public class Builder {
         if (!buildOnly && !hasWorkerIp && !hasWorkerIps) {
             throw new IllegalArgumentException("Request must contain either non-empty 'workerIp' or non-empty 'workerIps' array");
         }
+    }
+
+    private String normalizeCubridBranch(JSONObject request) {
+        String cubridBranch = request.optString("cubridBranch", DEFAULT_CUBRID_BRANCH).trim();
+        if (cubridBranch.isEmpty()) {
+            cubridBranch = DEFAULT_CUBRID_BRANCH;
+        }
+        String error = validateGitRefName(cubridBranch);
+        if (error != null) {
+            throw new IllegalArgumentException("Invalid cubridBranch '" + cubridBranch + "': " + error);
+        }
+        request.put("cubridBranch", cubridBranch);
+        return cubridBranch;
+    }
+
+    private String normalizeShellTcBranch(JSONObject request, boolean buildOnly) {
+        if (buildOnly && !request.has("shellTcBranch")) {
+            return null;
+        }
+        String defaultShellTcBranch = config.getShellTcBranch();
+        if (defaultShellTcBranch == null || defaultShellTcBranch.trim().isEmpty()) {
+            defaultShellTcBranch = "develop";
+        }
+        String shellTcBranch = request.optString("shellTcBranch", defaultShellTcBranch).trim();
+        if (shellTcBranch.isEmpty()) {
+            shellTcBranch = defaultShellTcBranch;
+        }
+        String error = validateGitRefName(shellTcBranch);
+        if (error != null) {
+            throw new IllegalArgumentException("Invalid shellTcBranch '" + shellTcBranch + "': " + error);
+        }
+        request.put("shellTcBranch", shellTcBranch);
+        return shellTcBranch;
+    }
+
+    private String validateGitRefName(String branch) {
+        String v = branch == null ? "" : branch.trim();
+        if (v.isEmpty()) {
+            return "branch is required";
+        }
+        if ("@".equals(v)) {
+            return "branch cannot be '@'";
+        }
+        if (v.startsWith("-")) {
+            return "branch cannot start with '-'";
+        }
+        if (v.startsWith("/") || v.endsWith("/")) {
+            return "branch cannot start or end with '/'";
+        }
+        if (v.startsWith(".") || v.endsWith(".")) {
+            return "branch cannot start or end with '.'";
+        }
+        if (v.endsWith(".lock")) {
+            return "branch cannot end with '.lock'";
+        }
+        if (v.contains("..")) {
+            return "branch cannot contain '..'";
+        }
+        if (v.contains("//")) {
+            return "branch cannot contain '//'";
+        }
+        if (v.contains("@{")) {
+            return "branch cannot contain '@{'";
+        }
+        if (v.matches(".*[\\x00-\\x20~\\^:?*\\[\\\\].*")) {
+            return "branch contains unsupported characters";
+        }
+        return null;
     }
 
     private void validateBuildUpload(JSONObject request) {

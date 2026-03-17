@@ -30,6 +30,8 @@ public class TestRequest {
     private final PredictedDemand predictedDemand;  // Resource predictions for enforcement
     private final String customShellScript;  // Custom script contents to execute instead of test
     private final List<CustomAttachment> customAttachments; // Additional files for custom script mode
+    private final String shellTcBranch; // Request-scoped testcase branch selection
+    private final String shellTcCommit; // Exact testcase commit resolved by Builder
 
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
@@ -52,6 +54,8 @@ public class TestRequest {
         this.buildType = json.optString("buildType", "release");
         this.customShellScript = json.optString("customShellScript", null);
         this.customAttachments = parseCustomAttachments(json);
+        this.shellTcBranch = json.optString("shellTcBranch", null);
+        this.shellTcCommit = json.optString("shellTcCommit", null);
 
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
@@ -117,4 +121,6 @@ public class TestRequest {
     public boolean hasCustomShellScript() { return customShellScript != null && !customShellScript.isEmpty(); }
     public List<CustomAttachment> getCustomAttachments() { return customAttachments; }
     public boolean hasCustomAttachments() { return customAttachments != null && !customAttachments.isEmpty(); }
+    public String getShellTcBranch() { return shellTcBranch; }
+    public String getShellTcCommit() { return shellTcCommit; }
 }

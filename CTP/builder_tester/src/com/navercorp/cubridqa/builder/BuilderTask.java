@@ -44,6 +44,7 @@ public class BuilderTask {
     private static final String COMMIT_BUILD_MODE_BASELINE_CHERRYPICK = "baseline_cherrypick";
     private static final String COMMIT_BUILD_MODE_CHECKOUT = "checkout";
     private static final String CHECKOUT_BASELINE_KEY = "history";
+    private static final String DEFAULT_CUBRID_BRANCH = "develop";
 
     private static boolean isValidCommitBuildMode(String value) {
         return COMMIT_BUILD_MODE_BASELINE_CHERRYPICK.equals(value) || COMMIT_BUILD_MODE_CHECKOUT.equals(value);
@@ -53,6 +54,20 @@ public class BuilderTask {
         if (raw == null) return null;
         String value = String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
         return isValidCommitBuildMode(value) ? value : null;
+    }
+
+    private String getCubridBranch() {
+        String cubridBranch = request.optString("cubridBranch", DEFAULT_CUBRID_BRANCH).trim();
+        return cubridBranch.isEmpty() ? DEFAULT_CUBRID_BRANCH : cubridBranch;
+    }
+
+    private String getShellTcBranch() {
+        String configuredDefault = config.getShellTcBranch();
+        if (configuredDefault == null || configuredDefault.trim().isEmpty()) {
+            configuredDefault = "develop";
+        }
+        String shellTcBranch = request.optString("shellTcBranch", configuredDefault).trim();
+        return shellTcBranch.isEmpty() ? configuredDefault : shellTcBranch;
     }
 
     // Progress tracking for dashboard
@@ -117,6 +132,8 @@ public class BuilderTask {
             boolean buildOnly = request.optBoolean("buildOnly", false);
             JSONArray tests = buildOnly ? new JSONArray() : request.getJSONArray("tests");
             String buildType = request.optString("buildType", "release");
+            boolean hasCustomShellScript = request.has("customShellScript") &&
+                                           !request.optString("customShellScript", "").trim().isEmpty();
 
             // Initialize progress totals
             this.buildsTotal = request.has("prNumber") ? 1 : commits.length();
@@ -150,6 +167,16 @@ public class BuilderTask {
             }
 
             String callbackUrl = request.getString("callbackUrl");
+            String cubridBranch = getCubridBranch();
+            taskLogger.info("Using CUBRID branch: " + cubridBranch);
+            ShellTcResolution shellTcResolution = null;
+            if (!buildOnly) {
+                shellTcResolution = resolveShellTcReference();
+                taskLogger.info(String.format("Using shell testcase branch %s at commit %s via remote %s",
+                    shellTcResolution.branch,
+                    shellTcResolution.commit.substring(0, Math.min(12, shellTcResolution.commit.length())),
+                    shellTcResolution.remote));
+            }
 
             // Initialize WorkloadDistributor with all nodes (including localhost)
             // Format: "host:port" - add default builder port if not specified
@@ -187,7 +214,18 @@ public class BuilderTask {
             }
             
             // Ensure CUBRID source repository is set up
-            setupCubridRepository();
+            setupCubridRepository(cubridBranch);
+
+            // Custom-script requests were the only mode still persisting branch
+            // names like "develop" into reports and log metadata.
+            if (hasCustomShellScript && prNumber == null && commits != null && commits.length() > 0) {
+                commits = normalizeCommitReferences(commits);
+                request.put("commits", commits);
+            }
+
+            if (!buildOnly) {
+                persistRequestMetadataSnapshot(requestId);
+            }
 
             // Request override: prefer commitBuildMode (string) everywhere. Keep use_baseline_cherrypick as a backward-compatible alias.
             this.commitBuildMode = config.getCommitBuildMode();
@@ -223,11 +261,12 @@ public class BuilderTask {
             this.currentPhase = "building";
             Map<String, String> builtPackages;
             if (prNumber != null) {
-                // Resolve PR head and baseline (merge-base against develop)
-                PRResolution pr = resolvePullRequest(prNumber);
+                // Resolve PR head and baseline (merge-base against selected CUBRID branch)
+                PRResolution pr = resolvePullRequest(prNumber, cubridBranch);
                 this.baselineCommit = pr.baselineSha;
                 this.baselineKey = pr.baselineSha;
-                taskLogger.info(String.format("Resolved PR #%d → head=%s, baseline=%s", prNumber,
+                taskLogger.info(String.format("Resolved PR #%d against branch %s → head=%s, baseline=%s", prNumber,
+                    cubridBranch,
                     pr.headSha.substring(0, Math.min(7, pr.headSha.length())),
                     pr.baselineSha.substring(0, Math.min(7, pr.baselineSha.length()))));
 
@@ -427,7 +466,90 @@ public class BuilderTask {
         }
     }
 
-    private PRResolution resolvePullRequest(int prNumber) {
+    private static class ShellTcResolution {
+        final String branch;
+        final String commit;
+        final String remote;
+
+        ShellTcResolution(String branch, String commit, String remote) {
+            this.branch = branch;
+            this.commit = commit;
+            this.remote = remote;
+        }
+    }
+
+    private ShellTcResolution resolveShellTcReference() {
+        try {
+            File repoRoot = new File(config.getShellTcDir());
+            if (!repoRoot.exists() || !repoRoot.isDirectory()) {
+                throw new RuntimeException("shell_tc_dir does not exist: " + repoRoot.getAbsolutePath());
+            }
+
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(repoRoot);
+
+            String branch = getShellTcBranch();
+            String insideWorkTree = executeCommandAndGetOutput(pb, "git", "rev-parse", "--is-inside-work-tree").trim();
+            if (!"true".equalsIgnoreCase(insideWorkTree)) {
+                throw new RuntimeException("shell_tc_dir is not a git repository: " + repoRoot.getAbsolutePath());
+            }
+
+            String remote = selectShellTcRemote(pb, branch);
+            taskLogger.info(String.format("Resolving shell testcase branch '%s' via remote '%s'", branch, remote));
+            executeCommand(pb, "git", "fetch", remote, branch);
+            String commit = executeCommandAndGetOutput(pb, "git", "rev-parse", "FETCH_HEAD").trim();
+            if (commit.isEmpty()) {
+                throw new RuntimeException("Failed to resolve testcase commit for branch " + branch);
+            }
+            executeCommand(pb, "git", "cat-file", "-e", commit + "^{commit}");
+
+            request.put("shellTcBranch", branch);
+            request.put("shellTcCommit", commit);
+            return new ShellTcResolution(branch, commit, remote);
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to resolve testcase branch reference: " + e.getMessage(), e);
+        }
+    }
+
+    private String selectShellTcRemote(ProcessBuilder pb, String branch) {
+        String preferred = config.getShellTcPreferredRemote();
+        if (preferred == null || preferred.trim().isEmpty()) {
+            preferred = "upstream";
+        }
+
+        if (shellTcRemoteExists(pb, preferred) && shellTcRemoteBranchExists(pb, preferred, branch)) {
+            return preferred;
+        }
+        if (!"origin".equals(preferred) && shellTcRemoteExists(pb, "origin") && shellTcRemoteBranchExists(pb, "origin", branch)) {
+            return "origin";
+        }
+        if (!"upstream".equals(preferred) && shellTcRemoteExists(pb, "upstream") && shellTcRemoteBranchExists(pb, "upstream", branch)) {
+            return "upstream";
+        }
+        throw new RuntimeException("Testcase branch '" + branch + "' not found on configured remotes");
+    }
+
+    private boolean shellTcRemoteExists(ProcessBuilder pb, String remote) {
+        try {
+            executeCommand(pb, "git", "remote", "get-url", remote);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean shellTcRemoteBranchExists(ProcessBuilder pb, String remote, String branch) {
+        try {
+            String out = executeCommandAndGetOutput(pb, "git", "ls-remote", "--heads", remote, branch);
+            return out != null && !out.trim().isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private PRResolution resolvePullRequest(int prNumber, String cubridBranch) {
         try {
             File repoRoot = new File(config.getCubridSrcDir());
             ProcessBuilder pb = new ProcessBuilder();
@@ -465,10 +587,10 @@ public class BuilderTask {
                 throw new RuntimeException("Failed to resolve head SHA for PR branch: " + prBranch);
             }
 
-            // Compute baseline as merge-base with develop; fallback to parent
+            // Compute baseline as merge-base with the selected CUBRID branch; fallback to parent
             String baseline;
             try {
-                baseline = executeCommandAndGetOutput(pb, "git", "merge-base", headSha, "develop").trim();
+                baseline = executeCommandAndGetOutput(pb, "git", "merge-base", headSha, cubridBranch).trim();
                 if (baseline.isEmpty()) throw new RuntimeException("empty");
             } catch (Exception e) {
                 try {
@@ -946,6 +1068,26 @@ public class BuilderTask {
             }
         } catch (Exception ignore) { }
         return commit;
+    }
+
+    private JSONArray normalizeCommitReferences(JSONArray commits) {
+        JSONArray normalized = new JSONArray();
+        if (commits == null) {
+            return normalized;
+        }
+
+        for (int i = 0; i < commits.length(); i++) {
+            String original = String.valueOf(commits.get(i));
+            String resolved = resolveFullCommitHashSafe(original);
+            if (!Objects.equals(original, resolved)) {
+                taskLogger.info(String.format("Normalized commit ref %s -> %s",
+                    original,
+                    resolved.substring(0, Math.min(12, resolved.length()))));
+            }
+            normalized.put(resolved);
+        }
+
+        return normalized;
     }
 
 
@@ -1625,6 +1767,8 @@ public class BuilderTask {
             // Extract custom script from build request if present
             String customShellScript = request.optString("customShellScript", null);
             String customScriptTestPath = request.optString("customScriptTestPath", null);
+            String shellTcBranch = request.optString("shellTcBranch", null);
+            String shellTcCommit = request.optString("shellTcCommit", null);
             JSONArray customAttachments = null;
             if (request.has("customAttachments")) {
                 try {
@@ -1748,6 +1892,12 @@ public class BuilderTask {
             // Add custom attachments (base64 payloads) if provided
             if (customAttachments != null && customAttachments.length() > 0) {
                 testRequest.put("customAttachments", customAttachments);
+            }
+            if (shellTcBranch != null && !shellTcBranch.trim().isEmpty()) {
+                testRequest.put("shellTcBranch", shellTcBranch);
+            }
+            if (shellTcCommit != null && !shellTcCommit.trim().isEmpty()) {
+                testRequest.put("shellTcCommit", shellTcCommit);
             }
 
             // Persist test request for diagnostics
@@ -2189,7 +2339,7 @@ public class BuilderTask {
         }
     }
     
-    private void setupCubridRepository() throws Exception {
+    private void setupCubridRepository(String cubridBranch) throws Exception {
         File srcDir = new File(config.getCubridSrcDir());
         
         if (!srcDir.exists()) {
@@ -2213,17 +2363,34 @@ public class BuilderTask {
             try { executeCommand(pb, "git", "fetch", "origin"); } catch (Exception ignore) {}
         }
         
-        // Checkout develop branch
+        // Checkout the selected CUBRID branch, preferring an up-to-date remote ref.
+        boolean checkedOut = false;
         try {
-            executeCommand(pb, "git", "checkout", "develop");
-        } catch (Exception e) {
-            executeCommand(pb, "git", "checkout", "-b", "develop", "origin/develop");
+            executeCommand(pb, "git", "checkout", "-B", cubridBranch, "origin/" + cubridBranch);
+            checkedOut = true;
+            taskLogger.info("Checked out CUBRID branch from origin/" + cubridBranch);
+        } catch (Exception originEx) {
+            try {
+                executeCommand(pb, "git", "checkout", "-B", cubridBranch, "upstream/" + cubridBranch);
+                checkedOut = true;
+                taskLogger.info("Checked out CUBRID branch from upstream/" + cubridBranch);
+            } catch (Exception upstreamEx) {
+                try {
+                    executeCommand(pb, "git", "checkout", cubridBranch);
+                    checkedOut = true;
+                    taskLogger.warning("Falling back to existing local branch checkout: " + cubridBranch);
+                } catch (Exception localEx) {
+                    throw new RuntimeException("Failed to checkout CUBRID branch '" + cubridBranch + "'", localEx);
+                }
+            }
         }
-        
-        executeCommand(pb, "git", "pull", "origin", "develop");
+
+        if (!checkedOut) {
+            throw new RuntimeException("Failed to prepare CUBRID repository for branch '" + cubridBranch + "'");
+        }
         executeCommand(pb, "git", "submodule", "update", "--init", "--recursive");
         
-        taskLogger.info("CUBRID repository ready");
+        taskLogger.info("CUBRID repository ready on branch: " + cubridBranch);
     }
     
     /**
@@ -2432,6 +2599,31 @@ public class BuilderTask {
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Failed to send error callback", e);
         }
+    }
+
+    private void persistRequestMetadataSnapshot(String requestId) {
+        if (requestId == null || requestId.trim().isEmpty() || !config.isRequestGroupingEnabled()) {
+            return;
+        }
+        try {
+            Path requestDir = RequestLogManager.getInstance().getRequestLogDirectory(requestId);
+            Files.createDirectories(requestDir);
+            Path requestFile = requestDir.resolve("request.json");
+            Files.write(requestFile, sanitizeRequestForLog(request).toString(2).getBytes("UTF-8"));
+        } catch (Exception e) {
+            taskLogger.warning("Failed to update request metadata snapshot: " + e.getMessage());
+        }
+    }
+
+    private JSONObject sanitizeRequestForLog(JSONObject original) {
+        JSONObject sanitized = new JSONObject(original.toString());
+        if (sanitized.has("buildUpload")) {
+            Object raw = sanitized.get("buildUpload");
+            if (raw instanceof JSONObject) {
+                ((JSONObject) raw).put("password", "***");
+            }
+        }
+        return sanitized;
     }
     
     private void executeCommand(ProcessBuilder pb, String... command) 

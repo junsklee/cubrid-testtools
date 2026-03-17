@@ -3,6 +3,7 @@ package com.navercorp.cubridqa.builder.tester;
 import com.navercorp.cubridqa.builder.BuilderConfig;
 import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
 import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
+import com.navercorp.cubridqa.builder.git.ShellTcSync;
 import com.navercorp.cubridqa.builder.logging.LogConfig;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.logs.LogLocator;
@@ -44,6 +45,7 @@ public class TesterService {
         // Initialize utilities
         this.responseWriter = new HttpResponseWriter();
         this.logLocator = new LogLocator();
+        ShellTcSync shellTcSync = new ShellTcSync(config);
         
         // Initialize API server
         this.apiServer = new ApiServer(config);
@@ -57,7 +59,7 @@ public class TesterService {
         ActualSampler actualSampler = new ActualSampler(config);
         this.apiServer.registerHandler("/health", new HealthHandler(config, responseWriter, dummyCapacity, dummyOrchestrator, actualSampler));
         this.apiServer.registerHandler("/log/", new LogStreamHandler(logLocator, responseWriter));
-        this.apiServer.registerHandler("/cancel-request", new CancelRequestHandler());
+        this.apiServer.registerHandler("/cancel-request", new CancelRequestHandler(shellTcSync));
         
         // Create work directory if it doesn't exist
         File workDir = new File(config.getWorkDir());

@@ -53,7 +53,6 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         testLogger.info("Docker work dir: " + dockerWorkDir.toString());
 
-        Path shellRepoRoot = Paths.get(config.getShellTcDir()).toAbsolutePath().normalize();
         Path ctpSourceRoot = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP").toAbsolutePath().normalize();
         Path ctpWorkRoot = dockerWorkDir.resolve("CTP");
         stageCtpResources(ctpSourceRoot, ctpWorkRoot, testLogger);
@@ -92,14 +91,26 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 metricsBuilder, startNs, "docker", null);
         }
 
-        // Ensure shell testcases repository is on the requested branch (once per request)
-        try {
-            String requestId = RequestContext.getRequestId();
-            shellTcSync.syncOncePerRequest(testLogger, requestId);
-        } catch (Exception e) {
-            testLogger.warning("Failed to sync shell testcases repo: " + e.getMessage());
+        boolean customOnlyMode = "custom_script_test".equals(request.getTestPath());
+        Path shellRepoRoot = Paths.get(config.getShellTcDir()).toAbsolutePath().normalize();
+        if (!customOnlyMode) {
+            try {
+                shellRepoRoot = shellTcSync.prepareRequestWorkspace(
+                    testLogger,
+                    request.getRequestId(),
+                    request.getShellTcBranch(),
+                    request.getShellTcCommit()
+                );
+            } catch (Exception e) {
+                return finalizeResult(
+                    TestResult.builder()
+                        .testName(request.getTestName())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message("Failed to prepare testcase workspace: " + e.getMessage()),
+                    metricsBuilder, startNs, "docker", null);
+            }
         }
-        
+
         // Copy build package from cache to Docker work directory
         Path dockerBuildPackage = dockerWorkDir.resolve("build.tar.gz");
         if (!localBuildPackage.equals(dockerBuildPackage)) {
@@ -115,7 +126,6 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             }
         }
         
-        boolean customOnlyMode = "custom_script_test".equals(request.getTestPath());
         String relativeTestDir = "";
         if (!customOnlyMode) {
             // Resolve test case directory within the local shell testcases checkout

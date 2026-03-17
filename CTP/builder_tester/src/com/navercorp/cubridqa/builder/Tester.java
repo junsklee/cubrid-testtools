@@ -131,6 +131,7 @@ public class Tester {
         this.buildCache = new BuildCache(Paths.get(config.getWorkDir()));
         this.shellTcSync = new ShellTcSync(config);
         this.cubridInstaller = new CubridInstaller();
+        this.shellTcSync.cleanupStaleRequestWorkspaces(logger);
         
         // Create execution strategies
         this.directExecutor = new DirectExecutor(config, buildCache, shellTcSync, cubridInstaller);
@@ -181,7 +182,7 @@ public class Tester {
         this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator, actualSampler);
         this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
-        FinalizeRequestHandler finalizeRequestHandler = new FinalizeRequestHandler(testStatsStore);
+        FinalizeRequestHandler finalizeRequestHandler = new FinalizeRequestHandler(testStatsStore, shellTcSync);
         
         // Build cache is ready for use
         
@@ -213,7 +214,7 @@ public class Tester {
         this.server.createContext("/score", scoreHandler);
         this.server.createContext("/log/", logStreamHandler);
         this.server.createContext("/finalize-request", finalizeRequestHandler);
-        this.server.createContext("/cancel-request", new CancelRequestHandler());
+        this.server.createContext("/cancel-request", new CancelRequestHandler(shellTcSync));
         int maxThreads = Math.max(1, config.getMaxConcurrentTests());
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }
