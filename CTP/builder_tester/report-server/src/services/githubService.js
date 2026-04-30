@@ -73,7 +73,7 @@ class GitHubService {
             perPage = 30
         } = options;
 
-        const path = `/repos/${this.owner}/${this.repo}/commits?sha=${sha}&per_page=${perPage}&page=${page}`;
+        const path = `/repos/${this.owner}/${this.repo}/commits?sha=${encodeURIComponent(sha)}&per_page=${perPage}&page=${page}`;
         const result = await this.request(path);
         return result.json;
     }

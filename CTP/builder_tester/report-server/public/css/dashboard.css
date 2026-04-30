@@ -211,6 +211,14 @@
             margin-bottom: 1.5rem;
         }
 
+        .branch-config-row {
+            margin-bottom: 1rem;
+        }
+
+        .branch-config-group {
+            margin-bottom: 0;
+        }
+
         .section-disabled {
             opacity: 0.5;
             pointer-events: none;
@@ -336,6 +344,22 @@
             min-height: 120px;
             resize: vertical;
             font-family: 'Courier New', monospace;
+        }
+
+        .help-text {
+            margin-top: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .help-text a {
+            color: #a5b4fc;
+            text-decoration: none;
+        }
+
+        .help-text a:hover {
+            text-decoration: underline;
         }
 
         /* Custom Script: file upload */

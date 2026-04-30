@@ -11,7 +11,8 @@
             builderHost: '<%= config.builder.host %>',
             builderPort: '<%= config.builder.port %>',
             reportPort: '<%= config.server.port %>',
-            localIp: '<%= config.server.localIp %>'
+            localIp: '<%= config.server.localIp %>',
+            githubDefaultBranch: '<%= config.github.defaultBranch %>'
         };
     </script>
 </head>
@@ -74,6 +75,15 @@
                 </div>
 
                 <div id="manualCommits" class="commit-section" style="display: none;">
+                    <div class="form-group branch-config-group">
+                        <label class="form-label" for="cubridBranchInput">
+                            CUBRID Branch
+                            <span class="info-icon" title="Selects the branch in the CUBRID engine repository. Default: develop.&#10;&#10;Repo: https://github.com/cubrid/cubrid">ⓘ</span>
+                        </label>
+                        <input type="text" class="form-input" id="cubridBranchInput"
+                            value="<%= config.github.defaultBranch %>"
+                            placeholder="develop">
+                    </div>
                     <textarea class="form-textarea" id="manualCommitInput"
                         placeholder="Enter commit SHAs (one per line or comma-separated)&#10;Example:&#10;568fbb5370f4f1b6149218221d7fe4f9daa59168&#10;b534d0a4f28921c8e590f68f606049e1b643e252"></textarea>
                 </div>
@@ -183,6 +193,16 @@
                         <input type="text" class="form-input" id="buildUploadRemoteDir" placeholder="~">
                     </div>
                 </div>
+            </div>
+
+            <div class="form-group" id="shellTcBranchSection" style="display: none;">
+                <label class="form-label" for="shellTcBranchInput">
+                    TEST CASES BRANCH
+                    <span class="info-icon" title="Selects the branch in the TC repository cubrid-testcases-private-ex. Default: develop.&#10;&#10;Repo: https://github.com/CUBRID/cubrid-testcases-private-ex">ⓘ</span>
+                </label>
+                <input type="text" class="form-input" id="shellTcBranchInput"
+                    value="develop"
+                    placeholder="develop">
             </div>
 
             <!-- Test Cases Section -->

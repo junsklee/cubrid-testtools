@@ -6,6 +6,9 @@
         let isLoadingCommits = false;
         let builderCommitBuildMode = null;
         let baselineModeTouched = false;
+        const DEFAULT_CUBRID_BRANCH = (window.SERVER_CONFIG && window.SERVER_CONFIG.githubDefaultBranch)
+            ? window.SERVER_CONFIG.githubDefaultBranch
+            : 'develop';
         // Custom Script attachments (client-side buffer)
         let customScriptAttachments = []; // { name, size, targetPath, contentBase64 }
         let customScriptAttachmentsLoading = 0;
@@ -329,6 +332,44 @@
             }
         }
 
+        function validateGitRefName(branch) {
+            const v = (branch || '').trim();
+            if (!v) return null; // blank means "use default"
+            if (v === '@') return 'Branch name cannot be "@"';
+            if (v.startsWith('-')) return 'Branch name cannot start with "-"';
+            if (v.startsWith('/') || v.endsWith('/')) return 'Branch name cannot start or end with "/"';
+            if (v.startsWith('.') || v.endsWith('.')) return 'Branch name cannot start or end with "."';
+            if (v.endsWith('.lock')) return 'Branch name cannot end with ".lock"';
+            if (v.includes('..')) return 'Branch name cannot contain ".."';
+            if (v.includes('//')) return 'Branch name cannot contain "//"';
+            if (v.includes('@{')) return 'Branch name cannot contain "@{"';
+            if (/[\x00-\x20~^:?*[\]\\]/.test(v)) return 'Branch name contains unsupported characters';
+            return null;
+        }
+
+        function getValidatedGitRefInput(inputId, defaultValue, label, options = {}) {
+            const { syncInput = false } = options;
+            const input = document.getElementById(inputId);
+            const raw = input ? input.value : '';
+            const branch = (raw || '').trim() || defaultValue;
+            const validationError = validateGitRefName(branch);
+            if (validationError) {
+                throw new Error(`Invalid ${label} '${branch}': ${validationError}`);
+            }
+            if (syncInput && input) {
+                input.value = branch;
+            }
+            return branch;
+        }
+
+        function getSelectedCubridBranch(options = {}) {
+            return getValidatedGitRefInput('cubridBranchInput', DEFAULT_CUBRID_BRANCH, 'CUBRID branch', options);
+        }
+
+        function getSelectedShellTcBranch(options = {}) {
+            return getValidatedGitRefInput('shellTcBranchInput', 'develop', 'testcases branch', options);
+        }
+
         function setSectionDisabled(section, disabled) {
             if (!section) return;
             section.classList.toggle('section-disabled', !!disabled);
@@ -372,6 +413,13 @@
             if (testsInputLabel) {
                 testsInputLabel.style.opacity = disabled ? '0.5' : '1';
             }
+        }
+
+        function applyShellTcBranchSectionState() {
+            const section = document.getElementById('shellTcBranchSection');
+            if (!section) return;
+            const visible = commitMode === 'manual' && !isBuildOnlyActive();
+            section.style.display = visible ? 'block' : 'none';
         }
 
         function applyBuildOnlyState() {
@@ -421,6 +469,7 @@
             });
 
             applyTestCasesDisabledState();
+            applyShellTcBranchSectionState();
         }
 
         function arrayBufferToBase64(buffer) {
@@ -580,10 +629,11 @@
             if (e && e.target) e.target.value = '';
         }
 
-        // Load commits from GitHub
+        // Load commits from report-server GitHub proxy
         async function loadCommits() {
             if (isLoadingCommits) return;
             isLoadingCommits = true;
+            const branch = DEFAULT_CUBRID_BRANCH;
 
             const commitList = document.getElementById('commitList');
             if (currentPage === 1) {
@@ -591,8 +641,11 @@
             }
 
             try {
-                const response = await fetch(`https://api.github.com/repos/CUBRID/cubrid/commits?sha=develop&per_page=30&page=${currentPage}`);
-                if (!response.ok) throw new Error('Failed to fetch commits');
+                const response = await fetch(`/api/github/commits?sha=${encodeURIComponent(branch)}&per_page=30&page=${currentPage}`);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || 'Failed to fetch commits');
+                }
                 
                 const data = await response.json();
                 if (data.commitBuildMode) {
@@ -612,15 +665,15 @@
                 
                 // Show Load More button if we got a full page of results (30 commits)
                 const loadMoreBtn = document.getElementById('loadMoreBtn');
-                if (loadMoreBtn && data.length === 30) {
-                    loadMoreBtn.style.display = 'block';
+                if (loadMoreBtn) {
+                    loadMoreBtn.style.display = data.length === 30 ? 'block' : 'none';
                 }
                 
-                showToast('Loaded commits successfully', 'success');
+                showToast(`Loaded commits from branch ${branch}`, 'success');
             } catch (error) {
                 console.error('Error loading commits:', error);
                 commitList.innerHTML = '<p style="color: var(--error);">Failed to load commits. Please try again.</p>';
-                showToast('Failed to load commits', 'error');
+                showToast(error && error.message ? error.message : 'Failed to load commits', 'error');
             } finally {
                 isLoadingCommits = false;
             }
@@ -883,6 +936,7 @@
             }
 
             applyTestCasesDisabledState();
+            applyShellTcBranchSectionState();
 
             updateCommitCount();
             const modeLabelMap = {
@@ -1003,8 +1057,12 @@
         async function validateCommits(commitShas) {
             const validationPromises = commitShas.map(async (sha) => {
                 try {
-                    const response = await fetch(`https://api.github.com/repos/CUBRID/cubrid/commits/${sha}`);
-                    return { sha, valid: response.ok };
+                    const response = await fetch(`/api/github/validate/${encodeURIComponent(sha)}`);
+                    if (!response.ok) {
+                        return { sha, valid: false };
+                    }
+                    const payload = await response.json();
+                    return { sha, valid: !!payload.valid };
                 } catch {
                     return { sha, valid: false };
                 }
@@ -1099,6 +1157,12 @@
             
             try {
                 const buildOnly = isBuildOnlyActive();
+                const manualCubridBranch = commitMode === 'manual'
+                    ? getSelectedCubridBranch({ syncInput: true })
+                    : null;
+                const manualShellTcBranch = (commitMode === 'manual' && !buildOnly)
+                    ? getSelectedShellTcBranch({ syncInput: true })
+                    : null;
 
                 if (!isBuildOnlyAvailable() && isBuildOnlyEnabled()) {
                     throw new Error('Build-only mode is not available in Custom Script mode');
@@ -1139,9 +1203,9 @@
                             payloadCommits = [customCommitInput];
                         }
                     } else {
-                        // No commit specified - will use latest from develop
+                        // No commit specified - use the latest commit from develop
                         // Need at least one commit, so we'll use a placeholder that builder can resolve
-                        payloadCommits = ['develop'];
+                        payloadCommits = [DEFAULT_CUBRID_BRANCH];
                     }
                 }
 
@@ -1212,6 +1276,12 @@
                     maxRuns: parseInt(document.getElementById('maxRuns').value),
                     buildOnly: buildOnly
                 };
+                if (manualCubridBranch) {
+                    payload.cubridBranch = manualCubridBranch;
+                }
+                if (manualShellTcBranch) {
+                    payload.shellTcBranch = manualShellTcBranch;
+                }
                 if (!buildOnly) {
                     payload.workerIps = workers;
                 }

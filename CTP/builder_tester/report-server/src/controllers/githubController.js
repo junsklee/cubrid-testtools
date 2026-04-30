@@ -3,6 +3,19 @@
  */
 
 const githubService = require('../services/githubService');
+const config = require('../config');
+
+function isSafeGitRefName(value) {
+    const v = (value || '').trim();
+    if (!v) return false;
+    if (v === '@') return false;
+    if (v.startsWith('-')) return false;
+    if (v.startsWith('/') || v.endsWith('/')) return false;
+    if (v.startsWith('.') || v.endsWith('.')) return false;
+    if (v.endsWith('.lock')) return false;
+    if (v.includes('..') || v.includes('//') || v.includes('@{')) return false;
+    return !/[\x00-\x20~^:?*[\]\\]/.test(v);
+}
 
 class GitHubController {
     /**
@@ -10,7 +23,11 @@ class GitHubController {
      */
     async getCommits(req, res) {
         try {
-            const { page = 1, per_page = 30, sha = 'develop' } = req.query;
+            const { page = 1, per_page = 30 } = req.query;
+            const sha = (req.query.sha || config.github.defaultBranch || 'develop').toString().trim() || config.github.defaultBranch || 'develop';
+            if (!isSafeGitRefName(sha)) {
+                return res.status(400).json({ error: 'Invalid branch/ref name' });
+            }
             
             const commits = await githubService.getCommits({
                 sha,
