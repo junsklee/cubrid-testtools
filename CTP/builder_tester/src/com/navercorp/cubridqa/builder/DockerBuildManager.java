@@ -597,6 +597,9 @@ public class DockerBuildManager {
                 writer.println("# Create git shim for deterministic version (ccache optimization)");
                 writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
                 writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
+                writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
+                writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
+                writer.println("export REAL_GIT_BIN");
                 writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
                 writer.println("#!/usr/bin/env bash");
                 writer.println("# Intercept version queries and return deterministic values");
@@ -605,7 +608,7 @@ public class DockerBuildManager {
                 writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
                 writer.println("  echo \"0\"");
                 writer.println("else");
-                writer.println("  exec /usr/bin/git \"$@\"");
+                writer.println("  exec \"$REAL_GIT_BIN\" \"$@\"");
                 writer.println("fi");
                 writer.println("GITSHIMEOF");
                 writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
@@ -615,13 +618,14 @@ public class DockerBuildManager {
             }
 
             writer.println("# Build CUBRID");
+            writeDockerBuildArgCompatibility(writer, finalBuildArgs);
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
             writer.println("  echo 'Using devtoolset-8 for build'");
             writer.println("  source /opt/rh/devtoolset-8/enable");
-            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("else");
             writer.println("  echo 'Building with default toolchain'");
-            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
             writer.println();
 
@@ -726,8 +730,9 @@ public class DockerBuildManager {
             wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
             java.util.List<String> buildCmd = new java.util.ArrayList<>();
             buildCmd.add("./build.sh");
-            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
-            for (String token : normalizedArgs.trim().split("\\s+")) { if (!token.isEmpty()) buildCmd.add(token); }
+            for (String token : resolveBuildArgsForScript(wtDir, config.getBuildArg(), buildType)) {
+                buildCmd.add(token);
+            }
             executeCommand(wtPb, buildCmd.toArray(new String[0]));
 
             String packageName = "cubrid_" + shortCommit + ".tar.gz";
@@ -945,6 +950,9 @@ public class DockerBuildManager {
                 writer.println("# Create git shim for deterministic version (ccache optimization)");
                 writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
                 writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
+                writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
+                writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
+                writer.println("export REAL_GIT_BIN");
                 writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
                 writer.println("#!/usr/bin/env bash");
                 writer.println("# Intercept version queries and return deterministic values");
@@ -953,7 +961,7 @@ public class DockerBuildManager {
                 writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
                 writer.println("  echo \"0\"");
                 writer.println("else");
-                writer.println("  exec /usr/bin/git \"$@\"");
+                writer.println("  exec \"$REAL_GIT_BIN\" \"$@\"");
                 writer.println("fi");
                 writer.println("GITSHIMEOF");
                 writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
@@ -963,16 +971,17 @@ public class DockerBuildManager {
             }
 
             writer.println("# Build CUBRID");
+            writeDockerBuildArgCompatibility(writer, finalBuildArgs);
 
             // Check if devtoolset-8 is available and use it
             writer.println("# Try to use devtoolset-8 if available");
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
             writer.println("  echo 'Using devtoolset-8 for build'");
             writer.println("  source /opt/rh/devtoolset-8/enable");
-            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("else");
             writer.println("  echo 'Building with default toolchain'");
-            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
             writer.println();
 
@@ -1141,6 +1150,9 @@ public class DockerBuildManager {
                 writer.println("# Create git shim for deterministic version (ccache optimization)");
                 writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
                 writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
+                writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
+                writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
+                writer.println("export REAL_GIT_BIN");
                 writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
                 writer.println("#!/usr/bin/env bash");
                 writer.println("if [[ \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ]]; then");
@@ -1148,7 +1160,7 @@ public class DockerBuildManager {
                 writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
                 writer.println("  echo \"0\"");
                 writer.println("else");
-                writer.println("  exec /usr/bin/git \"$@\"");
+                writer.println("  exec \"$REAL_GIT_BIN\" \"$@\"");
                 writer.println("fi");
                 writer.println("GITSHIMEOF");
                 writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
@@ -1158,13 +1170,14 @@ public class DockerBuildManager {
             }
 
             writer.println("# Build CUBRID");
+            writeDockerBuildArgCompatibility(writer, finalBuildArgs);
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
             writer.println("  echo 'Using devtoolset-8 for build'");
             writer.println("  source /opt/rh/devtoolset-8/enable");
-            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("else");
             writer.println("  echo 'Building with default toolchain'");
-            writer.println("  ./build.sh " + finalBuildArgs + " || { echo '[FATAL] Build failed'; exit 1; }");
+            writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
             writer.println();
 
@@ -1356,9 +1369,8 @@ public class DockerBuildManager {
             
             java.util.List<String> buildCmd = new java.util.ArrayList<>();
             buildCmd.add("./build.sh");
-            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
-            for (String token : normalizedArgs.trim().split("\\s+")) {
-                if (!token.isEmpty()) buildCmd.add(token);
+            for (String token : resolveBuildArgsForScript(wtDir, config.getBuildArg(), buildType)) {
+                buildCmd.add(token);
             }
             executeCommand(wtPb, buildCmd.toArray(new String[0]));
             
@@ -1461,9 +1473,8 @@ public class DockerBuildManager {
             wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
             java.util.List<String> buildCmd = new java.util.ArrayList<>();
             buildCmd.add("./build.sh");
-            String normalizedArgs = normalizeBuildArg(config.getBuildArg(), buildType);
-            for (String token : normalizedArgs.trim().split("\\s+")) {
-                if (!token.isEmpty()) buildCmd.add(token);
+            for (String token : resolveBuildArgsForScript(wtDir, config.getBuildArg(), buildType)) {
+                buildCmd.add(token);
             }
             executeCommand(wtPb, buildCmd.toArray(new String[0]));
 
@@ -1650,6 +1661,154 @@ public class DockerBuildManager {
         List<String> out = new ArrayList<>(options);
         out.addAll(targets);
         return String.join(" ", out).trim();
+    }
+
+    public static List<String> resolveBuildArgsForScript(File sourceDir, String buildArg, String buildType) {
+        List<String> args = splitBuildArgs(normalizeBuildArg(buildArg, buildType));
+        if (!containsGeneratorOption(args)) {
+            return args;
+        }
+
+        String help = readBuildScriptHelp(sourceDir);
+        if (help == null || buildScriptHelpSupportsGeneratorOption(help)) {
+            return args;
+        }
+
+        logger.info("./build.sh does not support -g; using the branch default build generator");
+        return removeGeneratorOption(args);
+    }
+
+    public static boolean buildScriptHelpSupportsGeneratorOption(String helpText) {
+        if (helpText == null) {
+            return false;
+        }
+        String[] lines = helpText.split("\\R");
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.equals("-g") || trimmed.startsWith("-g ")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> splitBuildArgs(String args) {
+        List<String> tokens = new ArrayList<>();
+        if (args == null || args.trim().isEmpty()) {
+            return tokens;
+        }
+        for (String token : args.trim().split("\\s+")) {
+            if (!token.isEmpty()) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    private static boolean containsGeneratorOption(List<String> args) {
+        for (String arg : args) {
+            if ("-g".equals(arg) || (arg != null && arg.startsWith("-g") && arg.length() > 2)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> removeGeneratorOption(List<String> args) {
+        List<String> adapted = new ArrayList<>();
+        for (int i = 0; i < args.size(); i++) {
+            String arg = args.get(i);
+            if ("-g".equals(arg)) {
+                if (i + 1 < args.size()) {
+                    i++;
+                }
+                continue;
+            }
+            if (arg != null && arg.startsWith("-g") && arg.length() > 2) {
+                continue;
+            }
+            adapted.add(arg);
+        }
+        return adapted;
+    }
+
+    private static String readBuildScriptHelp(File sourceDir) {
+        if (sourceDir == null || !sourceDir.isDirectory()) {
+            return null;
+        }
+        File buildScript = new File(sourceDir, "build.sh");
+        if (!buildScript.isFile()) {
+            return null;
+        }
+
+        ProcessBuilder pb = new ProcessBuilder("./build.sh", "-?");
+        pb.directory(sourceDir);
+        pb.redirectErrorStream(true);
+        try {
+            Process process = pb.start();
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append('\n');
+                }
+            }
+            process.waitFor();
+            return output.toString();
+        } catch (Exception e) {
+            logger.fine("Unable to inspect ./build.sh help for build argument compatibility: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static void writeDockerBuildArgCompatibility(PrintWriter writer, String finalBuildArgs) {
+        writer.print("BUILD_ARGS=(");
+        for (String token : splitBuildArgs(finalBuildArgs)) {
+            writer.print(" ");
+            writer.print(shellQuote(token));
+        }
+        writer.println(" )");
+        writer.println("adapt_build_args_for_build_sh() {");
+        writer.println("  local help_text");
+        writer.println("  help_text=\"$(./build.sh -? 2>&1 || true)\"");
+        writer.println("  if printf '%s\\n' \"$help_text\" | grep -Eq '^[[:space:]]*-g([[:space:]]|$)'; then");
+        writer.println("    return 0");
+        writer.println("  fi");
+        writer.println("  local adapted=()");
+        writer.println("  local skip_next=0");
+        writer.println("  local removed=0");
+        writer.println("  local arg");
+        writer.println("  for arg in \"${BUILD_ARGS[@]}\"; do");
+        writer.println("    if [ \"$skip_next\" = \"1\" ]; then");
+        writer.println("      skip_next=0");
+        writer.println("      continue");
+        writer.println("    fi");
+        writer.println("    case \"$arg\" in");
+        writer.println("      -g)");
+        writer.println("        skip_next=1");
+        writer.println("        removed=1");
+        writer.println("        continue");
+        writer.println("        ;;");
+        writer.println("      -g*)");
+        writer.println("        removed=1");
+        writer.println("        continue");
+        writer.println("        ;;");
+        writer.println("    esac");
+        writer.println("    adapted+=(\"$arg\")");
+        writer.println("  done");
+        writer.println("  if [ \"$removed\" = \"1\" ]; then");
+        writer.println("    echo '[INFO] ./build.sh does not support -g; using the branch default build generator'");
+        writer.println("    BUILD_ARGS=(\"${adapted[@]}\")");
+        writer.println("  fi");
+        writer.println("}");
+        writer.println("adapt_build_args_for_build_sh");
+    }
+
+    private static String shellQuote(String value) {
+        if (value == null) {
+            return "''";
+        }
+        return "'" + value.replace("'", "'\"'\"'") + "'";
     }
     
     /**

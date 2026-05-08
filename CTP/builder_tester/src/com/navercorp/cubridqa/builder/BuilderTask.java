@@ -733,9 +733,8 @@ public class BuilderTask {
             wtPb.environment().put("MAKEFLAGS", "-j" + config.getParallelJobs());
             List<String> buildCmd = new ArrayList<>();
             buildCmd.add("./build.sh");
-            String normalizedArgs = DockerBuildManager.normalizeBuildArg(config.getBuildArg(), buildType);
-            for (String token : normalizedArgs.trim().split("\\s+")) {
-                if (!token.isEmpty()) buildCmd.add(token);
+            for (String token : DockerBuildManager.resolveBuildArgsForScript(wtDir, config.getBuildArg(), buildType)) {
+                buildCmd.add(token);
             }
             executeCommand(wtPb, buildCmd.toArray(new String[0]));
 
@@ -1317,9 +1316,8 @@ public class BuilderTask {
             // Build command with output capture for logging
             List<String> buildCmd = new ArrayList<>();
             buildCmd.add("./build.sh");
-            String normalizedArgs = DockerBuildManager.normalizeBuildArg(config.getBuildArg(), buildType);
-            for (String token : normalizedArgs.trim().split("\\s+")) {
-                if (!token.isEmpty()) buildCmd.add(token);
+            for (String token : DockerBuildManager.resolveBuildArgsForScript(wtDir, config.getBuildArg(), buildType)) {
+                buildCmd.add(token);
             }
             
             // Capture build output
