@@ -132,11 +132,15 @@ public class ShellTcSync {
         synchronized (lock) {
             cleanupOldRequests();
             Files.createDirectories(getShellTcRequestsRoot());
+            boolean shouldRefreshBaseRepo = !syncedRequests.containsKey(safeRequestId);
 
             if (commit.isEmpty()) {
                 commit = resolveBranchHead(log, branch);
             } else {
                 ensureBaseRepoHasCommit(log, branch, commit);
+                if (shouldRefreshBaseRepo) {
+                    maybeFastForwardBaseRepoBranch(log, branch, commit);
+                }
             }
 
             Path requestRoot = getRequestWorkspaceRoot(safeRequestId);
@@ -356,7 +360,85 @@ public class ShellTcSync {
         if (commit.isEmpty()) {
             throw new IOException("Failed to resolve testcase branch head for " + branch);
         }
+        maybeFastForwardBaseRepoBranch(log, pb, branch, remote, commit);
         return commit;
+    }
+
+    private void maybeFastForwardBaseRepoBranch(Logger log, String branch, String requestedCommit)
+            throws IOException, InterruptedException {
+        if (config.getShellTcSyncMode() == SyncMode.DISABLED) {
+            return;
+        }
+
+        Path baseRepoRoot = getBaseRepoRoot();
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(baseRepoRoot.toFile());
+
+        if (ProcessIO.runAndExitCode(pb, new String[]{"git", "rev-parse", "--is-inside-work-tree"}) != 0) {
+            return;
+        }
+
+        String remote = selectRemoteForBranch(pb, branch);
+        ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", remote, branch});
+        String remoteHead = runAndGetOutput(pb, "git", "rev-parse", "FETCH_HEAD").trim();
+        if (!requestedCommit.equals(remoteHead)) {
+            log.fine("Skipping shell testcase base repo fast-forward for branch '" + branch
+                + "' because requested commit " + abbreviateCommit(requestedCommit)
+                + " is not the current remote head " + abbreviateCommit(remoteHead));
+            return;
+        }
+        maybeFastForwardBaseRepoBranch(log, pb, branch, remote, remoteHead);
+    }
+
+    private void maybeFastForwardBaseRepoBranch(Logger log, ProcessBuilder pb, String branch, String remote, String expectedCommit)
+            throws IOException, InterruptedException {
+        if (config.getShellTcSyncMode() == SyncMode.DISABLED) {
+            return;
+        }
+
+        String remoteRef = remote + "/" + branch;
+        String checkoutTarget = remoteRef;
+        try {
+            runAndGetOutput(pb, "git", "rev-parse", "--verify", remoteRef);
+        } catch (Exception e) {
+            checkoutTarget = "FETCH_HEAD";
+        }
+
+        try {
+            ProcessIO.runOrThrow(pb, new String[]{"git", "checkout", "-B", branch, checkoutTarget});
+            ProcessIO.runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+            ProcessIO.runOrThrow(pb, new String[]{"git", "reset", "--hard", expectedCommit});
+            if (!"FETCH_HEAD".equals(checkoutTarget)) {
+                ProcessIO.runAndExitCode(pb, new String[]{"git", "branch", "--set-upstream-to=" + remoteRef, branch});
+            }
+            lastSuccessfulSyncMs = System.currentTimeMillis();
+            lastSyncedBranch = branch;
+            log.fine("Fast-forwarded shell testcase base repo to " + abbreviateCommit(expectedCommit)
+                + " on branch '" + branch + "'");
+        } catch (IOException e) {
+            File repoDir = pb.directory();
+            if (repoDir != null && isGitLockPresent(repoDir)) {
+                long staleThresholdMs = 10L * 60L * 1000L;
+                if (isLikelyStaleGitLock(repoDir, staleThresholdMs)) {
+                    log.warning("Detected stale git index lock while updating shell testcase base repo; removing and retrying once...");
+                    removeStaleGitIndexLock(repoDir, log);
+                    ProcessIO.runOrThrow(pb, new String[]{"git", "checkout", "-B", branch, checkoutTarget});
+                    ProcessIO.runAndExitCode(pb, new String[]{"git", "clean", "-df"});
+                    ProcessIO.runOrThrow(pb, new String[]{"git", "reset", "--hard", expectedCommit});
+                    if (!"FETCH_HEAD".equals(checkoutTarget)) {
+                        ProcessIO.runAndExitCode(pb, new String[]{"git", "branch", "--set-upstream-to=" + remoteRef, branch});
+                    }
+                    lastSuccessfulSyncMs = System.currentTimeMillis();
+                    lastSyncedBranch = branch;
+                    log.fine("Fast-forwarded shell testcase base repo to " + abbreviateCommit(expectedCommit)
+                        + " on branch '" + branch + "' after clearing stale lock");
+                } else {
+                    log.warning("Git index.lock present; skipping shell testcase base repo fast-forward for branch '" + branch + "'.");
+                }
+            } else {
+                throw e;
+            }
+        }
     }
 
     private void ensureBaseRepoHasCommit(Logger log, String branch, String commit) throws IOException, InterruptedException {
