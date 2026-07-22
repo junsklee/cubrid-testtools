@@ -370,6 +370,17 @@
             return getValidatedGitRefInput('shellTcBranchInput', 'develop', 'testcases branch', options);
         }
 
+        function getSelectedTestType() {
+            const select = document.getElementById('testTypeSelect');
+            return (select && select.value === 'sql') ? 'sql' : 'shell';
+        }
+
+        // Test type selector changed (called from HTML onchange)
+        function onTestTypeChange() {
+            applyTestCasesDisabledState();
+            applyShellTcBranchSectionState();
+        }
+
         function setSectionDisabled(section, disabled) {
             if (!section) return;
             section.classList.toggle('section-disabled', !!disabled);
@@ -406,6 +417,8 @@
                 testsInput.value = '';
             } else if (buildOnly) {
                 testsInput.placeholder = 'Build-only mode skips tests';
+            } else if (getSelectedTestType() === 'sql') {
+                testsInput.placeholder = 'Enter SQL test case paths (one per line)\nFormat: sql/.../cases/<name>.sql\nExample:\nsql/_01_object/_01_type/_004_integer/cases/1014.sql';
             } else {
                 testsInput.placeholder = 'Enter test case paths (one per line)\nSupported prefixes: shell/, shell_heavy/, shell_perf/\nExample:\nshell/_05_addition/cubridsus1961/cases/cubridsus1961.sh';
             }
@@ -413,12 +426,21 @@
             if (testsInputLabel) {
                 testsInputLabel.style.opacity = disabled ? '0.5' : '1';
             }
+
+            const testTypeSelect = document.getElementById('testTypeSelect');
+            if (testTypeSelect) {
+                testTypeSelect.disabled = disabled;
+            }
+            const testTypeSection = document.getElementById('testTypeSection');
+            if (testTypeSection) {
+                testTypeSection.style.opacity = disabled ? '0.5' : '1';
+            }
         }
 
         function applyShellTcBranchSectionState() {
             const section = document.getElementById('shellTcBranchSection');
             if (!section) return;
-            const visible = commitMode === 'manual' && !isBuildOnlyActive();
+            const visible = commitMode === 'manual' && !isBuildOnlyActive() && getSelectedTestType() !== 'sql';
             section.style.display = visible ? 'block' : 'none';
         }
 
@@ -1081,6 +1103,30 @@
 
         function validateTestPathsForSubmit(tests) {
             const invalid = [];
+            if (commitMode !== 'custom' && getSelectedTestType() === 'sql') {
+                for (const t of (tests || [])) {
+                    const v = (t || '').trim();
+                    if (!v) continue;
+
+                    // Enforce strict SQL test case paths: sql/.../cases/<name>.sql
+                    if (!v.startsWith('sql/') || !v.includes('/cases/') || !v.endsWith('.sql')) {
+                        invalid.push(v);
+                        continue;
+                    }
+                    // No query strings or whitespace
+                    if (v.includes('?') || /\s/.test(v)) {
+                        invalid.push(v);
+                        continue;
+                    }
+                }
+                if (invalid.length > 0) {
+                    throw new Error(
+                        `Invalid SQL test path(s): ${invalid.join(', ')}. ` +
+                        `Expected paths starting with sql/, containing /cases/, and ending with .sql.`
+                    );
+                }
+                return;
+            }
             const allowedRoots = ['shell/', 'shell_heavy/', 'shell_perf/'];
             for (const t of (tests || [])) {
                 const v = (t || '').trim();
@@ -1160,7 +1206,7 @@
                 const manualCubridBranch = commitMode === 'manual'
                     ? getSelectedCubridBranch({ syncInput: true })
                     : null;
-                const manualShellTcBranch = (commitMode === 'manual' && !buildOnly)
+                const manualShellTcBranch = (commitMode === 'manual' && !buildOnly && getSelectedTestType() !== 'sql')
                     ? getSelectedShellTcBranch({ syncInput: true })
                     : null;
 
@@ -1276,6 +1322,10 @@
                     maxRuns: parseInt(document.getElementById('maxRuns').value),
                     buildOnly: buildOnly
                 };
+                // Mark SQL requests explicitly; shell stays the implicit default
+                if (!buildOnly && commitMode !== 'custom' && getSelectedTestType() === 'sql') {
+                    payload.testType = 'sql';
+                }
                 if (manualCubridBranch) {
                     payload.cubridBranch = manualCubridBranch;
                 }
@@ -2196,6 +2246,13 @@
                     dateSpan.textContent = new Date(report.modified).toLocaleString();
 
                     reportItem.appendChild(reportLink);
+
+                    // Test type badge (SQL/SHELL) when known; legacy reports have no badge
+                    const typeBadge = createTestTypeBadge(report.testType);
+                    if (typeBadge) {
+                        reportItem.appendChild(typeBadge);
+                    }
+
                     reportItem.appendChild(dateSpan);
                     reportsList.appendChild(reportItem);
                 }
@@ -2308,6 +2365,21 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Create a small SQL/SHELL badge for a report row (null when type is unknown)
+        function createTestTypeBadge(testType) {
+            const type = (testType || '').toString().toLowerCase();
+            if (type !== 'sql' && type !== 'shell') return null;
+            const badge = document.createElement('span');
+            badge.textContent = type.toUpperCase();
+            badge.title = type === 'sql' ? 'SQL test report' : 'Shell test report';
+            badge.style.cssText = 'display: inline-block; margin-left: 0.5rem; padding: 0.05rem 0.4rem; ' +
+                'border-radius: 0.25rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; ' +
+                (type === 'sql'
+                    ? 'background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35);'
+                    : 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);');
+            return badge;
         }
 
         function formatDate(dateString) {

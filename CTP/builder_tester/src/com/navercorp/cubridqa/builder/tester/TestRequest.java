@@ -32,6 +32,11 @@ public class TestRequest {
     private final List<CustomAttachment> customAttachments; // Additional files for custom script mode
     private final String shellTcBranch; // Request-scoped testcase branch selection
     private final String shellTcCommit; // Exact testcase commit resolved by Builder
+    private final String testType; // "shell" (default) or "sql"
+    private final String sqlTcBranch; // SQL testcase branch selection
+    private final String sqlTcCommit; // Exact SQL testcase commit resolved by Builder
+    private final String ctpSqlBaseSha; // Exact CTP base SHA resolved by Builder (may be null)
+    private final JSONObject ctpSqlPrShas; // PR number (string key) -> exact head SHA (may be null)
 
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
@@ -56,6 +61,11 @@ public class TestRequest {
         this.customAttachments = parseCustomAttachments(json);
         this.shellTcBranch = json.optString("shellTcBranch", null);
         this.shellTcCommit = json.optString("shellTcCommit", null);
+        this.testType = json.optString("testType", "shell");
+        this.sqlTcBranch = json.optString("sqlTcBranch", null);
+        this.sqlTcCommit = json.optString("sqlTcCommit", null);
+        this.ctpSqlBaseSha = json.optString("ctpSqlBaseSha", null);
+        this.ctpSqlPrShas = json.optJSONObject("ctpSqlPrShas");
 
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
@@ -123,4 +133,10 @@ public class TestRequest {
     public boolean hasCustomAttachments() { return customAttachments != null && !customAttachments.isEmpty(); }
     public String getShellTcBranch() { return shellTcBranch; }
     public String getShellTcCommit() { return shellTcCommit; }
+    public String getTestType() { return testType == null || testType.trim().isEmpty() ? "shell" : testType.trim().toLowerCase(); }
+    public boolean isSqlTest() { return "sql".equals(getTestType()); }
+    public String getSqlTcBranch() { return sqlTcBranch; }
+    public String getSqlTcCommit() { return sqlTcCommit; }
+    public String getCtpSqlBaseSha() { return ctpSqlBaseSha; }
+    public JSONObject getCtpSqlPrShas() { return ctpSqlPrShas; }
 }

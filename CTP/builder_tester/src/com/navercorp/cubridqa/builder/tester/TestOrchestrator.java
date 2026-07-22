@@ -3,6 +3,7 @@ package com.navercorp.cubridqa.builder.tester;
 import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
+import com.navercorp.cubridqa.builder.exec.SqlDockerExecutor;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservation;
@@ -33,6 +34,7 @@ public class TestOrchestrator {
     private final DirectExecutor directExecutor;
     private final StandardDockerExecutor standardDockerExecutor;
     private final OptimizedDockerExecutor optimizedDockerExecutor;
+    private final SqlDockerExecutor sqlDockerExecutor;
     private final boolean useDocker;
     private final Object dockerManager; // DockerManager - using Object to avoid compile dependency
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
@@ -55,10 +57,22 @@ public class TestOrchestrator {
                           boolean useDocker, Object dockerManager, Object dockerUtils,
                           TestObservationWriter observationWriter, TestStatsStore testStatsStore,
                           NodeCapacity nodeCapacity, ActualSampler actualSampler) {
+        this(config, directExecutor, standardDockerExecutor, optimizedDockerExecutor, null,
+            useDocker, dockerManager, dockerUtils, observationWriter, testStatsStore, nodeCapacity, actualSampler);
+    }
+
+    public TestOrchestrator(Config config, DirectExecutor directExecutor,
+                          StandardDockerExecutor standardDockerExecutor,
+                          OptimizedDockerExecutor optimizedDockerExecutor,
+                          SqlDockerExecutor sqlDockerExecutor,
+                          boolean useDocker, Object dockerManager, Object dockerUtils,
+                          TestObservationWriter observationWriter, TestStatsStore testStatsStore,
+                          NodeCapacity nodeCapacity, ActualSampler actualSampler) {
         this.config = config;
         this.directExecutor = directExecutor;
         this.standardDockerExecutor = standardDockerExecutor;
         this.optimizedDockerExecutor = optimizedDockerExecutor;
+        this.sqlDockerExecutor = sqlDockerExecutor;
         this.useDocker = useDocker;
         this.dockerManager = dockerManager;
         this.dockerUtils = dockerUtils;
@@ -164,6 +178,34 @@ public class TestOrchestrator {
                 attemptMeta.put("status", status);
                 attemptLogMetadata.put(attemptMeta);
                 attemptResponse.remove("logFilePath");
+            }
+
+            // Collect extra artifact files (sent via the same multipart channel; metadata
+            // entries carry artifactType so the report can render diffs/expected/actual)
+            if (attemptResponse.has("artifactFiles")) {
+                Object artifactsObj = attemptResponse.get("artifactFiles");
+                if (artifactsObj instanceof List) {
+                    for (Object p : (List<?>) artifactsObj) {
+                        if (p instanceof Path) {
+                            attemptLogFiles.add((Path) p);
+                        }
+                    }
+                }
+                attemptResponse.remove("artifactFiles");
+            }
+            if (attemptResponse.has("artifactMetadata")) {
+                try {
+                    JSONArray artifactMetadata = attemptResponse.getJSONArray("artifactMetadata");
+                    for (int i = 0; i < artifactMetadata.length(); i++) {
+                        JSONObject meta = artifactMetadata.getJSONObject(i);
+                        if (!meta.has("attempt")) {
+                            meta.put("attempt", attempt);
+                        }
+                        attemptLogMetadata.put(meta);
+                    }
+                } catch (Exception ignore) {
+                }
+                attemptResponse.remove("artifactMetadata");
             }
 
             // Track failures and passes to decide flakiness later
@@ -383,6 +425,22 @@ public class TestOrchestrator {
         
         boolean keepAliveRequested = testRequest.isKeepAlive();
         try {
+            // SQL testcases have a dedicated Docker execution path (no direct fallback)
+            if (testRequest.isSqlTest()) {
+                if (sqlDockerExecutor == null || !useDocker || !isDockerAvailable()) {
+                    TestResult result = TestResult.builder()
+                        .testName(testRequest.getTestName())
+                        .commit(testRequest.getCommit())
+                        .commitShort(testRequest.getCommitShort())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message("SQL test execution requires Docker on this tester node")
+                        .timestamp(System.currentTimeMillis())
+                        .build();
+                    return new RunOutcome(testRequest, result, convertToJSONObject(result));
+                }
+                TestResult result = sqlDockerExecutor.execute(testRequest, workDir, testLogger);
+                return new RunOutcome(testRequest, result, convertToJSONObject(result));
+            }
             // Check if we should use Docker for test execution
             if (useDocker && dockerManager != null && isDockerAvailable()) {
                 TestResult result = executeDockerTest(testRequest, workDir, testLogger);
@@ -476,14 +534,33 @@ public class TestOrchestrator {
         if (!result.getAttemptLogFiles().isEmpty()) {
             json.put("attemptLogFiles", result.getAttemptLogFiles());
         }
-        
+
         // Add single log file path for backward compatibility
         if (!result.getAttemptLogFiles().isEmpty()) {
             Path firstLogFile = result.getAttemptLogFiles().get(0);
             json.put("logFilePath", firstLogFile.toString());
             json.put("logFileName", firstLogFile.getFileName().toString());
         }
-        
+
+        // Extra artifacts (SQL answer diffs, actual/expected output, case source, ...)
+        if (!result.getArtifactFiles().isEmpty()) {
+            List<Path> artifactPaths = new ArrayList<>();
+            JSONArray artifactMetadata = new JSONArray();
+            for (TestResult.ArtifactFile artifact : result.getArtifactFiles()) {
+                artifactPaths.add(artifact.path);
+                JSONObject meta = new JSONObject()
+                    .put("attempt", artifact.attempt)
+                    .put("logFileName", artifact.path.getFileName().toString())
+                    .put("artifactType", artifact.artifactType);
+                if (artifact.executionEnv != null) {
+                    meta.put("executionEnv", artifact.executionEnv);
+                }
+                artifactMetadata.put(meta);
+            }
+            json.put("artifactFiles", artifactPaths);
+            json.put("artifactMetadata", artifactMetadata);
+        }
+
         return json;
     }
 

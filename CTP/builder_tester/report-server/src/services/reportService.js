@@ -13,10 +13,52 @@ class ReportService {
     generateReportHTML(data, requestId) {
         const timestamp = new Date().toISOString();
         const resultsJSON = JSON.stringify(data);
-        
+
         // This is a simplified version - in production, use a template engine
-        const html = this.getReportTemplate(data, requestId, timestamp, resultsJSON);
+        let html = this.getReportTemplate(data, requestId, timestamp, resultsJSON);
+        // Inject the SQL add-on (artifact panel, CTP provenance line) only when
+        // SQL data is present so existing shell reports stay byte-identical
+        if (this.hasSqlData(data)) {
+            const bodyEnd = html.lastIndexOf('</body>');
+            if (bodyEnd !== -1) {
+                html = html.slice(0, bodyEnd) + '    <script src="/js/report-sql.js"></script>\n' + html.slice(bodyEnd);
+            }
+        }
         return html;
+    }
+
+    /**
+     * Check whether the payload contains SQL test data
+     */
+    hasSqlData(data) {
+        if (!data) return false;
+        if (data.testType === 'sql' || data.ctpProvenance) return true;
+        const results = Array.isArray(data.results) ? data.results : [];
+        return results.some(r => r && r.testType === 'sql');
+    }
+
+    /**
+     * Split artifact entries (attemptLogMetadata entries carrying an artifactType
+     * key) into a separate artifacts array per result entry so attempt-log
+     * consumers don't render artifacts as extra attempts (SQL reports).
+     * Shell payloads without artifact entries are returned unchanged.
+     */
+    separateResultArtifacts(data) {
+        if (!data || !Array.isArray(data.results)) return data;
+        const hasArtifacts = data.results.some(r =>
+            r && Array.isArray(r.attemptLogMetadata) && r.attemptLogMetadata.some(m => m && m.artifactType)
+        );
+        if (!hasArtifacts) return data;
+        const results = data.results.map(r => {
+            if (!r || !Array.isArray(r.attemptLogMetadata)) return r;
+            const artifacts = r.attemptLogMetadata.filter(m => m && m.artifactType);
+            if (artifacts.length === 0) return r;
+            return Object.assign({}, r, {
+                attemptLogMetadata: r.attemptLogMetadata.filter(m => !(m && m.artifactType)),
+                artifacts: artifacts
+            });
+        });
+        return Object.assign({}, data, { results });
     }
 
     /**
@@ -45,12 +87,17 @@ class ReportService {
                     baselineCommit: data.baselineCommit || requestConfig.baselineCommit,
                     commitBuildMode: data.commitBuildMode || requestConfig.commitBuildMode,
                     commitOrder: data.commitOrder || requestConfig.commitOrder,
-                    commitTimestamps: data.commitTimestamps || requestConfig.commitTimestamps
+                    commitTimestamps: data.commitTimestamps || requestConfig.commitTimestamps,
+                    testType: data.testType || requestConfig.testType,
+                    ctpProvenance: data.ctpProvenance || requestConfig.ctpProvenance
                 });
             } catch (err) {
                 console.warn('Could not read request.json, using callback data only:', err.message);
             }
-            
+
+            // Expose artifact entries separately from attempt logs (SQL reports)
+            combinedData = this.separateResultArtifacts(combinedData);
+
             // Generate HTML report with combined data
             const html = this.generateReportHTML(combinedData, requestId);
             

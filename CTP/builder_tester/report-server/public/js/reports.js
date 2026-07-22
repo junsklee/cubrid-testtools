@@ -299,6 +299,13 @@
         link.textContent = report.id;
         link.target = '_blank';
         tdId.appendChild(link);
+
+        // Test type badge (SQL/SHELL) when known; legacy reports have no badge
+        const typeBadge = createTestTypeBadge(report.testType);
+        if (typeBadge) {
+            tdId.appendChild(typeBadge);
+        }
+
         tr.appendChild(tdId);
 
         // Date & Time
@@ -399,6 +406,21 @@
         tr.appendChild(tdActions);
 
         return tr;
+    }
+
+    // Create a small SQL/SHELL badge for a report row (null when type is unknown)
+    function createTestTypeBadge(testType) {
+        const type = (testType || '').toString().toLowerCase();
+        if (type !== 'sql' && type !== 'shell') return null;
+        const badge = document.createElement('span');
+        badge.textContent = type.toUpperCase();
+        badge.title = type === 'sql' ? 'SQL test report' : 'Shell test report';
+        badge.style.cssText = 'display: inline-block; margin-left: 0.5rem; padding: 0.05rem 0.4rem; ' +
+            'border-radius: 0.25rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; ' +
+            (type === 'sql'
+                ? 'background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35);'
+                : 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);');
+        return badge;
     }
 
     function renderPagination() {

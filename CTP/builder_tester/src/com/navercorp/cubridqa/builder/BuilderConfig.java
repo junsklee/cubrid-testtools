@@ -78,6 +78,30 @@ public class BuilderConfig {
     private static final String SHELL_TC_SYNC_MODE = "shell_tc_sync_mode";
     private static final String COMMIT_BUILD_MODE = "commit_build_mode";
 
+    // SQL tester configuration (cubrid-testcases repo + CTP payload + execution)
+    private static final String SQL_TC_DIR = "sql_tc_dir";
+    private static final String SQL_TC_BRANCH = "sql_tc_branch";
+    private static final String SQL_TC_PREFERRED_REMOTE = "sql_tc_preferred_remote";
+    private static final String SQL_TC_SYNC_MODE = "sql_tc_sync_mode";
+    private static final String SQL_TC_SYNC_INTERVAL_SECONDS = "sql_tc_sync_interval_seconds";
+    private static final String CTP_SQL_REPO = "ctp_sql_repo";
+    private static final String CTP_SQL_REF = "ctp_sql_ref";
+    private static final String CTP_SQL_PRS = "ctp_sql_prs";
+    private static final String CTP_SQL_PIN = "ctp_sql_pin";
+    private static final String CTP_SQL_PAYLOAD_KEEP = "ctp_sql_payload_keep";
+    private static final String SQL_EXEC_MODE = "sql_exec_mode";
+    private static final String SQL_CASE_TIMEOUT_SEC = "sql_case_timeout_sec";
+    private static final String SQL_DB_NAME = "sql_db_name";
+    private static final String SQL_DB_CHARSET = "sql_db_charset";
+    private static final String SQL_CREATEDB_OPTS = "sql_createdb_opts";
+    private static final String SQL_LOAD_STORED_PROCEDURES = "sql_load_stored_procedures";
+    private static final String SQL_NEED_MAKE_LOCALE = "sql_need_make_locale";
+    private static final String SQL_HA_MODE = "sql_ha_mode";
+    private static final String SQL_FRESH_VERIFY_ON_FAIL = "sql_fresh_verify_on_fail";
+    private static final String SQL_AGENTS_PER_COMMIT = "sql_agents_per_commit";
+    private static final String SQL_AGENT_IDLE_TIMEOUT_SEC = "sql_agent_idle_timeout_sec";
+    private static final String SQL_AGENT_MAX_CASES = "sql_agent_max_cases";
+
     // Smart scheduling configuration
     private static final String SMART_SCHEDULING_ENABLED = "smart_scheduling_enabled";
     private static final String SCHEDULING_MICE_THRESHOLD_MS = "scheduling_mice_threshold_ms";
@@ -591,18 +615,157 @@ public class BuilderConfig {
      * Get the shell testcases sync mode.
      * @return SyncMode - one of PER_REQUEST (default), PER_TEST, or DISABLED
      */
-    public com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode getShellTcSyncMode() {
-        String raw = properties.getProperty(SHELL_TC_SYNC_MODE, "per_request").toLowerCase().trim();
-        switch (raw) {
-            case "per_request":
-                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.PER_REQUEST;
+    public com.navercorp.cubridqa.builder.git.TcRepoSync.SyncMode getShellTcSyncMode() {
+        return parseSyncMode(properties.getProperty(SHELL_TC_SYNC_MODE, "per_request"));
+    }
+
+    // ---------- SQL tester configuration ----------
+
+    public String getSqlTcDir() {
+        String raw = properties.getProperty(SQL_TC_DIR, "${HOME}/cubrid-testcases");
+        return expandHome(raw);
+    }
+
+    public String getSqlTcBranch() {
+        return properties.getProperty(SQL_TC_BRANCH, "develop");
+    }
+
+    public String getSqlTcPreferredRemote() {
+        return properties.getProperty(SQL_TC_PREFERRED_REMOTE, "upstream");
+    }
+
+    public String getSqlTcRequestsRootDir() {
+        return Paths.get(getWorkDir()).resolve("sql_tc_requests").toString();
+    }
+
+    public long getSqlTcSyncIntervalSeconds() {
+        return Long.parseLong(properties.getProperty(SQL_TC_SYNC_INTERVAL_SECONDS, "300"));
+    }
+
+    public com.navercorp.cubridqa.builder.git.TcRepoSync.SyncMode getSqlTcSyncMode() {
+        return parseSyncMode(properties.getProperty(SQL_TC_SYNC_MODE, "per_request"));
+    }
+
+    public String getCtpSqlRepo() {
+        return properties.getProperty(CTP_SQL_REPO, "https://github.com/CUBRID/cubrid-testtools.git");
+    }
+
+    public String getCtpSqlRef() {
+        return properties.getProperty(CTP_SQL_REF, "develop");
+    }
+
+    /** PR numbers layered on top of ctp_sql_ref, in order. Default: 757 (run_sql.sh single-case runner). */
+    public List<Integer> getCtpSqlPrs() {
+        String raw = properties.getProperty(CTP_SQL_PRS, "757").trim();
+        List<Integer> prs = new ArrayList<>();
+        if (raw.isEmpty() || raw.equalsIgnoreCase("none")) {
+            return prs;
+        }
+        for (String part : raw.split(",")) {
+            String p = part.trim();
+            if (p.isEmpty()) continue;
+            try {
+                prs.add(Integer.parseInt(p));
+            } catch (NumberFormatException e) {
+                System.err.println("Ignoring invalid PR number in " + CTP_SQL_PRS + ": " + p);
+            }
+        }
+        return prs;
+    }
+
+    /** Optional pinned base SHA for the CTP payload (reproducibility override). */
+    public String getCtpSqlPin() {
+        String raw = properties.getProperty(CTP_SQL_PIN, "").trim();
+        return raw.isEmpty() ? null : raw;
+    }
+
+    public int getCtpSqlPayloadKeep() {
+        return Integer.parseInt(properties.getProperty(CTP_SQL_PAYLOAD_KEEP, "4"));
+    }
+
+    /** "per_case" (one container per case execution) or "pool" (warm agent containers per commit). */
+    public String getSqlExecMode() {
+        String raw = properties.getProperty(SQL_EXEC_MODE, "pool").trim().toLowerCase(Locale.ROOT);
+        return "per_case".equals(raw) ? "per_case" : "pool";
+    }
+
+    public int getSqlCaseTimeoutSec() {
+        return Integer.parseInt(properties.getProperty(SQL_CASE_TIMEOUT_SEC, "300"));
+    }
+
+    public String getSqlDbName() {
+        return properties.getProperty(SQL_DB_NAME, "basic");
+    }
+
+    /**
+     * DB provisioning defaults (charset, createdb opts, make_locale, ha_mode) come
+     * from the CTP payload's own conf/sql.conf at runtime, so they always track
+     * latest develop. The getters below return null/absent unless the operator
+     * explicitly set an override in tester.conf.
+     */
+    public String getSqlDbCharsetOverride() {
+        String raw = properties.getProperty(SQL_DB_CHARSET, "").trim();
+        return raw.isEmpty() ? null : raw;
+    }
+
+    public String getSqlCreatedbOptsOverride() {
+        String raw = properties.getProperty(SQL_CREATEDB_OPTS, "").trim();
+        return raw.isEmpty() ? null : raw;
+    }
+
+    public boolean isSqlLoadStoredProcedures() {
+        return Boolean.parseBoolean(properties.getProperty(SQL_LOAD_STORED_PROCEDURES, "true"));
+    }
+
+    public Boolean getSqlNeedMakeLocaleOverride() {
+        String raw = properties.getProperty(SQL_NEED_MAKE_LOCALE, "").trim();
+        return raw.isEmpty() ? null : Boolean.parseBoolean(raw);
+    }
+
+    public Boolean getSqlHaModeOverride() {
+        String raw = properties.getProperty(SQL_HA_MODE, "").trim();
+        return raw.isEmpty() ? null : Boolean.parseBoolean(raw);
+    }
+
+    public boolean isSqlFreshVerifyOnFail() {
+        return Boolean.parseBoolean(properties.getProperty(SQL_FRESH_VERIFY_ON_FAIL, "true"));
+    }
+
+    public int getSqlAgentsPerCommit() {
+        return Math.max(1, Integer.parseInt(properties.getProperty(SQL_AGENTS_PER_COMMIT, "4")));
+    }
+
+    public int getSqlAgentIdleTimeoutSec() {
+        return Integer.parseInt(properties.getProperty(SQL_AGENT_IDLE_TIMEOUT_SEC, "120"));
+    }
+
+    public int getSqlAgentMaxCases() {
+        return Math.max(1, Integer.parseInt(properties.getProperty(SQL_AGENT_MAX_CASES, "500")));
+    }
+
+    private String expandHome(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String home = System.getProperty("user.home");
+        String value = raw.trim();
+        if (value.startsWith("${HOME}")) {
+            value = home + value.substring("${HOME}".length());
+        } else if (value.startsWith("~/")) {
+            value = home + value.substring(1);
+        }
+        return value;
+    }
+
+    private com.navercorp.cubridqa.builder.git.TcRepoSync.SyncMode parseSyncMode(String raw) {
+        switch (raw == null ? "" : raw.toLowerCase(Locale.ROOT).trim()) {
             case "per_test":
-                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.PER_TEST;
+                return com.navercorp.cubridqa.builder.git.TcRepoSync.SyncMode.PER_TEST;
             case "disabled":
-                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.DISABLED;
+                return com.navercorp.cubridqa.builder.git.TcRepoSync.SyncMode.DISABLED;
+            case "per_request":
             default:
-                // Unknown value, default to per_request
-                return com.navercorp.cubridqa.builder.git.ShellTcSync.SyncMode.PER_REQUEST;
+                return com.navercorp.cubridqa.builder.git.TcRepoSync.SyncMode.PER_REQUEST;
         }
     }
 

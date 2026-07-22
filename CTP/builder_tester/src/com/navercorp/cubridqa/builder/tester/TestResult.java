@@ -10,6 +10,22 @@ import org.json.JSONObject;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 
 public class TestResult {
+
+    /** An extra file produced by a test attempt (SQL answer diffs, actual/expected output, case source, ...). */
+    public static class ArtifactFile {
+        public final Path path;
+        public final String artifactType;
+        public final int attempt;
+        public final String executionEnv;
+
+        public ArtifactFile(Path path, String artifactType, int attempt, String executionEnv) {
+            this.path = path;
+            this.artifactType = artifactType;
+            this.attempt = attempt;
+            this.executionEnv = executionEnv;
+        }
+    }
+
     private final String testName;
     private final String status;
     private final String message;
@@ -28,7 +44,8 @@ public class TestResult {
     private final String execCommand;
     private final String workspace;
     private final TestExecutionMetrics executionMetrics;
-    
+    private final List<ArtifactFile> artifactFiles;
+
     private TestResult(Builder builder) {
         this.testName = builder.testName;
         this.status = builder.status;
@@ -48,6 +65,7 @@ public class TestResult {
         this.execCommand = builder.execCommand;
         this.workspace = builder.workspace;
         this.executionMetrics = builder.executionMetrics;
+        this.artifactFiles = new ArrayList<>(builder.artifactFiles);
     }
     
     public String getTestName() { return testName; }
@@ -68,6 +86,7 @@ public class TestResult {
     public String getExecCommand() { return execCommand; }
     public String getWorkspace() { return workspace; }
     public TestExecutionMetrics getExecutionMetrics() { return executionMetrics; }
+    public List<ArtifactFile> getArtifactFiles() { return artifactFiles; }
     
     public JSONObject toJson() {
         JSONObject json = new JSONObject()
@@ -140,7 +159,13 @@ public class TestResult {
         private String execCommand;
         private String workspace;
         private TestExecutionMetrics executionMetrics;
-        
+        private List<ArtifactFile> artifactFiles = new ArrayList<>();
+
+        public Builder addArtifactFile(Path path, String artifactType, int attempt, String executionEnv) {
+            this.artifactFiles.add(new ArtifactFile(path, artifactType, attempt, executionEnv));
+            return this;
+        }
+
         public Builder testName(String testName) {
             this.testName = testName;
             return this;

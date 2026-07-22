@@ -233,6 +233,7 @@ class FileService {
                 row.maxRuns = resultsData.maxRuns || requestData.maxRuns || null;
                 row.commitBuildMode = resultsData.commitBuildMode || requestData.commitBuildMode || null;
                 row.buildOnly = resultsData.buildOnly || resultsData.buildOnlyMode || requestData.buildOnly || false;
+                row.testType = resultsData.testType || requestData.testType || null;
 
                 // Get commits - try multiple sources
                 row.commits = resultsData.commits || resultsData.commitOrder || requestData.commits || requestData.commitOrder || [];

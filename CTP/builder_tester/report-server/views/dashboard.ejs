@@ -205,6 +205,18 @@
                     placeholder="develop">
             </div>
 
+            <!-- Test Type Section -->
+            <div class="form-group" id="testTypeSection">
+                <label class="form-label" for="testTypeSelect">
+                    Test Type
+                    <span class="info-icon" title="Shell: shell test cases (.sh), e.g. shell/.../cases/<name>.sh.&#10;SQL: SQL test cases (.sql) executed by CTP, e.g. sql/.../cases/<name>.sql.">ⓘ</span>
+                </label>
+                <select class="form-select" id="testTypeSelect" onchange="onTestTypeChange()">
+                    <option value="shell" selected>Shell</option>
+                    <option value="sql">SQL</option>
+                </select>
+            </div>
+
             <!-- Test Cases Section -->
             <div class="form-group" id="testCasesSection">
                 <label class="form-label" for="testsInput" id="testsInputLabel">Test Cases</label>

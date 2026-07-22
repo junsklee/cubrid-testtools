@@ -1,7 +1,9 @@
 package com.navercorp.cubridqa.builder.tester;
 
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
+import com.navercorp.cubridqa.builder.exec.SqlAgentPool;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
+import com.navercorp.cubridqa.builder.git.SqlTcSync;
 import com.navercorp.cubridqa.builder.http.HttpUtils;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.sun.net.httpserver.HttpExchange;
@@ -25,9 +27,17 @@ public class CancelRequestHandler implements HttpHandler {
     private static final Logger logger = Logger.getLogger(CancelRequestHandler.class.getName());
     private final HttpResponseWriter responseWriter = new HttpResponseWriter();
     private final ShellTcSync shellTcSync;
+    private final SqlTcSync sqlTcSync;
+    private final SqlAgentPool sqlAgentPool;
 
     public CancelRequestHandler(ShellTcSync shellTcSync) {
+        this(shellTcSync, null, null);
+    }
+
+    public CancelRequestHandler(ShellTcSync shellTcSync, SqlTcSync sqlTcSync, SqlAgentPool sqlAgentPool) {
         this.shellTcSync = shellTcSync;
+        this.sqlTcSync = sqlTcSync;
+        this.sqlAgentPool = sqlAgentPool;
     }
 
     @Override
@@ -54,8 +64,14 @@ public class CancelRequestHandler implements HttpHandler {
                 CancelledRequests.cancel(requestId);
                 logger.info("Marked request as cancelled: " + requestId);
                 deleteRequestLogs(requestId);
+                if (sqlAgentPool != null) {
+                    sqlAgentPool.teardownRequest(requestId, logger);
+                }
                 if (shellTcSync != null) {
                     shellTcSync.cleanupRequestWorkspace(logger, requestId);
+                }
+                if (sqlTcSync != null) {
+                    sqlTcSync.cleanupRequestWorkspace(logger, requestId);
                 }
             }
 

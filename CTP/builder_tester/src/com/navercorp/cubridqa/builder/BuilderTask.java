@@ -40,6 +40,7 @@ public class BuilderTask {
     private List<String> commitOrder = Collections.emptyList();
     private Map<String, Long> commitTimestamps = Collections.emptyMap();
     private WorkloadDistributor workloadDistributor;
+    private JSONObject ctpProvenance; // CTP payload provenance for SQL requests (base + PR SHAs)
 
     private static final String COMMIT_BUILD_MODE_BASELINE_CHERRYPICK = "baseline_cherrypick";
     private static final String COMMIT_BUILD_MODE_CHECKOUT = "checkout";
@@ -169,13 +170,22 @@ public class BuilderTask {
             String callbackUrl = request.getString("callbackUrl");
             String cubridBranch = getCubridBranch();
             taskLogger.info("Using CUBRID branch: " + cubridBranch);
+            boolean sqlMode = "sql".equals(request.optString("testType", "shell"));
             ShellTcResolution shellTcResolution = null;
-            if (!buildOnly) {
+            if (!buildOnly && !sqlMode) {
                 shellTcResolution = resolveShellTcReference();
                 taskLogger.info(String.format("Using shell testcase branch %s at commit %s via remote %s",
                     shellTcResolution.branch,
                     shellTcResolution.commit.substring(0, Math.min(12, shellTcResolution.commit.length())),
                     shellTcResolution.remote));
+            }
+            if (!buildOnly && sqlMode) {
+                ShellTcResolution sqlTcResolution = resolveSqlTcReference();
+                taskLogger.info(String.format("Using SQL testcase branch %s at commit %s via remote %s",
+                    sqlTcResolution.branch,
+                    sqlTcResolution.commit.substring(0, Math.min(12, sqlTcResolution.commit.length())),
+                    sqlTcResolution.remote));
+                resolveCtpSqlProvenance();
             }
 
             // Initialize WorkloadDistributor with all nodes (including localhost)
@@ -513,8 +523,84 @@ public class BuilderTask {
         }
     }
 
+    private String getSqlTcBranch() {
+        String configuredDefault = config.getSqlTcBranch();
+        if (configuredDefault == null || configuredDefault.trim().isEmpty()) {
+            configuredDefault = "develop";
+        }
+        String sqlTcBranch = request.optString("sqlTcBranch", configuredDefault).trim();
+        return sqlTcBranch.isEmpty() ? configuredDefault : sqlTcBranch;
+    }
+
+    private ShellTcResolution resolveSqlTcReference() {
+        try {
+            File repoRoot = new File(config.getSqlTcDir());
+            if (!repoRoot.exists() || !repoRoot.isDirectory()) {
+                throw new RuntimeException("sql_tc_dir does not exist: " + repoRoot.getAbsolutePath());
+            }
+
+            ProcessBuilder pb = new ProcessBuilder();
+            pb.directory(repoRoot);
+
+            String branch = getSqlTcBranch();
+            String insideWorkTree = executeCommandAndGetOutput(pb, "git", "rev-parse", "--is-inside-work-tree").trim();
+            if (!"true".equalsIgnoreCase(insideWorkTree)) {
+                throw new RuntimeException("sql_tc_dir is not a git repository: " + repoRoot.getAbsolutePath());
+            }
+
+            String remote = selectTcRemote(pb, branch, config.getSqlTcPreferredRemote());
+            taskLogger.info(String.format("Resolving SQL testcase branch '%s' via remote '%s'", branch, remote));
+            executeCommand(pb, "git", "fetch", remote, branch);
+            String commit = executeCommandAndGetOutput(pb, "git", "rev-parse", "FETCH_HEAD").trim();
+            if (commit.isEmpty()) {
+                throw new RuntimeException("Failed to resolve SQL testcase commit for branch " + branch);
+            }
+            executeCommand(pb, "git", "cat-file", "-e", commit + "^{commit}");
+
+            request.put("sqlTcBranch", branch);
+            request.put("sqlTcCommit", commit);
+            return new ShellTcResolution(branch, commit, remote);
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to resolve SQL testcase branch reference: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Resolves the exact CTP payload provenance (base ref head + PR head SHAs) via
+     * `git ls-remote`, so all testers provision the exact same CTP for this request.
+     * Best-effort: on failure, testers resolve live themselves (logged as a warning).
+     */
+    private void resolveCtpSqlProvenance() {
+        JSONObject provenance = com.navercorp.cubridqa.builder.ctp.CtpProvisioner.resolveRemoteProvenance(
+            config.getCtpSqlRepo(), config.getCtpSqlRef(), config.getCtpSqlPin(), config.getCtpSqlPrs(), taskLogger);
+        if (provenance == null) {
+            taskLogger.warning("Could not pre-resolve CTP provenance; testers will resolve latest refs themselves");
+            return;
+        }
+        String baseSha = provenance.optString("baseSha", "");
+        JSONObject prShas = new JSONObject();
+        JSONArray prs = provenance.optJSONArray("prs");
+        if (prs != null) {
+            for (int i = 0; i < prs.length(); i++) {
+                JSONObject pr = prs.getJSONObject(i);
+                prShas.put(String.valueOf(pr.getInt("pr")), pr.getString("sha"));
+            }
+        }
+        request.put("ctpSqlBaseSha", baseSha);
+        request.put("ctpSqlPrShas", prShas);
+        this.ctpProvenance = provenance;
+        taskLogger.info("Resolved CTP provenance: base " + baseSha.substring(0, Math.min(7, baseSha.length()))
+            + ", prs " + prShas.toString());
+    }
+
     private String selectShellTcRemote(ProcessBuilder pb, String branch) {
-        String preferred = config.getShellTcPreferredRemote();
+        return selectTcRemote(pb, branch, config.getShellTcPreferredRemote());
+    }
+
+    private String selectTcRemote(ProcessBuilder pb, String branch, String preferredRemote) {
+        String preferred = preferredRemote;
         if (preferred == null || preferred.trim().isEmpty()) {
             preferred = "upstream";
         }
@@ -1742,6 +1828,31 @@ public class BuilderTask {
         return runTest(commit, buildPackage, testPath, workerIp, baselineKey, buildType, null);
     }
 
+    /**
+     * Derives a unique, filesystem/container-safe test name from an SQL case path.
+     * "sql/_01_object/_01_type/_004_integer/cases/1014.sql" → "_01_object._01_type._004_integer.1014"
+     * (case basenames like "1014.sql" repeat across suites, so path context is required).
+     */
+    public static String buildSqlTestName(String testPath) {
+        String p = testPath;
+        if (p.endsWith(".sql")) {
+            p = p.substring(0, p.length() - 4);
+        }
+        String[] segments = p.split("/");
+        StringBuilder name = new StringBuilder();
+        for (int i = 0; i < segments.length; i++) {
+            String seg = segments[i];
+            if (i == 0 && "sql".equals(seg)) continue;
+            if ("cases".equals(seg)) continue;
+            if (seg.isEmpty()) continue;
+            if (name.length() > 0) {
+                name.append('.');
+            }
+            name.append(seg.replaceAll("[^a-zA-Z0-9_.-]", "_"));
+        }
+        return name.length() > 0 ? name.toString() : p.replaceAll("[^a-zA-Z0-9_.-]", "_");
+    }
+
     private JSONObject runTest(String commit, String buildPackage, String testPath,
                                String workerIp, String baselineKey, String buildType, TestInstance testInstance) {
         HttpURLConnection conn = null;
@@ -1778,9 +1889,19 @@ public class BuilderTask {
 
             // Prepare test request
             String testDir, testScript, testName;
+            boolean sqlTest = "sql".equals(request.optString("testType", "shell"));
 
             // Check if this is a custom script placeholder
-            if (testPath.equals("custom_script_test")) {
+            if (sqlTest) {
+                // SQL mode - testPath is sql/**/cases/<name>.sql inside the SQL testcases repo
+                testDir = config.getSqlTcDir() + "/" +
+                         testPath.substring(0, testPath.lastIndexOf("/"));
+                testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
+                // Case basenames (e.g. "1014.sql") repeat across suites, so derive a
+                // unique test name from the full relative path (drop sql/ prefix,
+                // /cases/ component and .sql suffix; '/' → '.').
+                testName = buildSqlTestName(testPath);
+            } else if (testPath.equals("custom_script_test")) {
                 // Custom script without test path - use temporary directory
                 String reqId = RequestContext.getRequestId();
                 if (reqId == null || reqId.trim().isEmpty()) {
@@ -1896,6 +2017,25 @@ public class BuilderTask {
             }
             if (shellTcCommit != null && !shellTcCommit.trim().isEmpty()) {
                 testRequest.put("shellTcCommit", shellTcCommit);
+            }
+            testRequest.put("testType", sqlTest ? "sql" : "shell");
+            if (sqlTest) {
+                String sqlTcBranch = request.optString("sqlTcBranch", null);
+                String sqlTcCommit = request.optString("sqlTcCommit", null);
+                if (sqlTcBranch != null && !sqlTcBranch.trim().isEmpty()) {
+                    testRequest.put("sqlTcBranch", sqlTcBranch);
+                }
+                if (sqlTcCommit != null && !sqlTcCommit.trim().isEmpty()) {
+                    testRequest.put("sqlTcCommit", sqlTcCommit);
+                }
+                String ctpBase = request.optString("ctpSqlBaseSha", null);
+                if (ctpBase != null && !ctpBase.trim().isEmpty()) {
+                    testRequest.put("ctpSqlBaseSha", ctpBase);
+                }
+                JSONObject ctpPrShas = request.optJSONObject("ctpSqlPrShas");
+                if (ctpPrShas != null) {
+                    testRequest.put("ctpSqlPrShas", ctpPrShas);
+                }
             }
 
             // Persist test request for diagnostics
@@ -2030,9 +2170,10 @@ public class BuilderTask {
             JSONObject result = new JSONObject()
                 .put("commit", commit)
                 .put("test", testPath)
+                .put("testType", sqlTest ? "sql" : "shell")
                 .put("status", responseJson.optString("status", "unknown"))
                 .put("message", responseJson.optString("message", ""));
-                
+
             // Copy flaky and attempts information if present
             if (responseJson.has("flaky")) {
                 result.put("flaky", responseJson.getBoolean("flaky"));
@@ -2068,6 +2209,12 @@ public class BuilderTask {
                     }
                 } catch (Exception e) {
                     taskLogger.warning("Failed to save multipart log files: " + e.getMessage());
+                }
+                // Preserve attempt/artifact metadata for report generation (files already saved above)
+                if (responseJson.has("attemptLogMetadata")) {
+                    try {
+                        result.put("attemptLogMetadata", responseJson.getJSONArray("attemptLogMetadata"));
+                    } catch (Exception ignore) { }
                 }
             }
             // Handle attempt log metadata from JSON response - fetch actual log content from remote tester or copy from local filesystem
@@ -2534,8 +2681,13 @@ public class BuilderTask {
                 .put("baselineCommit", this.baselineCommit)
                 .put("commitBuildMode", this.commitBuildMode)
                 .put("buildOnly", request.optBoolean("buildOnly", false))
+                .put("testType", request.optString("testType", "shell"))
                 .put("executionTime", executionTime)
                 .put("timestamp", System.currentTimeMillis());
+
+            if (this.ctpProvenance != null) {
+                response.put("ctpProvenance", this.ctpProvenance);
+            }
 
             if (commitOrder != null && !commitOrder.isEmpty()) {
                 response.put("commitOrder", new JSONArray(commitOrder));
@@ -2968,6 +3120,19 @@ public class BuilderTask {
     }
 
     /**
+     * Normalizes a raw test path for distribution. The legacy convenience of
+     * prepending "shell/" to bare paths applies to shell requests only; SQL
+     * paths are already rooted at sql/ and must pass through untouched.
+     */
+    private String normalizeTestPathForDistribution(String raw) {
+        String t = raw == null ? "" : raw.trim().replaceFirst("^/+", "");
+        if ("sql".equals(request.optString("testType", "shell"))) {
+            return t;
+        }
+        return isShellRootedTestPath(t) ? t : ("shell/" + t);
+    }
+
+    /**
      * Legacy distribution: shared work queue pulled by all tester threads.
      */
     private void distributeTestsLegacy(Map<String, String> builtPackages, JSONArray tests,
@@ -2997,8 +3162,7 @@ public class BuilderTask {
             }
 
             for (int i = 0; i < tests.length(); i++) {
-                String raw = tests.getString(i);
-                String testPath = isShellRootedTestPath(raw) ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
+                String testPath = normalizeTestPathForDistribution(tests.getString(i));
                 pendingJobs.offer(new TestJob(commit, buildPackage, testPath));
             }
         }
@@ -3201,9 +3365,7 @@ public class BuilderTask {
         // Normalize tests once for scoring and instance creation
         List<String> normalizedTests = new ArrayList<>();
         for (int i = 0; i < tests.length(); i++) {
-            String raw = tests.getString(i);
-            String testPath = isShellRootedTestPath(raw) ? raw : ("shell/" + raw.replaceFirst("^/+", ""));
-            normalizedTests.add(testPath);
+            normalizedTests.add(normalizeTestPathForDistribution(tests.getString(i)));
         }
 
         // Build test instances

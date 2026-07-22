@@ -15,9 +15,13 @@ import com.navercorp.cubridqa.builder.logs.LogLocator;
 import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
+import com.navercorp.cubridqa.builder.exec.SqlDockerExecutor;
+import com.navercorp.cubridqa.builder.exec.SqlAgentPool;
 import com.navercorp.cubridqa.builder.exec.CubridInstaller;
 import com.navercorp.cubridqa.builder.cache.BuildCache;
+import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
+import com.navercorp.cubridqa.builder.git.SqlTcSync;
 import com.navercorp.cubridqa.builder.logging.LogConfig;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
@@ -61,12 +65,16 @@ public class Tester {
     // Core components
     private final BuildCache buildCache;
     private final ShellTcSync shellTcSync;
+    private final SqlTcSync sqlTcSync;
+    private final CtpProvisioner ctpProvisioner;
+    private final SqlAgentPool sqlAgentPool;
     private final CubridInstaller cubridInstaller;
-    
+
     // Execution strategies
     private final DirectExecutor directExecutor;
     private final StandardDockerExecutor standardDockerExecutor;
     private final OptimizedDockerExecutor optimizedDockerExecutor;
+    private final SqlDockerExecutor sqlDockerExecutor;
     
     // Orchestration
     private final TestOrchestrator testOrchestrator;
@@ -130,13 +138,20 @@ public class Tester {
         // Create core components
         this.buildCache = new BuildCache(Paths.get(config.getWorkDir()));
         this.shellTcSync = new ShellTcSync(config);
+        this.sqlTcSync = new SqlTcSync(config);
+        this.ctpProvisioner = new CtpProvisioner(config);
+        this.sqlAgentPool = new SqlAgentPool(config);
         this.cubridInstaller = new CubridInstaller();
         this.shellTcSync.cleanupStaleRequestWorkspaces(logger);
-        
+        this.sqlTcSync.cleanupStaleRequestWorkspaces(logger);
+
         // Create execution strategies
         this.directExecutor = new DirectExecutor(config, buildCache, shellTcSync, cubridInstaller);
         this.standardDockerExecutor = new StandardDockerExecutor(config, buildCache, shellTcSync);
         this.optimizedDockerExecutor = new OptimizedDockerExecutor(config, buildCache, shellTcSync, imageBuilder);
+        this.sqlDockerExecutor = useDocker
+            ? new SqlDockerExecutor(config, buildCache, sqlTcSync, imageBuilder, ctpProvisioner, sqlAgentPool)
+            : null;
         
         Path profilesDir = Paths.get(config.getWorkDir()).resolve("profiles");
         Path observationWalPath = profilesDir.resolve("test_stats.jl.gz");
@@ -168,6 +183,7 @@ public class Tester {
             directExecutor,
             standardDockerExecutor,
             optimizedDockerExecutor,
+            sqlDockerExecutor,
             useDocker,
             dockerManager,
             new DockerUtils(),
@@ -182,7 +198,7 @@ public class Tester {
         this.healthHandler = new HealthHandler(config, new HttpResponseWriter(), nodeCapacity, testOrchestrator, actualSampler);
         this.scoreHandler = new ScoreHandler(config, new HttpResponseWriter(), testStatsStore, nodeCapacity);
         this.logStreamHandler = new LogStreamHandler(new LogLocator(), new HttpResponseWriter());
-        FinalizeRequestHandler finalizeRequestHandler = new FinalizeRequestHandler(testStatsStore, shellTcSync);
+        FinalizeRequestHandler finalizeRequestHandler = new FinalizeRequestHandler(testStatsStore, shellTcSync, sqlTcSync, sqlAgentPool);
         
         // Build cache is ready for use
         
@@ -214,7 +230,7 @@ public class Tester {
         this.server.createContext("/score", scoreHandler);
         this.server.createContext("/log/", logStreamHandler);
         this.server.createContext("/finalize-request", finalizeRequestHandler);
-        this.server.createContext("/cancel-request", new CancelRequestHandler(shellTcSync));
+        this.server.createContext("/cancel-request", new CancelRequestHandler(shellTcSync, sqlTcSync, sqlAgentPool));
         int maxThreads = Math.max(1, config.getMaxConcurrentTests());
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }

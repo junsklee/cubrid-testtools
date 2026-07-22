@@ -33,6 +33,8 @@ public class Builder {
     private static final String DEFAULT_CUBRID_BRANCH = "develop";
     // Supported shell testcase roots (request "tests" must start with one of these)
     private static final String[] ALLOWED_SHELL_TEST_ROOTS = new String[] { "shell/", "shell_heavy/", "shell_perf/" };
+    // Supported SQL testcase roots (cubrid-testcases repo; requires /cases/ component and .sql suffix)
+    private static final String[] ALLOWED_SQL_TEST_ROOTS = new String[] { "sql/" };
     // Custom script attachments safety limits (JSON base64 payloads)
     private static final int MAX_CUSTOM_ATTACHMENTS = 20;
     private static final long MAX_CUSTOM_ATTACHMENTS_BYTES = 5L * 1024 * 1024; // 5MB decoded total
@@ -95,7 +97,83 @@ public class Builder {
         }
         return false;
     }
-    
+
+    private static boolean isAllowedSqlTestPath(String t) {
+        if (t == null) return false;
+        boolean rootOk = false;
+        for (String root : ALLOWED_SQL_TEST_ROOTS) {
+            if (t.startsWith(root)) {
+                rootOk = true;
+                break;
+            }
+        }
+        if (!rootOk) return false;
+        if (!t.endsWith(".sql")) return false;
+        if (!t.contains("/cases/")) return false;
+        // Reject path traversal and other suspicious segments
+        if (t.contains("..") || t.contains("//") || t.contains("\\")) return false;
+        return true;
+    }
+
+    /**
+     * Normalizes the request's testType field: explicit "shell"/"sql", or inferred
+     * from test paths (all paths under sql/ → sql). The normalized value is written
+     * back into the request so downstream components see a concrete type.
+     */
+    private String normalizeTestType(JSONObject request, boolean buildOnly) {
+        String raw = request.optString("testType", "").trim().toLowerCase();
+        if (!raw.isEmpty()) {
+            if (!raw.equals("shell") && !raw.equals("sql")) {
+                throw new IllegalArgumentException("Invalid 'testType': " + raw + ". Must be one of [shell, sql].");
+            }
+            request.put("testType", raw);
+            return raw;
+        }
+        String inferred = "shell";
+        if (!buildOnly && request.has("tests")) {
+            try {
+                JSONArray tests = request.getJSONArray("tests");
+                boolean anyTest = false;
+                boolean allSql = true;
+                for (int i = 0; i < tests.length(); i++) {
+                    String t = String.valueOf(tests.get(i)).trim();
+                    if (t.isEmpty() || "custom_script_test".equals(t)) continue;
+                    anyTest = true;
+                    if (!t.startsWith("sql/")) {
+                        allSql = false;
+                        break;
+                    }
+                }
+                if (anyTest && allSql) {
+                    inferred = "sql";
+                    logger.info("Inferred testType=sql from test paths");
+                }
+            } catch (Exception ignore) {
+                // Malformed tests array is reported by the dedicated validation below
+            }
+        }
+        request.put("testType", inferred);
+        return inferred;
+    }
+
+    private String normalizeSqlTcBranch(JSONObject request) {
+        String defaultBranch = config.getSqlTcBranch();
+        if (defaultBranch == null || defaultBranch.trim().isEmpty()) {
+            defaultBranch = "develop";
+        }
+        String sqlTcBranch = request.optString("sqlTcBranch", defaultBranch).trim();
+        if (sqlTcBranch.isEmpty()) {
+            sqlTcBranch = defaultBranch;
+        }
+        String error = validateGitRefName(sqlTcBranch);
+        if (error != null) {
+            throw new IllegalArgumentException("Invalid sqlTcBranch '" + sqlTcBranch + "': " + error);
+        }
+        request.put("sqlTcBranch", sqlTcBranch);
+        return sqlTcBranch;
+    }
+
+
     public void start() {
         // Ensure work directory exists
         File workDir = new File(config.getWorkDir());
@@ -722,7 +800,13 @@ public class Builder {
     private void validateRequest(JSONObject request) throws IllegalArgumentException {
         boolean buildOnly = request.optBoolean("buildOnly", false);
         normalizeCubridBranch(request);
-        normalizeShellTcBranch(request, buildOnly);
+        String testType = normalizeTestType(request, buildOnly);
+        boolean sqlMode = "sql".equals(testType);
+        if (sqlMode) {
+            normalizeSqlTcBranch(request);
+        } else {
+            normalizeShellTcBranch(request, buildOnly);
+        }
         boolean hasCommits = request.has("commits") && request.getJSONArray("commits").length() > 0;
         boolean hasPrNumber = request.has("prNumber") && (
             (request.get("prNumber") instanceof Number && ((Number) request.get("prNumber")).intValue() > 0) ||
@@ -751,6 +835,9 @@ public class Builder {
         // Check for custom shell script - if provided, tests can be empty
         boolean hasCustomScript = request.has("customShellScript") &&
                                   !request.getString("customShellScript").trim().isEmpty();
+        if (sqlMode && hasCustomScript) {
+            throw new IllegalArgumentException("'customShellScript' is not supported with testType=sql");
+        }
 
         // Validate custom attachments (only allowed when customShellScript is present)
         if (request.has("customAttachments")) {
@@ -795,20 +882,32 @@ public class Builder {
                     if (t.isEmpty()) continue;
                     if ("custom_script_test".equals(t)) continue;
 
-                    // Enforce strict shell test paths. Reject anything not starting with an allowed shell root.
-                    if (!isAllowedShellTestPath(t)) {
-                        invalid.add(t);
-                        continue;
-                    }
-                    if (!t.endsWith(".sh")) {
-                        invalid.add(t);
-                        continue;
+                    if (sqlMode) {
+                        // Enforce strict SQL test paths: sql/**/cases/<name>.sql
+                        // (nesting depth between sql/ and cases/ varies in cubrid-testcases; key on /cases/)
+                        if (!isAllowedSqlTestPath(t)) {
+                            invalid.add(t);
+                            continue;
+                        }
+                    } else {
+                        // Enforce strict shell test paths. Reject anything not starting with an allowed shell root.
+                        if (!isAllowedShellTestPath(t)) {
+                            invalid.add(t);
+                            continue;
+                        }
+                        if (!t.endsWith(".sh")) {
+                            invalid.add(t);
+                            continue;
+                        }
                     }
                 }
                 if (!invalid.isEmpty()) {
                     throw new IllegalArgumentException(
                         "Invalid test path(s): " + String.join(", ", invalid) +
-                        ". Expected filesystem paths starting with one of: shell/, shell_heavy/, shell_perf/ (ending with .sh)."
+                        (sqlMode
+                            ? ". Expected SQL testcase paths like sql/.../cases/<name>.sql (must contain a /cases/ component and end with .sql)."
+                            : ". Expected filesystem paths starting with one of: shell/, shell_heavy/, shell_perf/ (ending with .sh)."
+                        )
                     );
                 }
             }
