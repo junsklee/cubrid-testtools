@@ -568,31 +568,23 @@ public class BuilderTask {
     }
 
     /**
-     * Resolves the exact CTP payload provenance (base ref head + PR head SHAs) via
-     * `git ls-remote`, so all testers provision the exact same CTP for this request.
-     * Best-effort: on failure, testers resolve live themselves (logged as a warning).
+     * Resolves the exact CTP base SHA via `git ls-remote`, so all testers
+     * provision the exact same CTP for this request. Single-case execution uses
+     * builder-tester's own runner (no upstream PR is layered on), so only the
+     * base ref is resolved. Best-effort: on failure, testers resolve the latest
+     * ref themselves (logged as a warning).
      */
     private void resolveCtpSqlProvenance() {
         JSONObject provenance = com.navercorp.cubridqa.builder.ctp.CtpProvisioner.resolveRemoteProvenance(
-            config.getCtpSqlRepo(), config.getCtpSqlRef(), config.getCtpSqlPin(), config.getCtpSqlPrs(), taskLogger);
+            config.getCtpSqlRepo(), config.getCtpSqlRef(), config.getCtpSqlPin(), taskLogger);
         if (provenance == null) {
-            taskLogger.warning("Could not pre-resolve CTP provenance; testers will resolve latest refs themselves");
+            taskLogger.warning("Could not pre-resolve CTP provenance; testers will resolve latest ref themselves");
             return;
         }
         String baseSha = provenance.optString("baseSha", "");
-        JSONObject prShas = new JSONObject();
-        JSONArray prs = provenance.optJSONArray("prs");
-        if (prs != null) {
-            for (int i = 0; i < prs.length(); i++) {
-                JSONObject pr = prs.getJSONObject(i);
-                prShas.put(String.valueOf(pr.getInt("pr")), pr.getString("sha"));
-            }
-        }
         request.put("ctpSqlBaseSha", baseSha);
-        request.put("ctpSqlPrShas", prShas);
         this.ctpProvenance = provenance;
-        taskLogger.info("Resolved CTP provenance: base " + baseSha.substring(0, Math.min(7, baseSha.length()))
-            + ", prs " + prShas.toString());
+        taskLogger.info("Resolved CTP provenance: base " + baseSha.substring(0, Math.min(7, baseSha.length())));
     }
 
     private String selectShellTcRemote(ProcessBuilder pb, String branch) {
@@ -2031,10 +2023,6 @@ public class BuilderTask {
                 String ctpBase = request.optString("ctpSqlBaseSha", null);
                 if (ctpBase != null && !ctpBase.trim().isEmpty()) {
                     testRequest.put("ctpSqlBaseSha", ctpBase);
-                }
-                JSONObject ctpPrShas = request.optJSONObject("ctpSqlPrShas");
-                if (ctpPrShas != null) {
-                    testRequest.put("ctpSqlPrShas", ctpPrShas);
                 }
             }
 

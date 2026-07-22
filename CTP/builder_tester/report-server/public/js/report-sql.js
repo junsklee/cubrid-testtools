@@ -168,16 +168,18 @@
         if (!host) return;
 
         var text = 'CTP: develop @' + shortShaSql(prov.baseSha);
+        // Legacy reports may still carry layered PRs; show them only if present.
         (Array.isArray(prov.prs) ? prov.prs : []).forEach(function(pr) {
             if (!pr || pr.pr == null) return;
             text += ' + PR#' + pr.pr + ' @' + shortShaSql(pr.sha);
         });
+        text += ' (built-in single-case runner)';
 
         var line = document.createElement('div');
         line.id = 'sqlCtpProvenance';
         line.className = 'sql-ctp-provenance';
         line.textContent = text;
-        line.title = 'CTP version used to execute the SQL test cases (develop base + PRs merged on top)';
+        line.title = 'CTP version used to execute the SQL test cases (plain develop; single-case execution via builder-tester\'s own runner)';
         if (grid && grid.nextSibling) {
             host.insertBefore(line, grid.nextSibling);
         } else {

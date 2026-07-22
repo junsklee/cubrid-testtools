@@ -36,7 +36,6 @@ public class TestRequest {
     private final String sqlTcBranch; // SQL testcase branch selection
     private final String sqlTcCommit; // Exact SQL testcase commit resolved by Builder
     private final String ctpSqlBaseSha; // Exact CTP base SHA resolved by Builder (may be null)
-    private final JSONObject ctpSqlPrShas; // PR number (string key) -> exact head SHA (may be null)
 
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
@@ -65,7 +64,6 @@ public class TestRequest {
         this.sqlTcBranch = json.optString("sqlTcBranch", null);
         this.sqlTcCommit = json.optString("sqlTcCommit", null);
         this.ctpSqlBaseSha = json.optString("ctpSqlBaseSha", null);
-        this.ctpSqlPrShas = json.optJSONObject("ctpSqlPrShas");
 
         if (json.has("timeBudgetMs")) {
             long tb = json.optLong("timeBudgetMs", -1);
@@ -138,5 +136,4 @@ public class TestRequest {
     public String getSqlTcBranch() { return sqlTcBranch; }
     public String getSqlTcCommit() { return sqlTcCommit; }
     public String getCtpSqlBaseSha() { return ctpSqlBaseSha; }
-    public JSONObject getCtpSqlPrShas() { return ctpSqlPrShas; }
 }

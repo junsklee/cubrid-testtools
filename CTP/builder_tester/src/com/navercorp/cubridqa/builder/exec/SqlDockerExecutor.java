@@ -12,16 +12,13 @@ import com.navercorp.cubridqa.builder.tester.TestRequest;
 import com.navercorp.cubridqa.builder.tester.TestResult;
 import com.navercorp.cubridqa.builder.tester.TestStatus;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
-import org.json.JSONObject;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
@@ -31,10 +28,11 @@ import java.util.logging.Logger;
  * Executes SQL testcases (cubrid-testcases sql/**&#47;cases/*.sql) inside Docker.
  *
  * Reuses the per-commit test images produced by DockerImageBuilder (CUBRID
- * pre-installed at /opt/cubrid) and stages a pinned CTP payload (latest develop
- * + PR #757) provided by {@link CtpProvisioner} into the container workspace.
- * A generated sql_env_setup.sh provisions the test DB once per container and
- * PR #757's bin/run_sql.sh executes the individual case.
+ * pre-installed at /opt/cubrid) and stages a pinned CTP payload (latest develop,
+ * plain — no upstream PR layered on) provided by {@link CtpProvisioner} into the
+ * container workspace. A generated sql_env_setup.sh provisions the test DB once
+ * per container and a generated sql_run_case.sh executes each case via CTP's
+ * ConsoleAgent (our own built-in single-case runner).
  *
  * Two modes (sql_exec_mode):
  *  - "pool": warm agent containers per (request, commit) amortize DB
@@ -155,8 +153,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         // 3) CTP payload (latest develop + configured PRs, pinned by builder-resolved SHAs)
         CtpProvisioner.CtpPayload ctpPayload;
         try {
-            ctpPayload = ctpProvisioner.preparePayload(
-                request.getCtpSqlBaseSha(), prShaMap(request.getCtpSqlPrShas()), testLogger);
+            ctpPayload = ctpProvisioner.preparePayload(request.getCtpSqlBaseSha(), testLogger);
             testLogger.info("Using CTP payload " + ctpPayload.fingerprint);
         } catch (Exception e) {
             return finalizeResult(errorBuilder(request, TestStatus.ENVIRONMENT_ERROR,
@@ -508,7 +505,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
 
         Path testsDir = resolveRequestTestsDir(request, testLogger);
         if (testsDir != null) {
-            // Primary attempt log: container/exec console + run_sql.sh console output
+            // Primary attempt log: container/exec console + ConsoleAgent console output
             try {
                 StringBuilder combined = new StringBuilder();
                 if (finalRun.containerConsole != null) {
@@ -516,7 +513,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
                 }
                 Path caseConsole = finalRun.attemptDir != null ? finalRun.attemptDir.resolve("console.log") : null;
                 if (caseConsole != null && Files.isReadable(caseConsole)) {
-                    combined.append("\n----- run_sql.sh console -----\n");
+                    combined.append("\n----- ConsoleAgent console -----\n");
                     combined.append(new String(Files.readAllBytes(caseConsole), "UTF-8"));
                 }
                 Path logFile = testsDir.resolve("sql_" + commitShort + "_" + safeTestName + suffix + ".log");
@@ -566,7 +563,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
                     }
                     Path warmConsole = warmRun.attemptDir != null ? warmRun.attemptDir.resolve("console.log") : null;
                     if (warmConsole != null && Files.isReadable(warmConsole)) {
-                        warmLog.append("\n----- run_sql.sh console (warm agent) -----\n");
+                        warmLog.append("\n----- ConsoleAgent console (warm agent) -----\n");
                         warmLog.append(new String(Files.readAllBytes(warmConsole), "UTF-8"));
                     }
                     Path warmFile = testsDir.resolve("sql_warm_" + commitShort + "_" + safeTestName + suffix + ".log");
@@ -670,19 +667,6 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         } catch (Exception e) {
             return false;
         }
-    }
-
-    private Map<Integer, String> prShaMap(JSONObject ctpSqlPrShas) {
-        Map<Integer, String> map = new HashMap<>();
-        if (ctpSqlPrShas != null) {
-            for (String key : ctpSqlPrShas.keySet()) {
-                try {
-                    map.put(Integer.parseInt(key), ctpSqlPrShas.getString(key));
-                } catch (Exception ignore) {
-                }
-            }
-        }
-        return map;
     }
 
     private TestResult.Builder errorBuilder(TestRequest request, TestStatus status, String message) {

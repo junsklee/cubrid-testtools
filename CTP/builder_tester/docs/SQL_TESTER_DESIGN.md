@@ -1,6 +1,19 @@
 # SQL Tester Runner — Design
 
 **Status:** Implemented (see [SQL_TESTER.md](SQL_TESTER.md) for usage; §12 milestones 1–5 delivered)
+
+> **Revision note (PR #757 dependency removed).** This document was written when
+> single-case execution was to be provided by upstream PR #757 (`bin/run_sql.sh`),
+> layered onto CTP develop by the provisioner. That dependency has since been
+> **removed**: PR #757 makes no Java changes — its `run_sql.sh` is a thin wrapper
+> over CTP's standard `ConsoleAgent runCQT` entry point, which is present in plain
+> develop. Builder-tester now ships its **own** single-case runner (generated
+> `sql_run_case.sh`, which invokes `ConsoleAgent` directly), so `CtpProvisioner`
+> stages **plain CTP develop** with no PR merged and no merge-conflict failure
+> mode. Wherever the text below says "develop + PR #757", "merge the PR",
+> `ctp_sql_prs`, or `run_sql.sh`, read it as "plain develop" and "our generated
+> `sql_run_case.sh` calling `ConsoleAgent`". Config key `ctp_sql_prs` no longer
+> exists; `ctp_sql_repo`/`ctp_sql_ref`/`ctp_sql_pin` remain.
 **Scope:** Add a Docker-based SQL test-case runner to Builder-Tester, with full integration into the existing request pipeline and the report-server UI. The Builder is unchanged in what it produces (per-commit CUBRID build tarballs); the Tester gains a new SQL execution path.
 
 ---

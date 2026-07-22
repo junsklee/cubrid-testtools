@@ -10,8 +10,8 @@ import java.util.Map;
  *
  * The generated sql_run_case.sh writes a single status line
  * ("SQLCASE_RESULT status=ok rc=0 core=0 [reason=...]") both to stdout and to
- * <out>/status.line. Exit codes are never trusted: CTP's run_sql.sh (PR #757)
- * exits 0 even for [NOK].
+ * <out>/status.line. Exit codes are never trusted: CTP's ConsoleAgent exits 0
+ * even for [NOK].
  */
 public final class SqlResultParser {
 

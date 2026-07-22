@@ -67,14 +67,12 @@ public class SqlTestSupportTest {
             .put("testType", "sql")
             .put("sqlTcBranch", "develop")
             .put("sqlTcCommit", "abc123")
-            .put("ctpSqlBaseSha", "deadbeef")
-            .put("ctpSqlPrShas", new JSONObject().put("757", "cafebabe"));
+            .put("ctpSqlBaseSha", "deadbeef");
         TestRequest request = new TestRequest(json);
         assert request.isSqlTest() : "testType=sql must be recognized";
         assertEquals("develop", request.getSqlTcBranch(), "sqlTcBranch");
         assertEquals("abc123", request.getSqlTcCommit(), "sqlTcCommit");
         assertEquals("deadbeef", request.getCtpSqlBaseSha(), "ctpSqlBaseSha");
-        assertEquals("cafebabe", request.getCtpSqlPrShas().getString("757"), "ctpSqlPrShas");
 
         TestRequest shell = new TestRequest(new JSONObject()
             .put("testPath", "shell/x/cases/x.sh")

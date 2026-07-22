@@ -5,8 +5,8 @@
 # Submits a build request with testType=sql. Test paths come from the
 # https://github.com/CUBRID/cubrid-testcases repository and must match
 # sql/**/cases/<name>.sql (the expected output lives at the sibling
-# answers/<name>.answer). Cases are executed with CTP (latest develop
-# + PR #757 run_sql.sh) inside Docker on the tester nodes.
+# answers/<name>.answer). Cases are executed with plain CTP (latest develop)
+# via builder-tester's own single-case runner inside Docker on the tester nodes.
 
 # Configuration
 BUILDER_URL="http://localhost:8089"

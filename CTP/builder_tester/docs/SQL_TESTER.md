@@ -4,9 +4,10 @@ Builder-Tester can execute **SQL testcases** from
 [CUBRID/cubrid-testcases](https://github.com/CUBRID/cubrid-testcases) in addition
 to shell testcases. The Builder side (per-commit CUBRID build tarballs, per-commit
 Docker test images) is shared with the shell path; execution is a dedicated
-Docker-based SQL runner driven by **CTP latest `develop` with
-[PR #757](https://github.com/CUBRID/cubrid-testtools/pull/757) merged on top**
-(`bin/run_sql.sh`, single-case execution).
+Docker-based SQL runner driven by **plain CTP `develop`**. Single-case execution
+is provided by builder-tester's **own generated runner**, which calls CTP's
+standard `ConsoleAgent runCQT` entry point directly — so there is **no dependency
+on any upstream PR or wrapper script**.
 
 Design rationale and architecture diagrams: [SQL_TESTER_DESIGN.md](SQL_TESTER_DESIGN.md).
 
@@ -43,18 +44,16 @@ Sample client: `bin/test_client_sql.sh`.
 
 1. **Builder** resolves, once per request:
    - the exact `cubrid-testcases` commit (`sqlTcCommit`),
-   - the exact CTP provenance via `git ls-remote`: head of `ctp_sql_ref`
-     (default `develop`) plus the head SHA of every PR in `ctp_sql_prs`
-     (default `757`). These SHAs ride along in every `/test` request and in the
+   - the exact CTP base SHA via `git ls-remote` (head of `ctp_sql_ref`, default
+     `develop`). That SHA rides along in every `/test` request and in the
      callback (`ctpProvenance`), so all testers execute the identical CTP and
      the report shows exactly what ran.
 2. **Tester** (per node):
    - `CtpProvisioner` keeps a cache under `<work_dir>/ctp_sql/`: a clone of
-     `ctp_sql_repo`, plus payload directories `payload_<fingerprint>/CTP`
-     containing `CTP/{bin,common,conf,sql}` (~16 MB, prebuilt jars) built by
-     merging the PR heads onto the base SHA. Payloads are rebuilt only when
-     upstream moves; a merge conflict fails the test with an actionable error
-     (pin a compatible base with `ctp_sql_pin`).
+     `ctp_sql_repo`, plus payload directories `payload_<sha7>/CTP` containing
+     `CTP/{bin,common,conf,sql}` (~16 MB, prebuilt jars). The payload is plain
+     CTP at the resolved SHA — no PR is merged on top. Rebuilt only when the
+     resolved ref moves.
    - `SqlTcSync` maintains `<work_dir>/sql_tc_requests/<requestId>/repo`, a git
      worktree of `sql_tc_dir` pinned to `sqlTcCommit`, mounted read-only at
      `/workspace/testcases`.
@@ -65,17 +64,20 @@ Sample client: `bin/test_client_sql.sh`.
 
 Inside a container, the generated `sql_env_setup.sh` provisions the DB once —
 replicating `CTP/sql/bin/run.sh`. All provisioning settings (`db_charset`,
-`cubrid_createdb_opts`, `need_make_locale`, the `[sql/cubrid.conf]`,
-`[sql/cubrid_ha.conf]` and broker sections) are read **at runtime from the CTP
-payload's own `conf/sql.conf`** via CTP's `ini.sh` — so configuration defaults
-always track latest develop, not a hardcoded snapshot; `sql_*` keys in
-tester.conf act as explicit overrides only. The script then compiles locales,
-runs `cubrid createdb`, loads Java stored procedures, starts server/broker/
-javasp, and rewrites the `Function_Db/basic_qa.xml` dburl. Fixed ports/shm-ids
-are safe because every container has its own network and IPC namespace. Each
-case then runs via `CTP/bin/run_sql.sh <case>.sql basic` (PR #757). The verdict
-is parsed from the console `[OK]`/`[NOK]` — never the exit code, which is
-always 0.
+`cubrid_createdb_opts`, `need_make_locale`, `jdbc_config_file`, the
+`[sql/cubrid.conf]`, `[sql/cubrid_ha.conf]` and broker sections) are read **at
+runtime from the CTP payload's own `conf/sql.conf`** via CTP's `ini.sh` — so
+configuration defaults always track latest develop, not a hardcoded snapshot;
+`sql_*` keys in tester.conf act as explicit overrides only. The script then
+compiles locales, runs `cubrid createdb`, loads Java stored procedures, starts
+server/broker/javasp, and rewrites the `Function_Db/basic_qa.xml` dburl. Fixed
+ports/shm-ids are safe because every container has its own network and IPC
+namespace. Each case then runs through the generated `sql_run_case.sh`, which
+invokes CTP's `ConsoleAgent runCQT sql sql 64 <jdbc_config_file>
+"<case>?db=basic_qa"` directly (classpath assembled from
+`$CTP_HOME/sql/lib/*.jar`) — builder-tester's own single-case runner, needing
+only entry points that ship in plain CTP develop. The verdict is parsed from the
+console `[OK]`/`[NOK]` — never the exit code, which is always 0.
 
 Note: warnings like `The 'java_stored_procedure' parameter ... Deprecated
 parameter` on CUBRID ≥11.5 come from upstream CTP's own `conf/sql.conf`
@@ -110,7 +112,7 @@ Per attempt, the tester ships (multipart) and the Builder stores under
 
 | artifactType | file | when |
 |---|---|---|
-| (attempt log) | `sql_<commit7>_<testName>[.N].log` | always (container console + run_sql.sh output) |
+| (attempt log) | `sql_<commit7>_<testName>[.N].log` | always (container console + ConsoleAgent output) |
 | `answer_diff` | `sql_diff_<commit7>_<testName>[.N].diff` | on failure — unified diff expected vs actual |
 | `actual_result` | `sql_actual_<commit7>_<testName>[.N].result` | on failure |
 | `expected_answer` | `sql_expected_<commit7>_<testName>[.N].answer` | on failure |
@@ -126,7 +128,7 @@ Case SQL / Console tabs and shows the CTP provenance in the report header.
 ## Configuration reference
 
 `conf/builder.conf`: `sql_tc_dir`, `sql_tc_branch`, `sql_tc_preferred_remote`,
-`ctp_sql_repo`, `ctp_sql_ref`, `ctp_sql_prs`, `ctp_sql_pin`.
+`ctp_sql_repo`, `ctp_sql_ref`, `ctp_sql_pin`.
 
 `conf/tester.conf`: all of the above plus `sql_tc_sync_mode`, `sql_exec_mode`,
 `sql_agents_per_commit`, `sql_agent_idle_timeout_sec`, `sql_agent_max_cases`,

@@ -3,11 +3,9 @@ package com.navercorp.cubridqa.builder.ctp;
 import com.navercorp.cubridqa.builder.BuilderConfig;
 import com.navercorp.cubridqa.builder.exec.ProcessIO;
 import com.navercorp.cubridqa.builder.tester.SafeIo;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.DirectoryStream;
@@ -17,7 +15,6 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -25,14 +22,16 @@ import java.util.logging.Logger;
 
 /**
  * Prepares the CTP payload used for SQL test execution: latest CTP from the
- * configured ref (default: develop of CUBRID/cubrid-testtools) with the
- * configured PRs merged on top (default: #757, which adds bin/run_sql.sh for
- * single-case execution).
+ * configured ref (default: develop of CUBRID/cubrid-testtools), or a pinned SHA.
  *
- * Payloads are cached under <work_dir>/ctp_sql/payload_<fingerprint>/ where
- * the fingerprint is derived from the exact base and PR head SHAs, so a
- * payload is rebuilt only when upstream moves. The payload contains only the
- * CTP components needed inside a test container: CTP/{bin,common,conf,sql}
+ * The single-case execution capability is provided by builder-tester's own
+ * generated runner (which calls CTP's standard {@code ConsoleAgent runCQT}
+ * entry point), so no upstream PR needs to be layered on top — the payload is
+ * plain CTP.
+ *
+ * Payloads are cached under {@code <work_dir>/ctp_sql/payload_<sha7>/} so a
+ * payload is rebuilt only when the resolved ref moves. Each payload contains
+ * only the CTP components a test container needs: {@code CTP/{bin,common,conf,sql}}
  * (~16MB, prebuilt jars included — no compilation required).
  */
 public class CtpProvisioner {
@@ -45,105 +44,61 @@ public class CtpProvisioner {
         this.config = config;
     }
 
-    /** A resolved PR reference: number + exact head SHA. */
-    public static class PrRef {
-        public final int number;
-        public final String sha;
-
-        public PrRef(int number, String sha) {
-            this.number = number;
-            this.sha = sha;
-        }
-    }
-
     /** A prepared payload on disk plus its provenance. */
     public static class CtpPayload {
         public final Path ctpDir;
         public final String baseSha;
-        public final List<PrRef> prRefs;
         public final String fingerprint;
 
-        CtpPayload(Path ctpDir, String baseSha, List<PrRef> prRefs, String fingerprint) {
+        CtpPayload(Path ctpDir, String baseSha, String fingerprint) {
             this.ctpDir = ctpDir;
             this.baseSha = baseSha;
-            this.prRefs = prRefs;
             this.fingerprint = fingerprint;
         }
 
         public JSONObject toProvenanceJson() {
-            JSONObject json = new JSONObject()
+            return new JSONObject()
                 .put("baseSha", baseSha)
-                .put("fingerprint", fingerprint);
-            JSONArray prs = new JSONArray();
-            for (PrRef pr : prRefs) {
-                prs.put(new JSONObject().put("pr", pr.number).put("sha", pr.sha));
-            }
-            json.put("prs", prs);
-            return json;
+                .put("fingerprint", fingerprint)
+                .put("harness", "builtin");
         }
     }
 
     /**
-     * Resolve the CTP provenance (base + PR head SHAs) directly against the
-     * remote via `git ls-remote`, without needing a local clone. Used by the
-     * Builder at request setup so every tester provisions the exact same CTP.
+     * Resolve the CTP base SHA directly against the remote via {@code git
+     * ls-remote}, without needing a local clone. Used by the Builder at request
+     * setup so every tester provisions the exact same CTP.
      *
-     * @return provenance JSON ({baseSha, prs:[{pr,sha}]}) or null on failure
+     * @return provenance JSON ({baseSha, harness:"builtin"}) or null on failure
      */
-    public static JSONObject resolveRemoteProvenance(String repoUrl, String ref, String pinnedBaseSha,
-                                                     List<Integer> prs, Logger log) {
+    public static JSONObject resolveRemoteProvenance(String repoUrl, String ref, String pinnedBaseSha, Logger log) {
         try {
-            List<String> cmd = new ArrayList<>();
-            cmd.add("git");
-            cmd.add("ls-remote");
-            cmd.add(repoUrl);
-            cmd.add("refs/heads/" + ref);
-            for (Integer pr : prs) {
-                cmd.add("refs/pull/" + pr + "/head");
+            if (pinnedBaseSha != null && !pinnedBaseSha.trim().isEmpty()) {
+                return new JSONObject().put("baseSha", pinnedBaseSha.trim()).put("harness", "builtin");
             }
-            ProcessBuilder pb = new ProcessBuilder(cmd);
+            ProcessBuilder pb = new ProcessBuilder("git", "ls-remote", repoUrl, "refs/heads/" + ref);
             pb.redirectErrorStream(true);
             Process process = pb.start();
-            Map<String, String> refToSha = new LinkedHashMap<>();
+            String baseSha = null;
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String[] parts = line.trim().split("\\s+");
-                    if (parts.length >= 2) {
-                        refToSha.put(parts[1], parts[0]);
+                    if (parts.length >= 2 && parts[1].equals("refs/heads/" + ref)) {
+                        baseSha = parts[0];
                     }
                 }
             }
             if (!process.waitFor(60, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                log.warning("git ls-remote timed out resolving CTP provenance from " + repoUrl);
+                log.warning("git ls-remote timed out resolving CTP ref from " + repoUrl);
                 return null;
             }
-            if (process.exitValue() != 0) {
-                log.warning("git ls-remote failed (" + process.exitValue() + ") resolving CTP provenance from " + repoUrl);
+            if (process.exitValue() != 0 || baseSha == null || baseSha.isEmpty()) {
+                log.warning("Could not resolve CTP ref '" + ref + "' from " + repoUrl);
                 return null;
             }
-
-            String baseSha = pinnedBaseSha != null && !pinnedBaseSha.trim().isEmpty()
-                ? pinnedBaseSha.trim()
-                : refToSha.get("refs/heads/" + ref);
-            if (baseSha == null || baseSha.isEmpty()) {
-                log.warning("Could not resolve CTP base ref '" + ref + "' from " + repoUrl);
-                return null;
-            }
-
-            JSONObject provenance = new JSONObject().put("baseSha", baseSha);
-            JSONArray prArray = new JSONArray();
-            for (Integer pr : prs) {
-                String sha = refToSha.get("refs/pull/" + pr + "/head");
-                if (sha == null) {
-                    log.warning("Could not resolve CTP PR #" + pr + " head from " + repoUrl);
-                    return null;
-                }
-                prArray.put(new JSONObject().put("pr", pr).put("sha", sha));
-            }
-            provenance.put("prs", prArray);
-            return provenance;
+            return new JSONObject().put("baseSha", baseSha).put("harness", "builtin");
         } catch (Exception e) {
             log.warning("Failed to resolve CTP provenance from " + repoUrl + ": " + e.getMessage());
             return null;
@@ -151,13 +106,11 @@ public class CtpProvisioner {
     }
 
     /**
-     * Prepare (or reuse) the CTP payload for the given provenance.
+     * Prepare (or reuse) the CTP payload.
      *
      * @param requestedBaseSha exact base SHA to use, or null to resolve the configured ref's head
-     * @param requestedPrShas  PR number → exact head SHA overrides (may be empty; missing PRs are resolved live)
      */
-    public CtpPayload preparePayload(String requestedBaseSha, Map<Integer, String> requestedPrShas, Logger log)
-            throws IOException, InterruptedException {
+    public CtpPayload preparePayload(String requestedBaseSha, Logger log) throws IOException, InterruptedException {
         synchronized (lock) {
             Path root = Paths.get(config.getWorkDir()).resolve("ctp_sql");
             Files.createDirectories(root);
@@ -180,38 +133,19 @@ public class CtpProvisioner {
                 baseSha = runAndGetOutput(pb, "git", "rev-parse", "FETCH_HEAD").trim();
             }
 
-            List<PrRef> prRefs = new ArrayList<>();
-            for (Integer pr : config.getCtpSqlPrs()) {
-                String sha = requestedPrShas != null ? requestedPrShas.get(pr) : null;
-                if (sha == null || sha.trim().isEmpty()) {
-                    ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", "origin", "pull/" + pr + "/head"});
-                    sha = runAndGetOutput(pb, "git", "rev-parse", "FETCH_HEAD").trim();
-                } else {
-                    sha = sha.trim();
-                    ensurePrCommit(pb, pr, sha, log);
-                }
-                prRefs.add(new PrRef(pr, sha));
-            }
-
-            StringBuilder fp = new StringBuilder(shortSha(baseSha));
-            for (PrRef pr : prRefs) {
-                fp.append("_pr").append(pr.number).append("-").append(shortSha(pr.sha));
-            }
-            String fingerprint = fp.toString();
-
+            String fingerprint = shortSha(baseSha);
             Path payloadDir = root.resolve("payload_" + fingerprint);
             Path ctpDir = payloadDir.resolve("CTP");
             if (Files.exists(payloadDir.resolve(".complete")) && Files.isDirectory(ctpDir)) {
                 log.fine("Reusing cached CTP payload: " + payloadDir);
                 touch(payloadDir);
-                return new CtpPayload(ctpDir, baseSha, prRefs, fingerprint);
+                return new CtpPayload(ctpDir, baseSha, fingerprint);
             }
 
-            log.info("Building CTP payload " + fingerprint + " (base " + shortSha(baseSha)
-                + (prRefs.isEmpty() ? ", no PRs" : ", +" + prRefs.size() + " PR(s)") + ")");
-            buildPayload(repoDir, payloadDir, baseSha, prRefs, log);
+            log.info("Building CTP payload " + fingerprint + " (base " + shortSha(baseSha) + ")");
+            buildPayload(repoDir, payloadDir, baseSha, log);
             evictOldPayloads(root, log);
-            return new CtpPayload(ctpDir, baseSha, prRefs, fingerprint);
+            return new CtpPayload(ctpDir, baseSha, fingerprint);
         }
     }
 
@@ -242,21 +176,7 @@ public class CtpProvisioner {
         }
     }
 
-    private void ensurePrCommit(ProcessBuilder pb, int pr, String sha, Logger log) throws IOException, InterruptedException {
-        if (ProcessIO.runAndExitCode(pb, new String[]{"git", "cat-file", "-e", sha + "^{commit}"}) == 0) {
-            return;
-        }
-        ProcessIO.runAndExitCode(pb, new String[]{"git", "fetch", "origin", "pull/" + pr + "/head"});
-        if (ProcessIO.runAndExitCode(pb, new String[]{"git", "cat-file", "-e", sha + "^{commit}"}) == 0) {
-            return;
-        }
-        ProcessIO.runAndExitCode(pb, new String[]{"git", "fetch", "origin", sha});
-        if (ProcessIO.runAndExitCode(pb, new String[]{"git", "cat-file", "-e", sha + "^{commit}"}) != 0) {
-            throw new IOException("CTP PR #" + pr + " commit " + sha + " is not reachable from " + config.getCtpSqlRepo());
-        }
-    }
-
-    private void buildPayload(Path repoDir, Path payloadDir, String baseSha, List<PrRef> prRefs, Logger log)
+    private void buildPayload(Path repoDir, Path payloadDir, String baseSha, Logger log)
             throws IOException, InterruptedException {
         ProcessBuilder repoPb = new ProcessBuilder();
         repoPb.directory(repoDir.toFile());
@@ -266,26 +186,6 @@ public class CtpProvisioner {
         ProcessIO.runOrThrow(repoPb, new String[]{"git", "worktree", "add", "--force", "--detach",
             worktree.toString(), baseSha});
         try {
-            ProcessBuilder wtPb = new ProcessBuilder();
-            wtPb.directory(worktree.toFile());
-            for (PrRef pr : prRefs) {
-                // Skip PRs already merged into the base.
-                if (ProcessIO.runAndExitCode(wtPb, new String[]{"git", "merge-base", "--is-ancestor", pr.sha, "HEAD"}) == 0) {
-                    log.info("CTP PR #" + pr.number + " (" + shortSha(pr.sha) + ") is already contained in base; skipping merge");
-                    continue;
-                }
-                try {
-                    ProcessIO.runOrThrow(wtPb, new String[]{
-                        "git", "-c", "user.name=builder-tester", "-c", "user.email=builder-tester@localhost",
-                        "merge", "--no-ff", "--no-edit", "-m", "builder-tester: apply CTP PR #" + pr.number, pr.sha});
-                } catch (IOException e) {
-                    ProcessIO.runAndExitCode(wtPb, new String[]{"git", "merge", "--abort"});
-                    throw new IOException("Failed to merge CTP PR #" + pr.number + " (" + shortSha(pr.sha)
-                        + ") onto base " + shortSha(baseSha)
-                        + ". Pin a compatible base via ctp_sql_pin or adjust ctp_sql_prs. Cause: " + e.getMessage(), e);
-                }
-            }
-
             // Stage only the components containers need, into a temp dir, then move atomically.
             Path staging = payloadDir.getParent().resolve(payloadDir.getFileName() + ".tmp");
             SafeIo.deleteDirectory(staging.toFile());
@@ -303,12 +203,8 @@ public class CtpProvisioner {
                 .put("repo", config.getCtpSqlRepo())
                 .put("ref", config.getCtpSqlRef())
                 .put("baseSha", baseSha)
+                .put("harness", "builtin")
                 .put("createdAtMs", System.currentTimeMillis());
-            JSONArray prs = new JSONArray();
-            for (PrRef pr : prRefs) {
-                prs.put(new JSONObject().put("pr", pr.number).put("sha", pr.sha));
-            }
-            provenance.put("prs", prs);
             Files.write(staging.resolve("provenance.json"), provenance.toString(2).getBytes("UTF-8"));
             Files.write(staging.resolve(".complete"), new byte[0]);
 

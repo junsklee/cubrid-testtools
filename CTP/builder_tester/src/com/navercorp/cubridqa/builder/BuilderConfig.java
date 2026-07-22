@@ -86,7 +86,6 @@ public class BuilderConfig {
     private static final String SQL_TC_SYNC_INTERVAL_SECONDS = "sql_tc_sync_interval_seconds";
     private static final String CTP_SQL_REPO = "ctp_sql_repo";
     private static final String CTP_SQL_REF = "ctp_sql_ref";
-    private static final String CTP_SQL_PRS = "ctp_sql_prs";
     private static final String CTP_SQL_PIN = "ctp_sql_pin";
     private static final String CTP_SQL_PAYLOAD_KEEP = "ctp_sql_payload_keep";
     private static final String SQL_EXEC_MODE = "sql_exec_mode";
@@ -652,25 +651,6 @@ public class BuilderConfig {
 
     public String getCtpSqlRef() {
         return properties.getProperty(CTP_SQL_REF, "develop");
-    }
-
-    /** PR numbers layered on top of ctp_sql_ref, in order. Default: 757 (run_sql.sh single-case runner). */
-    public List<Integer> getCtpSqlPrs() {
-        String raw = properties.getProperty(CTP_SQL_PRS, "757").trim();
-        List<Integer> prs = new ArrayList<>();
-        if (raw.isEmpty() || raw.equalsIgnoreCase("none")) {
-            return prs;
-        }
-        for (String part : raw.split(",")) {
-            String p = part.trim();
-            if (p.isEmpty()) continue;
-            try {
-                prs.add(Integer.parseInt(p));
-            } catch (NumberFormatException e) {
-                System.err.println("Ignoring invalid PR number in " + CTP_SQL_PRS + ": " + p);
-            }
-        }
-        return prs;
     }
 
     /** Optional pinned base SHA for the CTP payload (reproducibility override). */
