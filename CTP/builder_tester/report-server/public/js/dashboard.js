@@ -379,6 +379,17 @@
         function onTestTypeChange() {
             applyTestCasesDisabledState();
             applyShellTcBranchSectionState();
+            applyCustomFieldsForTestType();
+        }
+
+        // In Custom Script mode, show shell vs SQL custom fields per selected test type.
+        function applyCustomFieldsForTestType() {
+            const shellFields = document.getElementById('customShellFields');
+            const sqlFields = document.getElementById('customSqlFields');
+            if (!shellFields || !sqlFields) return;
+            const isSql = getSelectedTestType() === 'sql';
+            shellFields.style.display = isSql ? 'none' : 'block';
+            sqlFields.style.display = isSql ? 'block' : 'none';
         }
 
         function setSectionDisabled(section, disabled) {
@@ -427,13 +438,15 @@
                 testsInputLabel.style.opacity = disabled ? '0.5' : '1';
             }
 
+            // The test type selector stays usable in custom mode (so SQL custom cases
+            // can be chosen); only build-only disables it.
             const testTypeSelect = document.getElementById('testTypeSelect');
             if (testTypeSelect) {
-                testTypeSelect.disabled = disabled;
+                testTypeSelect.disabled = buildOnly;
             }
             const testTypeSection = document.getElementById('testTypeSection');
             if (testTypeSection) {
-                testTypeSection.style.opacity = disabled ? '0.5' : '1';
+                testTypeSection.style.opacity = buildOnly ? '0.5' : '1';
             }
         }
 
@@ -959,6 +972,7 @@
 
             applyTestCasesDisabledState();
             applyShellTcBranchSectionState();
+            applyCustomFieldsForTestType();
 
             updateCommitCount();
             const modeLabelMap = {
@@ -1258,6 +1272,9 @@
                 // Check if custom script mode is enabled
                 let customScriptContent = null;
                 let customScriptTestPath = null;
+                let customSqlScript = null;
+                let customSqlAnswer = null;
+                const isCustomSqlMode = commitMode === 'custom' && getSelectedTestType() === 'sql';
 
                 // Gather tests
                 const testsInput = document.getElementById('testsInput').value;
@@ -1267,19 +1284,32 @@
 
                 if (!buildOnly) {
                     if (commitMode === 'custom') {
-                        customScriptContent = document.getElementById('customScriptContent').value.trim();
-                        customScriptTestPath = document.getElementById('customScriptTestPath').value.trim();
-
-                        if (!customScriptContent) {
-                            throw new Error('Custom script content is required in Custom Script mode');
-                        }
-
-                        // If custom test path is provided, use it; otherwise use placeholder
-                        if (customScriptTestPath) {
-                            tests = [customScriptTestPath];
-                        } else {
-                            // No test path provided - use placeholder for custom script only mode
+                        if (isCustomSqlMode) {
+                            // Ad-hoc SQL case: script + expected answer
+                            customSqlScript = document.getElementById('customSqlScriptContent').value.trim();
+                            customSqlAnswer = document.getElementById('customSqlAnswerContent').value;
+                            if (!customSqlScript) {
+                                throw new Error('SQL Script Contents is required in Custom Script mode (SQL)');
+                            }
+                            if (!customSqlAnswer || !customSqlAnswer.trim()) {
+                                throw new Error('Expected Answer Contents is required in Custom Script mode (SQL)');
+                            }
                             tests = ['custom_script_test'];
+                        } else {
+                            customScriptContent = document.getElementById('customScriptContent').value.trim();
+                            customScriptTestPath = document.getElementById('customScriptTestPath').value.trim();
+
+                            if (!customScriptContent) {
+                                throw new Error('Custom script content is required in Custom Script mode');
+                            }
+
+                            // If custom test path is provided, use it; otherwise use placeholder
+                            if (customScriptTestPath) {
+                                tests = [customScriptTestPath];
+                            } else {
+                                // No test path provided - use placeholder for custom script only mode
+                                tests = ['custom_script_test'];
+                            }
                         }
                     } else {
                         if (tests.length === 0) {
@@ -1290,8 +1320,8 @@
                     // Validate test paths (prevent accidental report URLs)
                     validateTestPathsForSubmit(tests);
 
-                    // Validate custom attachments (if any)
-                    if (commitMode === 'custom') {
+                    // Validate custom attachments (shell custom mode only)
+                    if (commitMode === 'custom' && !isCustomSqlMode) {
                         if (customScriptAttachmentsLoading > 0) {
                             throw new Error(`Attachments are still loading (${customScriptAttachmentsLoading} file(s)). Please wait.`);
                         }
@@ -1322,8 +1352,8 @@
                     maxRuns: parseInt(document.getElementById('maxRuns').value),
                     buildOnly: buildOnly
                 };
-                // Mark SQL requests explicitly; shell stays the implicit default
-                if (!buildOnly && commitMode !== 'custom' && getSelectedTestType() === 'sql') {
+                // Mark SQL requests explicitly (including custom SQL); shell stays the implicit default
+                if (!buildOnly && getSelectedTestType() === 'sql') {
                     payload.testType = 'sql';
                 }
                 if (manualCubridBranch) {
@@ -1348,16 +1378,22 @@
                 }
 
                 // Add custom script if in custom mode
-                if (!buildOnly && commitMode === 'custom' && customScriptContent) {
-                    payload.customShellScript = customScriptContent;
-                    if (customScriptTestPath) {
-                        payload.customScriptTestPath = customScriptTestPath;
-                    }
-                    if (customScriptAttachments && customScriptAttachments.length > 0) {
-                        payload.customAttachments = customScriptAttachments.map(a => ({
-                            targetPath: (a.targetPath || '').trim(),
-                            contentBase64: a.contentBase64
-                        }));
+                if (!buildOnly && commitMode === 'custom') {
+                    if (isCustomSqlMode) {
+                        // Ad-hoc SQL case: script + expected answer
+                        payload.customSqlScript = customSqlScript;
+                        payload.customSqlAnswer = customSqlAnswer;
+                    } else if (customScriptContent) {
+                        payload.customShellScript = customScriptContent;
+                        if (customScriptTestPath) {
+                            payload.customScriptTestPath = customScriptTestPath;
+                        }
+                        if (customScriptAttachments && customScriptAttachments.length > 0) {
+                            payload.customAttachments = customScriptAttachments.map(a => ({
+                                targetPath: (a.targetPath || '').trim(),
+                                contentBase64: a.contentBase64
+                            }));
+                        }
                     }
                 }
 

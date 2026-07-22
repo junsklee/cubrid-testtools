@@ -45,6 +45,8 @@ import java.util.logging.Logger;
 public class SqlDockerExecutor implements ExecutorStrategy {
     private static final String TESTCASE_MOUNT = SqlScriptFactory.TESTCASE_MOUNT;
     private static final AtomicLong AGENT_LAUNCH_SEQ = new AtomicLong();
+    // Synthetic case basename for custom ad-hoc SQL (materialized under /workspace/custom_sql)
+    private static final String CUSTOM_CASE_BASENAME = "custom_sql_case";
 
     private final Config config;
     private final BuildCache buildCache;
@@ -80,11 +82,12 @@ public class SqlDockerExecutor implements ExecutorStrategy {
             .metricsComplete(false);
 
         String testPath = request.getTestPath();
-        testLogger.info("Running SQL testcase in Docker: " + testPath);
+        boolean customMode = request.hasCustomSqlScript();
+        testLogger.info("Running SQL testcase in Docker: " + (customMode ? "custom ad-hoc case" : testPath));
         if (request.isKeepAlive()) {
             testLogger.warning("keepAlive is not supported for SQL tests; ignoring");
         }
-        if (testPath == null || !testPath.endsWith(".sql") || !testPath.contains("/cases/")) {
+        if (!customMode && (testPath == null || !testPath.endsWith(".sql") || !testPath.contains("/cases/"))) {
             return finalizeResult(errorBuilder(request, TestStatus.EXECUTION_ERROR,
                 "Invalid SQL testcase path: " + testPath), metricsBuilder, startNs, null, false);
         }
@@ -133,21 +136,35 @@ public class SqlDockerExecutor implements ExecutorStrategy {
                 metricsBuilder, startNs, null, false);
         }
 
-        // 2) Pinned SQL testcases worktree for this request
+        // 2) Testcases source: a pinned worktree for repo cases, or an empty
+        //    placeholder for custom ad-hoc cases (the case is materialized under
+        //    /workspace by runPerCaseContainer).
         Path repoRoot;
-        try {
-            repoRoot = sqlTcSync.prepareRequestWorkspace(
-                testLogger, request.getRequestId(), request.getSqlTcBranch(), request.getSqlTcCommit());
-        } catch (Exception e) {
-            return finalizeResult(errorBuilder(request, TestStatus.ENVIRONMENT_ERROR,
-                "Failed to prepare SQL testcase workspace: " + e.getMessage()),
-                metricsBuilder, startNs, dockerImage, dockerImageCached);
-        }
-        Path caseFile = repoRoot.resolve(testPath).normalize();
-        if (!caseFile.startsWith(repoRoot) || !Files.isRegularFile(caseFile)) {
-            return finalizeResult(errorBuilder(request, TestStatus.EXECUTION_ERROR,
-                "SQL testcase not found in repository: " + testPath),
-                metricsBuilder, startNs, dockerImage, dockerImageCached);
+        Path caseFile;
+        if (customMode) {
+            try {
+                repoRoot = Files.createDirectories(workDir.resolve("empty_testcases"));
+            } catch (Exception e) {
+                return finalizeResult(errorBuilder(request, TestStatus.ENVIRONMENT_ERROR,
+                    "Failed to prepare custom SQL workspace: " + e.getMessage()),
+                    metricsBuilder, startNs, dockerImage, dockerImageCached);
+            }
+            caseFile = null;
+        } else {
+            try {
+                repoRoot = sqlTcSync.prepareRequestWorkspace(
+                    testLogger, request.getRequestId(), request.getSqlTcBranch(), request.getSqlTcCommit());
+            } catch (Exception e) {
+                return finalizeResult(errorBuilder(request, TestStatus.ENVIRONMENT_ERROR,
+                    "Failed to prepare SQL testcase workspace: " + e.getMessage()),
+                    metricsBuilder, startNs, dockerImage, dockerImageCached);
+            }
+            caseFile = repoRoot.resolve(testPath).normalize();
+            if (!caseFile.startsWith(repoRoot) || !Files.isRegularFile(caseFile)) {
+                return finalizeResult(errorBuilder(request, TestStatus.EXECUTION_ERROR,
+                    "SQL testcase not found in repository: " + testPath),
+                    metricsBuilder, startNs, dockerImage, dockerImageCached);
+            }
         }
 
         // 3) CTP payload (latest develop + configured PRs, pinned by builder-resolved SHAs)
@@ -162,7 +179,9 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         }
 
         int attemptNumber = Math.max(1, request.getAttemptNumber());
-        boolean usePool = "pool".equals(config.getSqlExecMode()) && attemptNumber == 1 && agentPool != null;
+        // Custom ad-hoc cases always run in a fresh per-case container (no shared warm agents).
+        boolean usePool = !customMode && "pool".equals(config.getSqlExecMode())
+            && attemptNumber == 1 && agentPool != null;
 
         CaseRun warmRun = null;
         CaseRun finalRun;
@@ -358,8 +377,25 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         try {
             Path dockerWorkDir = Files.createTempDirectory(workDir, "sql_docker_");
             stageContainerWorkspace(dockerWorkDir, ctpPayload, request, testLogger);
+
+            // Determine the case argument: an absolute path to a materialized ad-hoc
+            // case (custom SQL), or the repo-relative path (normal case).
+            String caseArg;
+            if (request.hasCustomSqlScript()) {
+                Path caseDir = dockerWorkDir.resolve("custom_sql").resolve("cases");
+                Path answerDir = dockerWorkDir.resolve("custom_sql").resolve("answers");
+                Files.createDirectories(caseDir);
+                Files.createDirectories(answerDir);
+                Files.write(caseDir.resolve(CUSTOM_CASE_BASENAME + ".sql"),
+                    request.getCustomSqlScript().getBytes("UTF-8"));
+                String answer = request.getCustomSqlAnswer() == null ? "" : request.getCustomSqlAnswer();
+                Files.write(answerDir.resolve(CUSTOM_CASE_BASENAME + ".answer"), answer.getBytes("UTF-8"));
+                caseArg = "/workspace/custom_sql/cases/" + CUSTOM_CASE_BASENAME + ".sql";
+            } else {
+                caseArg = request.getTestPath();
+            }
             Files.write(dockerWorkDir.resolve("run_sql_test.sh"),
-                SqlScriptFactory.createPerCaseScript(request.getTestPath(), attemptNumber).getBytes("UTF-8"));
+                SqlScriptFactory.createPerCaseScript(caseArg, attemptNumber).getBytes("UTF-8"));
 
             String containerName = request.getContainerName();
             if (containerName == null || containerName.trim().isEmpty()) {
@@ -540,14 +576,19 @@ public class SqlDockerExecutor implements ExecutorStrategy {
                 "sql_core_" + commitShort + "_" + safeTestName + suffix + ".txt",
                 "core_list", attemptNumber, finalRun.executionEnv, testLogger);
 
-            // Case source (once, on the first attempt)
+            // Case source (once, on the first attempt). Custom ad-hoc cases have no
+            // repo file, so write the source from the request; normal cases copy the file.
             if (attemptNumber == 1) {
                 try {
                     Path caseCopy = testsDir.resolve("sql_case_" + commitShort + "_" + safeTestName + ".sql");
-                    if (!Files.exists(caseCopy)) {
+                    if (request.hasCustomSqlScript()) {
+                        Files.write(caseCopy, request.getCustomSqlScript().getBytes("UTF-8"));
+                    } else if (caseFile != null && !Files.exists(caseCopy)) {
                         Files.copy(caseFile, caseCopy, StandardCopyOption.REPLACE_EXISTING);
                     }
-                    resultBuilder.addArtifactFile(caseCopy, "case_source", attemptNumber, finalRun.executionEnv);
+                    if (Files.exists(caseCopy)) {
+                        resultBuilder.addArtifactFile(caseCopy, "case_source", attemptNumber, finalRun.executionEnv);
+                    }
                 } catch (Exception e) {
                     testLogger.warning("Failed to persist SQL case source: " + e.getMessage());
                 }
@@ -592,9 +633,10 @@ public class SqlDockerExecutor implements ExecutorStrategy {
             }
             resultBuilder.status(TestStatus.FAIL).message(message);
         } else if (SqlResultParser.STATUS_NOTRUN.equals(outcome.status)) {
+            String caseName = caseFile != null ? caseFile.getFileName().toString() : (safeTestName + ".sql");
             resultBuilder.status(TestStatus.EXECUTION_ERROR)
                 .message("No answer file for case (expected .../answers/"
-                    + caseFile.getFileName().toString().replace(".sql", ".answer") + ")");
+                    + caseName.replace(".sql", ".answer") + ")");
         } else if (SqlResultParser.STATUS_TIMEOUT.equals(outcome.status)) {
             resultBuilder.status(TestStatus.EXECUTION_ERROR)
                 .message("Case timed out after " + config.getSqlCaseTimeoutSec() + "s");

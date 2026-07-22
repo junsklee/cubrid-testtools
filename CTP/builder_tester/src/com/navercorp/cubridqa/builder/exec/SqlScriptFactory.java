@@ -344,7 +344,12 @@ public class SqlScriptFactory {
         sc.append("  exit 0\n");
         sc.append("}\n\n");
 
-        sc.append("CASE_FILE=\"$TESTCASE_ROOT/$REL\"\n");
+        sc.append("# Case path may be relative (under the mounted testcases tree) or absolute\n");
+        sc.append("# (custom SQL mode materializes the case under /workspace).\n");
+        sc.append("case \"$REL\" in\n");
+        sc.append("  /*) CASE_FILE=\"$REL\" ;;\n");
+        sc.append("  *)  CASE_FILE=\"$TESTCASE_ROOT/$REL\" ;;\n");
+        sc.append("esac\n");
         sc.append("if [ ! -f \"$CASE_FILE\" ]; then\n");
         sc.append("  finish \"SQLCASE_RESULT status=error rc=0 core=0 reason=case_not_found\"\n");
         sc.append("fi\n");

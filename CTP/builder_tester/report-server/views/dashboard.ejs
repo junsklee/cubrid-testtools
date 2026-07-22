@@ -103,37 +103,65 @@
                             placeholder="Enter commit SHA or PR number (e.g., 6ea587e or pr:6402)">
                     </div>
 
-                    <div style="margin-bottom: 1rem;">
-                        <label class="form-label">
-                                Test Case Path <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
-                                <span class="info-icon" title="If provided: Changes to the directory containing the test script, then replaces the script’s contents with your custom script before execution.&#10;&#10; Complete this section if your custom script depends on additional files (e.g., .answer, .sql) located in the test case directory.">ⓘ</span>
-                        </label>
-                        <input type="text" class="form-input" id="customScriptTestPath"
-                            placeholder="Enter test case path (e.g., shell/_36_damson/cbrd_22637/cases/cbrd_22637.sh)">
-                    </div>
-
-                    <div style="margin-bottom: 1rem;">
-                        <label class="form-label">
-                            Attach Files <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
-                            <span class="info-icon" title="Files will be created/overwritten next to the executed custom script.&#10;&#10;If Test Case Path is provided, files go into that directory. Otherwise, files go into the default custom script working directory.&#10;&#10;Max 20 files, 5MB total. Paths are relative (no leading '/', no '..').">ⓘ</span>
-                        </label>
-                        <input type="file" id="customScriptAttachments" class="file-input-hidden" multiple>
-                        <div class="file-upload-row">
-                            <label for="customScriptAttachments" class="control-btn file-upload-btn">Choose Files</label>
-                            <span id="customScriptAttachmentsSummary" class="file-upload-summary">No files selected.</span>
+                    <!-- Shell custom-script fields (Test Type = Shell) -->
+                    <div id="customShellFields">
+                        <div style="margin-bottom: 1rem;">
+                            <label class="form-label">
+                                    Test Case Path <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
+                                    <span class="info-icon" title="If provided: Changes to the directory containing the test script, then replaces the script’s contents with your custom script before execution.&#10;&#10; Complete this section if your custom script depends on additional files (e.g., .answer, .sql) located in the test case directory.">ⓘ</span>
+                            </label>
+                            <input type="text" class="form-input" id="customScriptTestPath"
+                                placeholder="Enter test case path (e.g., shell/_36_damson/cbrd_22637/cases/cbrd_22637.sh)">
                         </div>
-                        <div id="customScriptAttachmentsList" class="file-upload-list"></div>
+
+                        <div style="margin-bottom: 1rem;">
+                            <label class="form-label">
+                                Attach Files <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
+                                <span class="info-icon" title="Files will be created/overwritten next to the executed custom script.&#10;&#10;If Test Case Path is provided, files go into that directory. Otherwise, files go into the default custom script working directory.&#10;&#10;Max 20 files, 5MB total. Paths are relative (no leading '/', no '..').">ⓘ</span>
+                            </label>
+                            <input type="file" id="customScriptAttachments" class="file-input-hidden" multiple>
+                            <div class="file-upload-row">
+                                <label for="customScriptAttachments" class="control-btn file-upload-btn">Choose Files</label>
+                                <span id="customScriptAttachmentsSummary" class="file-upload-summary">No files selected.</span>
+                            </div>
+                            <div id="customScriptAttachmentsList" class="file-upload-list"></div>
+                        </div>
+
+                        <div>
+                            <label class="form-label">
+                                Custom Shell Script Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
+                                <span class="info-icon" title="This script will be executed instead of a standard test. Environment variables (CUBRID, CTP_HOME, PATH, LD_LIBRARY_PATH) will be set up automatically.">ⓘ</span>
+                            </label>
+                            <textarea class="form-textarea" id="customScriptContent"
+                                rows="20"
+                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
+                                placeholder="# Paste your script here (example below):&#10;&#10;#!/bin/sh&#10;. $init_path/init.sh&#10;init test&#10;&#10;dbname=cbrd_XXXXX&#10;cubrid_createdb $dbname&#10;cubrid server start $dbname&#10;&#10;# Test contents...&#10;&#10;cubrid server stop $dbname&#10;cubrid deletedb $dbname&#10;&#10;finish"></textarea>
+                        </div>
                     </div>
 
-                    <div>
-                        <label class="form-label">
-                            Custom Shell Script Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
-                            <span class="info-icon" title="This script will be executed instead of a standard test. Environment variables (CUBRID, CTP_HOME, PATH, LD_LIBRARY_PATH) will be set up automatically.">ⓘ</span>
-                        </label>
-                        <textarea class="form-textarea" id="customScriptContent"
-                            rows="20"
-                            style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
-                            placeholder="# Paste your script here (example below):&#10;&#10;#!/bin/sh&#10;. $init_path/init.sh&#10;init test&#10;&#10;dbname=cbrd_XXXXX&#10;cubrid_createdb $dbname&#10;cubrid server start $dbname&#10;&#10;# Test contents...&#10;&#10;cubrid server stop $dbname&#10;cubrid deletedb $dbname&#10;&#10;finish"></textarea>
+                    <!-- SQL custom-case fields (Test Type = SQL) -->
+                    <div id="customSqlFields" style="display: none;">
+                        <div style="margin-bottom: 1rem;">
+                            <label class="form-label">
+                                SQL Script Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
+                                <span class="info-icon" title="An ad-hoc SQL test case, run by CTP's ConsoleAgent against a freshly provisioned 'basic' database in a Docker container. Same format as a cubrid-testcases .sql case (statements separated by ';', CTP directives like --+ holdcas on / --@queryplan supported).">ⓘ</span>
+                            </label>
+                            <textarea class="form-textarea" id="customSqlScriptContent"
+                                rows="14"
+                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
+                                placeholder="-- Paste your SQL case here (example below):&#10;&#10;create table t1(a int, b varchar(10));&#10;insert into t1 values (1, 'a'), (2, 'b');&#10;select * from t1 order by a;&#10;drop table t1;"></textarea>
+                        </div>
+
+                        <div>
+                            <label class="form-label">
+                                Expected Answer Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
+                                <span class="info-icon" title="The expected output (the .answer file CTP compares against). Copy it from a known-good run, or from the matching answers/&lt;name&gt;.answer in cubrid-testcases. Each statement's output is delimited by a line of '=' characters; comparison ignores newline differences.">ⓘ</span>
+                            </label>
+                            <textarea class="form-textarea" id="customSqlAnswerContent"
+                                rows="14"
+                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
+                                placeholder="===================================================&#10;0&#10;===================================================&#10;2&#10;===================================================&#10;a                   b&#10;1  a&#10;2  b"></textarea>
+                        </div>
                     </div>
                 </div>
 

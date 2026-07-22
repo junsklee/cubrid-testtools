@@ -832,12 +832,25 @@ public class Builder {
             }
         }
 
-        // Check for custom shell script - if provided, tests can be empty
-        boolean hasCustomScript = request.has("customShellScript") &&
+        // Custom script mode - if provided, tests can be empty. Shell requests use
+        // 'customShellScript'; SQL requests use 'customSqlScript' + 'customSqlAnswer'.
+        boolean hasCustomShellScript = request.has("customShellScript") &&
                                   !request.getString("customShellScript").trim().isEmpty();
-        if (sqlMode && hasCustomScript) {
-            throw new IllegalArgumentException("'customShellScript' is not supported with testType=sql");
+        boolean hasCustomSqlScript = request.has("customSqlScript") &&
+                                  !request.getString("customSqlScript").trim().isEmpty();
+        if (sqlMode && hasCustomShellScript) {
+            throw new IllegalArgumentException("'customShellScript' is not supported with testType=sql; use 'customSqlScript'");
         }
+        if (!sqlMode && hasCustomSqlScript) {
+            throw new IllegalArgumentException("'customSqlScript' requires testType=sql");
+        }
+        if (hasCustomSqlScript) {
+            // A verdict is only possible with an expected answer.
+            if (!request.has("customSqlAnswer") || request.getString("customSqlAnswer").isEmpty()) {
+                throw new IllegalArgumentException("'customSqlAnswer' (expected output) is required with 'customSqlScript'");
+            }
+        }
+        boolean hasCustomScript = hasCustomShellScript || hasCustomSqlScript;
 
         // Validate custom attachments (only allowed when customShellScript is present)
         if (request.has("customAttachments")) {
@@ -846,7 +859,7 @@ public class Builder {
                 throw new IllegalArgumentException("'customAttachments' must be an array");
             }
             JSONArray atts = (JSONArray) raw;
-            if (atts.length() > 0 && !hasCustomScript) {
+            if (atts.length() > 0 && !hasCustomShellScript) {
                 throw new IllegalArgumentException("'customAttachments' is only supported with 'customShellScript'");
             }
             if (atts.length() > 0) {

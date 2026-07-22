@@ -40,6 +40,38 @@ POST /build
 
 Sample client: `bin/test_client_sql.sh`.
 
+### Custom (ad-hoc) SQL case
+
+To run a one-off SQL case that is **not** in the repository — pasted directly
+instead of referenced by path — use the dashboard's **Custom Script** mode with
+Test Type = SQL, or post these fields:
+
+```json
+{
+  "commits": ["<sha>"],
+  "testType": "sql",
+  "customSqlScript": "create table t1(a int);\ninsert into t1 values (1),(2);\nselect a from t1 order by a;\ndrop table t1;\n",
+  "customSqlAnswer": "===================================================\n0\n===================================================\n2\n===================================================\na\n1\n2\n",
+  "buildType": "debug", "runMode": "fixed-runs", "minRuns": 1, "maxRuns": 1,
+  "workerIps": ["<tester>"], "callbackUrl": "http://reporthost:8091/callback"
+}
+```
+
+- `customSqlScript` (required): the `.sql` case body — same format as a
+  repository case (statements separated by `;`; CTP directives such as
+  `--+ holdcas on` and `--@queryplan` are honored).
+- `customSqlAnswer` (required): the expected output CTP compares against (the
+  `.answer`). It is required because a verdict is impossible without it; copy it
+  from a known-good run or the matching `answers/<name>.answer`.
+- No `tests` array is needed (a `custom_script_test` placeholder is used). The
+  tester materializes the script/answer into a synthetic `cases/`+`answers/`
+  structure and runs it through the same ConsoleAgent runner. Custom cases always
+  execute in a **fresh per-case container** (never a warm pool agent) and against
+  the standard provisioned `basic` database. Results, diffs and artifacts are
+  produced identically to repository cases (test name `custom_sql_case`).
+- `customShellScript`/attachments are shell-only and rejected with
+  `testType=sql`; conversely `customSqlScript` requires `testType=sql`.
+
 ## What runs where
 
 1. **Builder** resolves, once per request:

@@ -1885,14 +1885,22 @@ public class BuilderTask {
 
             // Check if this is a custom script placeholder
             if (sqlTest) {
-                // SQL mode - testPath is sql/**/cases/<name>.sql inside the SQL testcases repo
-                testDir = config.getSqlTcDir() + "/" +
-                         testPath.substring(0, testPath.lastIndexOf("/"));
-                testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
-                // Case basenames (e.g. "1014.sql") repeat across suites, so derive a
-                // unique test name from the full relative path (drop sql/ prefix,
-                // /cases/ component and .sql suffix; '/' → '.').
-                testName = buildSqlTestName(testPath);
+                if (testPath.equals("custom_script_test")) {
+                    // Ad-hoc SQL case (custom SQL mode): the tester materializes the
+                    // provided script/answer into a synthetic cases/answers structure.
+                    testName = "custom_sql_case";
+                    testDir = "";
+                    testScript = "custom_sql_case.sql";
+                } else {
+                    // SQL mode - testPath is sql/**/cases/<name>.sql inside the SQL testcases repo
+                    testDir = config.getSqlTcDir() + "/" +
+                             testPath.substring(0, testPath.lastIndexOf("/"));
+                    testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
+                    // Case basenames (e.g. "1014.sql") repeat across suites, so derive a
+                    // unique test name from the full relative path (drop sql/ prefix,
+                    // /cases/ component and .sql suffix; '/' → '.').
+                    testName = buildSqlTestName(testPath);
+                }
             } else if (testPath.equals("custom_script_test")) {
                 // Custom script without test path - use temporary directory
                 String reqId = RequestContext.getRequestId();
@@ -2023,6 +2031,12 @@ public class BuilderTask {
                 String ctpBase = request.optString("ctpSqlBaseSha", null);
                 if (ctpBase != null && !ctpBase.trim().isEmpty()) {
                     testRequest.put("ctpSqlBaseSha", ctpBase);
+                }
+                // Ad-hoc SQL case (custom SQL mode)
+                String customSqlScript = request.optString("customSqlScript", null);
+                if (customSqlScript != null && !customSqlScript.isEmpty()) {
+                    testRequest.put("customSqlScript", customSqlScript);
+                    testRequest.put("customSqlAnswer", request.optString("customSqlAnswer", ""));
                 }
             }
 
