@@ -617,6 +617,7 @@ public class DockerBuildManager {
                 writer.println();
             }
 
+            writePerlPrerequisite(writer);
             writer.println("# Build CUBRID");
             writeDockerBuildArgCompatibility(writer, finalBuildArgs);
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
@@ -970,6 +971,7 @@ public class DockerBuildManager {
                 writer.println();
             }
 
+            writePerlPrerequisite(writer);
             writer.println("# Build CUBRID");
             writeDockerBuildArgCompatibility(writer, finalBuildArgs);
 
@@ -1169,6 +1171,7 @@ public class DockerBuildManager {
                 writer.println();
             }
 
+            writePerlPrerequisite(writer);
             writer.println("# Build CUBRID");
             writeDockerBuildArgCompatibility(writer, finalBuildArgs);
             writer.println("if [ -f /opt/rh/devtoolset-8/enable ]; then");
@@ -1759,6 +1762,38 @@ public class DockerBuildManager {
             logger.fine("Unable to inspect ./build.sh help for build argument compatibility: " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Emit a best-effort shell snippet that guarantees Perl's Time::Piece module is
+     * present before invoking ./build.sh. CUBRID's OpenSSL 3.x build step aborts early
+     * with "requires Perl with the Time::Piece module" when it is missing, which the
+     * stock cubridci build images do not ship. The container runs as root, so the
+     * package install needs no sudo. Failures here are non-fatal: build.sh still emits
+     * the canonical prerequisite error if the module cannot be provided.
+     */
+    private static void writePerlPrerequisite(PrintWriter writer) {
+        writer.println("# Ensure Perl Time::Piece is available (required by the OpenSSL 3.x build)");
+        writer.println("ensure_perl_time_piece() {");
+        writer.println("  if perl -MTime::Piece -e 1 >/dev/null 2>&1; then");
+        writer.println("    return 0");
+        writer.println("  fi");
+        writer.println("  echo '[INFO] Perl Time::Piece module missing; installing (required by OpenSSL 3.x build)'");
+        writer.println("  if command -v dnf >/dev/null 2>&1; then");
+        writer.println("    dnf install -y perl-Time-Piece >/dev/null 2>&1 || dnf install -y perl-core >/dev/null 2>&1 || true");
+        writer.println("  elif command -v yum >/dev/null 2>&1; then");
+        writer.println("    yum install -y perl-Time-Piece >/dev/null 2>&1 || yum install -y perl-core >/dev/null 2>&1 || true");
+        writer.println("  elif command -v apt-get >/dev/null 2>&1; then");
+        writer.println("    apt-get update >/dev/null 2>&1 || true");
+        writer.println("    apt-get install -y perl >/dev/null 2>&1 || true");
+        writer.println("  fi");
+        writer.println("  if perl -MTime::Piece -e 1 >/dev/null 2>&1; then");
+        writer.println("    echo '[INFO] Perl Time::Piece module installed successfully'");
+        writer.println("  else");
+        writer.println("    echo '[WARN] Perl Time::Piece still unavailable; OpenSSL 3.x build may fail' >&2");
+        writer.println("  fi");
+        writer.println("}");
+        writer.println("ensure_perl_time_piece");
     }
 
     private static void writeDockerBuildArgCompatibility(PrintWriter writer, String finalBuildArgs) {
