@@ -73,6 +73,9 @@ public class BuilderConfig {
     private static final String CCACHE_STATS = "ccache_stats";
     private static final String CCACHE_NAMESPACE = "ccache_namespace";
     private static final String CCACHE_SLOPPINESS = "ccache_sloppiness";
+    private static final String BUILD_ACCEL_ENABLED = "build_accel_enabled";
+    private static final String BUILD_WORKSPACE_REUSE = "build_workspace_reuse";
+    private static final String BUILD_WORKSPACE_REUSE_MAX = "build_workspace_reuse_max";
     private static final String PARALLEL_JOBS = "parallel_jobs";
     private static final String SHELL_TC_SYNC_INTERVAL_SECONDS = "shell_tc_sync_interval_seconds";
     private static final String SHELL_TC_SYNC_MODE = "shell_tc_sync_mode";
@@ -1123,6 +1126,42 @@ public class BuilderConfig {
     
     public boolean isCcacheEnabled() {
         return Boolean.parseBoolean(properties.getProperty(CCACHE_ENABLED, "true"));
+    }
+
+    /**
+     * Whether a build may satisfy the Temurin JDK, the 3rdparty tarballs and the
+     * submodule clones from what the host and the build image already hold, instead
+     * of re-downloading them. See src/com/navercorp/cubridqa/builder/build-accel.sh.
+     * Turning this off restores the all-downloads build path.
+     */
+    public boolean isBuildAccelEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(BUILD_ACCEL_ENABLED, "true"));
+    }
+
+    /**
+     * Whether a build may reuse the previous build's workspace instead of cloning
+     * into a wiped directory. This is the only thing that makes the 3rdparty
+     * ExternalProjects skip their configure/build/install steps, because CMake
+     * re-runs them whenever CMakeCache.txt is regenerated from scratch.
+     *
+     * Defaults to false: it trades per-build isolation for speed, so enabling it is
+     * a deliberate choice. A build that does not finish cleanly forces the next one
+     * to wipe, and {@link #getBuildWorkspaceReuseMax()} bounds how long a workspace
+     * may live regardless.
+     */
+    public boolean isBuildWorkspaceReuseEnabled() {
+        return Boolean.parseBoolean(properties.getProperty(BUILD_WORKSPACE_REUSE, "false"));
+    }
+
+    /** Builds a reused workspace may serve before it is wiped and rebuilt. */
+    public int getBuildWorkspaceReuseMax() {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(BUILD_WORKSPACE_REUSE_MAX, "20").trim());
+        } catch (NumberFormatException e) {
+            value = 20;
+        }
+        return Math.max(1, value);
     }
     
     public String getCcacheDir() {

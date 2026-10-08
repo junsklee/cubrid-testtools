@@ -192,6 +192,12 @@ public class DockerBuildManager {
         // Add parallel jobs configuration
         baseDockerCmd.add("-e");
         baseDockerCmd.add("MAKEFLAGS=-j" + config.getParallelJobs());
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_ACCEL=" + (config.isBuildAccelEnabled() ? "1" : "0"));
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_WORKSPACE_REUSE=" + (config.isBuildWorkspaceReuseEnabled() ? "1" : "0"));
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
         
         // Pass host UID/GID for output ownership fix (allows cleanup without sudo)
         baseDockerCmd.add("-e");
@@ -248,11 +254,16 @@ public class DockerBuildManager {
             
             // Capture output
             StringBuilder output = new StringBuilder();
+            List<String> phases = new ArrayList<>();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                  java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8)) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     output.append(line).append("\n");
+                    String phase = parsePhaseMarker(line);
+                    if (phase != null) {
+                        phases.add(phase);
+                    }
                     logger.info("DOCKER[" + commitShort + "]: " + line);
                     try {
                         logWriter.write(line);
@@ -263,6 +274,9 @@ public class DockerBuildManager {
             }
             
             int exitCode = process.waitFor();
+            if (!phases.isEmpty()) {
+                logPhaseSummary(commitShort, phases);
+            }
             if (exitCode == 0) {
                 lastError = null;
                 break;
@@ -385,6 +399,12 @@ public class DockerBuildManager {
 
         baseDockerCmd.add("-e");
         baseDockerCmd.add("MAKEFLAGS=-j" + config.getParallelJobs());
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_ACCEL=" + (config.isBuildAccelEnabled() ? "1" : "0"));
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_WORKSPACE_REUSE=" + (config.isBuildWorkspaceReuseEnabled() ? "1" : "0"));
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
 
         baseDockerCmd.add(config.getDockerBuildImage());
         baseDockerCmd.add("bash");
@@ -430,11 +450,16 @@ public class DockerBuildManager {
                 Process process = pb.start();
 
             StringBuilder output = new StringBuilder();
+            List<String> phases = new ArrayList<>();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                  java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8)) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     output.append(line).append("\n");
+                    String phase = parsePhaseMarker(line);
+                    if (phase != null) {
+                        phases.add(phase);
+                    }
                     logger.info("DOCKER[" + commitShort + "]: " + line);
                     try {
                         logWriter.write(line);
@@ -445,6 +470,9 @@ public class DockerBuildManager {
             }
 
             int exitCode = process.waitFor();
+            if (!phases.isEmpty()) {
+                logPhaseSummary(commitShort, phases);
+            }
             if (exitCode == 0) {
                 lastError = null;
                 break;
@@ -473,6 +501,7 @@ public class DockerBuildManager {
             writer.println("set -e");
             writer.println("set -o pipefail");
             writer.println();
+            writeBuildAccelHelpers(writer);
 
             if (config.isCcacheEnabled()) {
                 writer.println("# Configure ccache for faster builds");
@@ -514,13 +543,14 @@ public class DockerBuildManager {
             writer.println("else");
             writer.println("  target=/tmp/cubrid-build");
             writer.println("fi");
-            writer.println("rm -rf \"$target\"");
-            writer.println("mkdir -p \"$target\"");
+            writer.println("bt_prepare_workspace \"$target\" \"${COMMIT_HASH}\"");
             writer.println("echo \"Using build workspace: $target\"");
             writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone repository from host reference");
-            writer.println("if ! git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo; then");
+            writer.println("if [ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ]; then");
+            writer.println("  echo '[bt-accel] workspace: keeping the existing checkout'");
+            writer.println("elif ! git clone --no-checkout --reference /cubrid-src --dissociate /cubrid-src repo; then");
             writer.println("  echo '[WARN] Reference clone failed; falling back to standard clone' >&2");
             writer.println("  rm -rf repo 2>/dev/null || true");
             writer.println("  git clone --no-checkout /cubrid-src repo");
@@ -570,7 +600,9 @@ public class DockerBuildManager {
             writer.println("# Checkout PR head by commit hash as authoritative fallback");
             writer.println("git checkout -B \"$tmp_branch\" \"${COMMIT_HASH}\" || git checkout \"$tmp_branch\" || true");
             writer.println();
+            writer.println("bt_phase clone");
             writer.println("git submodule sync --recursive");
+            writer.println("bt_local_submodules");
             writer.println("SUBMODULE_JOBS=${SUBMODULE_JOBS:-$(nproc 2>/dev/null || echo 4)}");
             writer.println("SUBMODULE_ARGS=(--init --recursive --checkout --force)");
             writer.println("if [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]; then");
@@ -584,18 +616,24 @@ public class DockerBuildManager {
             writer.println("  echo \"[INFO] git submodule --depth not supported in git ${GIT_VERSION_DISPLAY}\"");
             writer.println("fi");
             writer.println("if ! git submodule update \"${SUBMODULE_ARGS[@]}\"; then");
-            writer.println("  echo '[WARN] Parallel/shallow submodule update failed; retrying with defaults' >&2");
+            writer.println("  echo '[WARN] Submodule update failed; restoring remote URLs and retrying' >&2");
+            writer.println("  git submodule sync --recursive");
             writer.println("  git submodule update --init --recursive --checkout --force");
             writer.println("fi");
+            writer.println("bt_phase submodules");
             writer.println();
-            writer.println("git clean -xdf");
-            writer.println("rm -rf build_x86_64_*");
+            writer.println("git clean -xdf -e \"build_x86_64_*\"");
+            writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
+            writer.println("mkdir -p " + config.getBuildDir(buildType));
+            writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
+            writer.println("bt_seed_3rdparty " + config.getBuildDir(buildType));
+            writer.println("bt_phase seed");
             writer.println();
 
             // Add git shim for deterministic version if ccache is enabled
             if (config.isCcacheEnabled()) {
                 writer.println("# Create git shim for deterministic version (ccache optimization)");
-                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
+                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim\"");
                 writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
                 writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
                 writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
@@ -628,6 +666,8 @@ public class DockerBuildManager {
             writer.println("  echo 'Building with default toolchain'");
             writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
+            writer.println("bt_phase build");
+            writer.println("bt_save_3rdparty " + config.getBuildDir(buildType));
             writer.println();
 
             // Cleanup git shim if it was created
@@ -654,6 +694,7 @@ public class DockerBuildManager {
             writer.println("# Create package");
             writer.println("cd " + config.getBuildDir(buildType));
             writer.println("create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
+            writer.println("bt_phase package");
             writer.println();
             writer.println("# Fix ownership of output files for host cleanup");
             writer.println("if [ -n \"$HOST_UID\" ] && [ -n \"$HOST_GID\" ]; then");
@@ -666,6 +707,7 @@ public class DockerBuildManager {
             writer.println("git branch -D \"$tmp_branch\" || true");
             writer.println("cd /");
             writer.println("# Note: Not removing $target to preserve ccache-friendly paths");
+            writer.println("bt_workspace_ok \"$target\"");
             writer.println("echo 'PR build completed successfully'");
         }
 
@@ -760,6 +802,7 @@ public class DockerBuildManager {
             writer.println("#!/bin/bash");
             writer.println("set -e");
             writer.println();
+            writeBuildAccelHelpers(writer);
             
             // Setup ccache if enabled
             if (config.isCcacheEnabled()) {
@@ -807,13 +850,14 @@ public class DockerBuildManager {
             writer.println("else");
             writer.println("  target=/tmp/cubrid-build");
             writer.println("fi");
-            writer.println("rm -rf \"$target\"");
-            writer.println("mkdir -p \"$target\"");
+            writer.println("bt_prepare_workspace \"$target\" \"${COMMIT_HASH}\"");
             writer.println("echo \"Using build workspace: $target\"");
             writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone source into writable target using local reference to avoid network fetches");
-            writer.println("if ! git clone --no-checkout --reference /cubrid-src /cubrid-src repo; then");
+            writer.println("if [ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ]; then");
+            writer.println("  echo '[bt-accel] workspace: keeping the existing checkout'");
+            writer.println("elif ! git clone --no-checkout --reference /cubrid-src /cubrid-src repo; then");
             writer.println("  echo '[WARN] Reference clone failed; falling back to standard clone' >&2");
             writer.println("  rm -rf repo 2>/dev/null || true");
             writer.println("  git clone --no-checkout /cubrid-src repo");
@@ -922,7 +966,9 @@ public class DockerBuildManager {
             writer.println("  [ \"$SUPPORTS_SUBMODULE_DEPTH\" = \"1\" ]");
             writer.println("}");
             writer.println("echo \"Detected git version: ${GIT_VERSION_DISPLAY}\"");
+            writer.println("bt_phase clone");
             writer.println("git submodule sync --recursive");
+            writer.println("bt_local_submodules");
             writer.println("SUBMODULE_JOBS=${SUBMODULE_JOBS:-$(nproc 2>/dev/null || echo 4)}");
             writer.println("SUBMODULE_ARGS=(--init --recursive --checkout --force)");
             writer.println("if [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]; then");
@@ -936,20 +982,26 @@ public class DockerBuildManager {
             writer.println("  echo \"[INFO] git submodule --depth not supported in git ${GIT_VERSION_DISPLAY}\"");
             writer.println("fi");
             writer.println("if ! git submodule update \"${SUBMODULE_ARGS[@]}\"; then");
-            writer.println("  echo '[WARN] Parallel/shallow submodule update failed; retrying with defaults' >&2");
+            writer.println("  echo '[WARN] Submodule update failed; restoring remote URLs and retrying' >&2");
+            writer.println("  git submodule sync --recursive");
             writer.println("  git submodule update --init --recursive --checkout --force");
             writer.println("fi");
+            writer.println("bt_phase submodules");
             writer.println();
 
             writer.println("# Clean any previous builds");
-            writer.println("git clean -xdf");
-            writer.println("rm -rf build_x86_64_*");
+            writer.println("git clean -xdf -e \"build_x86_64_*\"");
+            writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
+            writer.println("mkdir -p " + config.getBuildDir(buildType));
+            writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
+            writer.println("bt_seed_3rdparty " + config.getBuildDir(buildType));
+            writer.println("bt_phase seed");
             writer.println();
 
             // Add git shim for deterministic version if ccache is enabled
             if (config.isCcacheEnabled()) {
                 writer.println("# Create git shim for deterministic version (ccache optimization)");
-                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
+                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim\"");
                 writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
                 writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
                 writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
@@ -985,6 +1037,8 @@ public class DockerBuildManager {
             writer.println("  echo 'Building with default toolchain'");
             writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
+            writer.println("bt_phase build");
+            writer.println("bt_save_3rdparty " + config.getBuildDir(buildType));
             writer.println();
 
             // Cleanup git shim if it was created
@@ -1014,6 +1068,7 @@ public class DockerBuildManager {
             writer.println("cd " + config.getBuildDir(buildType));
             writer.println("if [ \"${BUILD_SKIP_PACKAGE:-0}\" != \"1\" ]; then");
             writer.println("  create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
+            writer.println("  bt_phase package");
             writer.println("fi");
             writer.println();
             writer.println("# Fix ownership of output files for host cleanup");
@@ -1027,6 +1082,7 @@ public class DockerBuildManager {
             writer.println("git branch -D \"$tmp_branch\" || true");
             writer.println("cd /");
             writer.println("# Note: Not removing $target to preserve ccache-friendly paths");
+            writer.println("bt_workspace_ok \"$target\"");
             writer.println("echo \"Build completed successfully\"");
         }
         
@@ -1043,6 +1099,7 @@ public class DockerBuildManager {
             writer.println("#!/bin/bash");
             writer.println("set -e");
             writer.println();
+            writeBuildAccelHelpers(writer);
 
             if (config.isCcacheEnabled()) {
                 writer.println("# Configure ccache for faster builds (compatible with older ccache)");
@@ -1084,13 +1141,14 @@ public class DockerBuildManager {
             writer.println("else");
             writer.println("  target=/tmp/cubrid-build");
             writer.println("fi");
-            writer.println("rm -rf \"$target\"");
-            writer.println("mkdir -p \"$target\"");
+            writer.println("bt_prepare_workspace \"$target\" \"${COMMIT_HASH}\"");
             writer.println("echo \"Using build workspace: $target\"");
             writer.println("cd \"$target\"");
             writer.println();
             writer.println("# Clone source into writable target using local reference to avoid network fetches");
-            writer.println("if ! git clone --no-checkout --reference /cubrid-src /cubrid-src repo; then");
+            writer.println("if [ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ]; then");
+            writer.println("  echo '[bt-accel] workspace: keeping the existing checkout'");
+            writer.println("elif ! git clone --no-checkout --reference /cubrid-src /cubrid-src repo; then");
             writer.println("  echo '[WARN] Reference clone failed; falling back to standard clone' >&2");
             writer.println("  rm -rf repo 2>/dev/null || true");
             writer.println("  git clone --no-checkout /cubrid-src repo");
@@ -1126,7 +1184,9 @@ public class DockerBuildManager {
             writer.println("fi");
             writer.println("echo \"Detected git version: ${GIT_VERSION_DISPLAY}\"");
             writer.println();
+            writer.println("bt_phase clone");
             writer.println("git submodule sync --recursive");
+            writer.println("bt_local_submodules");
             writer.println("SUBMODULE_JOBS=${SUBMODULE_JOBS:-$(nproc 2>/dev/null || echo 4)}");
             writer.println("SUBMODULE_ARGS=(--init --recursive --checkout --force)");
             writer.println("if [ \"$SUPPORTS_SUBMODULE_JOBS\" = \"1\" ]; then");
@@ -1140,17 +1200,23 @@ public class DockerBuildManager {
             writer.println("  echo \"[INFO] git submodule --depth not supported in git ${GIT_VERSION_DISPLAY}\"");
             writer.println("fi");
             writer.println("if ! git submodule update \"${SUBMODULE_ARGS[@]}\"; then");
-            writer.println("  echo '[WARN] Parallel/shallow submodule update failed; retrying with defaults' >&2");
+            writer.println("  echo '[WARN] Submodule update failed; restoring remote URLs and retrying' >&2");
+            writer.println("  git submodule sync --recursive");
             writer.println("  git submodule update --init --recursive --checkout --force");
             writer.println("fi");
+            writer.println("bt_phase submodules");
             writer.println();
-            writer.println("git clean -xdf");
-            writer.println("rm -rf build_x86_64_*");
+            writer.println("git clean -xdf -e \"build_x86_64_*\"");
+            writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
+            writer.println("mkdir -p " + config.getBuildDir(buildType));
+            writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
+            writer.println("bt_seed_3rdparty " + config.getBuildDir(buildType));
+            writer.println("bt_phase seed");
             writer.println();
 
             if (config.isCcacheEnabled()) {
                 writer.println("# Create git shim for deterministic version (ccache optimization)");
-                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim-$$\"");
+                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim\"");
                 writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
                 writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
                 writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
@@ -1182,6 +1248,8 @@ public class DockerBuildManager {
             writer.println("  echo 'Building with default toolchain'");
             writer.println("  ./build.sh \"${BUILD_ARGS[@]}\" || { echo '[FATAL] Build failed'; exit 1; }");
             writer.println("fi");
+            writer.println("bt_phase build");
+            writer.println("bt_save_3rdparty " + config.getBuildDir(buildType));
             writer.println();
 
             if (config.isCcacheEnabled()) {
@@ -1208,12 +1276,14 @@ public class DockerBuildManager {
             writer.println("# Create package");
             writer.println("cd " + config.getBuildDir(buildType));
             writer.println("create_package /output/cubrid_${COMMIT_HASH:0:7}.tar.gz");
+            writer.println("bt_phase package");
             writer.println();
             writer.println("# Fix ownership of output files for host cleanup");
             writer.println("if [ -n \"$HOST_UID\" ] && [ -n \"$HOST_GID\" ]; then");
             writer.println("  chown -R \"$HOST_UID:$HOST_GID\" /output 2>/dev/null || true");
             writer.println("fi");
             writer.println();
+            writer.println("bt_workspace_ok \"$target\"");
             writer.println("echo \"Build completed successfully\"");
         }
 
@@ -1772,6 +1842,85 @@ public class DockerBuildManager {
      * package install needs no sudo. Failures here are non-fatal: build.sh still emits
      * the canonical prerequisite error if the module cannot be provided.
      */
+    /**
+     * Inlines build-accel.sh into a generated build script. The helpers remove the
+     * network round-trips the build otherwise repeats from scratch every time (the
+     * Temurin JDK, the 3rdparty tarballs, the submodule clones); see that file for
+     * why each one is safe to skip. They are inlined rather than mounted so the
+     * generated script stays self-contained and reproducible from the log.
+     *
+     * Emitted unconditionally, so the script shape does not depend on configuration;
+     * the BT_ACCEL environment variable is what turns the accelerators on and off.
+     */
+    private static void writeBuildAccelHelpers(PrintWriter writer) {
+        String[] candidates = {
+            "build-accel.sh",
+            "/com/navercorp/cubridqa/builder/build-accel.sh"
+        };
+        for (String candidate : candidates) {
+            try (InputStream in = DockerBuildManager.class.getResourceAsStream(candidate)) {
+                if (in == null) {
+                    continue;
+                }
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        writer.println(line);
+                    }
+                }
+                writer.println();
+                return;
+            } catch (IOException e) {
+                // fall through to the next candidate
+            }
+        }
+        // Without the resource the build still has to work, so emit no-op stubs
+        // rather than letting the generated script die on an unbound function.
+        logger.warning("build-accel.sh resource not found; builds run without accelerators");
+        writer.println("# build-accel.sh resource unavailable; accelerators disabled");
+        writer.println("bt_phase() { :; }");
+        writer.println("bt_local_submodules() { :; }");
+        writer.println("bt_seed_jdk() { :; }");
+        writer.println("bt_seed_3rdparty() { :; }");
+        writer.println("bt_save_3rdparty() { :; }");
+        writer.println();
+    }
+
+    private void logPhaseSummary(String commitShort, List<String> phases) {
+        String summary = "Build phases [" + commitShort + "]: " + String.join(" ", phases);
+        logger.info(summary);
+        try {
+            String requestId = RequestContext.getRequestId();
+            if (requestId != null && config.isRequestGroupingEnabled()) {
+                RequestLogManager.getInstance().getRequestLogger(requestId, "builder").info(summary);
+            }
+        } catch (Exception ignore) {
+            // the summary is already in the global log; never fail a build over it
+        }
+    }
+
+    /**
+     * Collects the "[BT-PHASE] name=x seconds=n total=t" markers that build-accel.sh
+     * emits, so a slowdown can be attributed to a phase instead of guessed at from
+     * wall-clock. Returns null for any other line.
+     */
+    private static String parsePhaseMarker(String line) {
+        if (line == null || !line.startsWith("[BT-PHASE]")) {
+            return null;
+        }
+        String name = null;
+        String seconds = null;
+        for (String token : line.substring("[BT-PHASE]".length()).trim().split("\\s+")) {
+            if (token.startsWith("name=")) {
+                name = token.substring(5);
+            } else if (token.startsWith("seconds=")) {
+                seconds = token.substring(8);
+            }
+        }
+        return (name == null || seconds == null) ? null : name + "=" + seconds + "s";
+    }
+
     private static void writePerlPrerequisite(PrintWriter writer) {
         writer.println("# Ensure Perl Time::Piece is available (required by the OpenSSL 3.x build)");
         writer.println("ensure_perl_time_piece() {");
