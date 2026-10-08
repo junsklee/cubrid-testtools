@@ -37,6 +37,8 @@ public class BuilderTask {
     private String baselineCommit;
     private String baselineKey;
     private String commitBuildMode;
+    /** Per-request "Re-build artifacts": forces a clean build even when workspace reuse is on. */
+    private boolean rebuildArtifacts;
     private List<String> commitOrder = Collections.emptyList();
     private Map<String, Long> commitTimestamps = Collections.emptyMap();
     private WorkloadDistributor workloadDistributor;
@@ -235,6 +237,12 @@ public class BuilderTask {
 
             if (!buildOnly) {
                 persistRequestMetadataSnapshot(requestId);
+            }
+
+            // Advanced option: force a clean build for this request, ignoring workspace reuse.
+            this.rebuildArtifacts = request.optBoolean("rebuildArtifacts", false);
+            if (this.rebuildArtifacts) {
+                taskLogger.info("Request override: rebuildArtifacts=true (clean build, workspace reuse ignored)");
             }
 
             // Request override: prefer commitBuildMode (string) everywhere. Keep use_baseline_cherrypick as a backward-compatible alias.
@@ -733,7 +741,8 @@ public class BuilderTask {
         String buildPackage = null;
         try {
             if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
-                buildPackage = dockerManager.buildPullRequest(pr.prBranch, normalizedCommit, workDir.toFile(), buildType, pr.baselineSha);
+                buildPackage = dockerManager.buildPullRequest(pr.prBranch, normalizedCommit, workDir.toFile(), buildType, pr.baselineSha,
+                                                              this.rebuildArtifacts);
             } else {
                 // Direct PR build: checkout head SHA and build as-is (no cherry-pick)
                 buildPackage = buildFromHeadDirect(normalizedCommit, buildType, workDir.toFile());
@@ -1249,7 +1258,7 @@ public class BuilderTask {
         
         // Use Docker if available
         if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
-            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode);
+            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode, this.rebuildArtifacts);
         }
 
         if (COMMIT_BUILD_MODE_CHECKOUT.equals(commitBuildMode)) {

@@ -214,3 +214,49 @@ bt_workspace_ok() {
   rm -f "$1/.bt_dirty" 2>/dev/null || true
   return 0
 }
+
+# bt_reset_install <build_dir> - drop the staged install tree before a reused build.
+#
+# CMake's install step only ever ADDS files; it never removes one that is no longer
+# part of the install set. In a reused workspace that means anything a previous
+# commit installed survives into this commit's package. Measured: a reused build
+# shipped both cubrid-jdbc-11.3.2.0000.jar (correct) and cubrid-jdbc-11.4.0.0000.jar
+# (left over from the previous commit), plus four stale cm_ssl certs - silent
+# classpath pollution in the artifact the testers install.
+#
+# The install tree is cheap to rebuild (it is a copy, a few seconds) and is not what
+# makes reuse fast; 3rdparty and the object files are. So drop it every reused build.
+bt_reset_install() {
+  [ "${BT_WORKSPACE_REUSED:-0}" = "1" ] || return 0
+  local bdir="$1"
+  [ -n "$bdir" ] || return 0
+  [ -d "$bdir/_install" ] || return 0
+  rm -rf "$bdir/_install" 2>/dev/null || true
+  echo "[bt-accel] workspace: cleared the staged install tree so no artifact outlives its commit"
+  return 0
+}
+
+# bt_guard_3rdparty <build_dir> - fall back to a clean build directory when this
+# commit defines its 3rdparty libraries differently from the one the workspace was
+# last built at.
+#
+# ExternalProject cannot migrate a built tree across a version change: going from
+# OpenSSL 3.5.7 back to 1.1.1w in a reused workspace fails outright in
+# libopenssl-build. Rather than let that surface as a build failure, compare the
+# 3rdparty definition and wipe the build directory when it moves. The clone and its
+# submodules are still reused, so this costs only the 3rdparty rebuild.
+bt_guard_3rdparty() {
+  local bdir="$1" marker="$2" now=""
+  [ -n "$bdir" ] && [ -n "$marker" ] || return 0
+  now=$(md5sum < 3rdparty/CMakeLists.txt 2>/dev/null | cut -d' ' -f1 || true)
+  [ -n "$now" ] || return 0
+  if [ "${BT_WORKSPACE_REUSED:-0}" = "1" ] && [ -d "$bdir" ]; then
+    if [ ! -f "$marker" ] || [ "$(cat "$marker" 2>/dev/null)" != "$now" ]; then
+      rm -rf "$bdir" 2>/dev/null || true
+      echo "[bt-accel] workspace: 3rdparty definition changed; rebuilding the build directory"
+    fi
+  fi
+  # Recorded on every build, reused or not, so the next reuse has something to compare.
+  echo "$now" > "$marker" 2>/dev/null || true
+  return 0
+}
