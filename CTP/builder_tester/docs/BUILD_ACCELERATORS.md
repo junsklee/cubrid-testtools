@@ -300,6 +300,23 @@ take minutes. Use the per-request **Re-use Artifacts** toggle for single-commit,
 repeat-build work (flaky-test hunting, iterating on one commit), where the speed matters
 and cross-commit contamination cannot apply.
 
+### Branch gating
+
+`build_workspace_reuse_branches` (default `develop`) lists the branches whose builds
+may reuse a workspace. Applied after the per-request override, so it wins over an
+explicit `reuseArtifacts: true`.
+
+This is defence in depth, not the main guard. The contamination that was actually
+measured happened between two develop commits, which `bt_guard_build_inputs` is what
+catches; branch gating would not have prevented it. What it adds is a stop on a
+maintenance branch — a 11.4 line built right after develop, say — ever reusing a
+workspace from a different release line, where far more than a submodule differs.
+
+The gate vets the *incoming* request, so on its own it would still let a develop build
+inherit a workspace a maintenance branch left behind. The branch is therefore also part
+of the workspace identity hashed by `bt_guard_build_inputs`, so a branch change rebuilds
+the build directory the same way a submodule bump does.
+
 ### Per-request override
 
 The dashboard's Advanced Configuration has a **Re-use Artifacts** toggle, off by

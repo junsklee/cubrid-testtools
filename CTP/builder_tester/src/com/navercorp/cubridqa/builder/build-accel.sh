@@ -257,7 +257,11 @@ bt_reset_install() {
 bt_guard_build_inputs() {
   local bdir="$1" marker="$2" now=""
   [ -n "$bdir" ] && [ -n "$marker" ] || return 0
-  now=$( { cat 3rdparty/CMakeLists.txt 2>/dev/null
+  # The branch is part of the identity: the gate in BuilderTask only vets the incoming
+  # request, so without this a develop build could still inherit a workspace left by a
+  # maintenance branch whose submodule pointers happened to match.
+  now=$( { echo "branch=${BT_BRANCH:-}"
+           cat 3rdparty/CMakeLists.txt 2>/dev/null
            git ls-tree -r HEAD 2>/dev/null | awk '$2=="commit"{print $3, $4}'
          } | md5sum 2>/dev/null | cut -d' ' -f1 || true)
   [ -n "$now" ] || return 0

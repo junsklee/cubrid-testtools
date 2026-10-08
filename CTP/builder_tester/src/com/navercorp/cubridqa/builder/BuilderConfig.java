@@ -76,6 +76,7 @@ public class BuilderConfig {
     private static final String BUILD_ACCEL_ENABLED = "build_accel_enabled";
     private static final String BUILD_WORKSPACE_REUSE = "build_workspace_reuse";
     private static final String BUILD_WORKSPACE_REUSE_MAX = "build_workspace_reuse_max";
+    private static final String BUILD_WORKSPACE_REUSE_BRANCHES = "build_workspace_reuse_branches";
     private static final String PARALLEL_JOBS = "parallel_jobs";
     private static final String SHELL_TC_SYNC_INTERVAL_SECONDS = "shell_tc_sync_interval_seconds";
     private static final String SHELL_TC_SYNC_MODE = "shell_tc_sync_mode";
@@ -1151,6 +1152,30 @@ public class BuilderConfig {
      */
     public boolean isBuildWorkspaceReuseEnabled() {
         return Boolean.parseBoolean(properties.getProperty(BUILD_WORKSPACE_REUSE, "false"));
+    }
+
+    /**
+     * Branches whose builds may reuse a workspace, as a comma-separated list; default
+     * "develop".
+     *
+     * Defence in depth rather than the main guard. The measured contamination came from
+     * a submodule pointer moving between two develop commits, which bt_guard_build_inputs
+     * is what actually catches. This additionally keeps a maintenance branch - a 11.4
+     * line built right after develop, say - from ever reusing a workspace built from a
+     * different release, where far more than a submodule differs.
+     */
+    public java.util.Set<String> getBuildWorkspaceReuseBranches() {
+        java.util.Set<String> branches = new java.util.LinkedHashSet<>();
+        for (String b : properties.getProperty(BUILD_WORKSPACE_REUSE_BRANCHES, "develop").split(",")) {
+            String t = b.trim();
+            if (!t.isEmpty()) {
+                branches.add(t);
+            }
+        }
+        if (branches.isEmpty()) {
+            branches.add("develop");
+        }
+        return branches;
     }
 
     /** Builds a reused workspace may serve before it is wiped and rebuilt. */

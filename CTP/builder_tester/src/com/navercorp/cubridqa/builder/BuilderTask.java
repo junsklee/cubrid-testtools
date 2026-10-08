@@ -248,6 +248,16 @@ public class BuilderTask {
                 taskLogger.info("Request override: reuseArtifacts=" + this.reuseWorkspace
                     + (this.reuseWorkspace ? " (may reuse the previous workspace)" : " (clean build)"));
             }
+            // Branch gate, applied last so it overrides the request too: only the
+            // configured branches may reuse a workspace. A maintenance branch shares a
+            // workspace with whatever was built before it, where a whole release line
+            // can differ rather than a commit or two.
+            if (this.reuseWorkspace && !config.getBuildWorkspaceReuseBranches().contains(cubridBranch)) {
+                this.reuseWorkspace = false;
+                taskLogger.info("Workspace reuse not allowed on branch '" + cubridBranch
+                    + "' (build_workspace_reuse_branches="
+                    + String.join(",", config.getBuildWorkspaceReuseBranches()) + "); building clean");
+            }
 
             // Request override: prefer commitBuildMode (string) everywhere. Keep use_baseline_cherrypick as a backward-compatible alias.
             this.commitBuildMode = config.getCommitBuildMode();
@@ -746,7 +756,7 @@ public class BuilderTask {
         try {
             if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
                 buildPackage = dockerManager.buildPullRequest(pr.prBranch, normalizedCommit, workDir.toFile(), buildType, pr.baselineSha,
-                                                              this.reuseWorkspace);
+                                                              this.reuseWorkspace, getCubridBranch());
             } else {
                 // Direct PR build: checkout head SHA and build as-is (no cherry-pick)
                 buildPackage = buildFromHeadDirect(normalizedCommit, buildType, workDir.toFile());
@@ -1262,7 +1272,7 @@ public class BuilderTask {
         
         // Use Docker if available
         if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
-            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode, this.reuseWorkspace);
+            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode, this.reuseWorkspace, getCubridBranch());
         }
 
         if (COMMIT_BUILD_MODE_CHECKOUT.equals(commitBuildMode)) {

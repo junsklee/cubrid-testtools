@@ -72,17 +72,19 @@ public class DockerBuildManager {
     public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode)
             throws IOException, InterruptedException {
         return buildCubrid(commitHash, workDir, buildType, baselineCommit, commitBuildMode,
-                           config.isBuildWorkspaceReuseEnabled());
+                           config.isBuildWorkspaceReuseEnabled(), null);
     }
 
     /**
      * @param reuseWorkspace whether this build may reuse the previous build's workspace.
-     *        The caller resolves the policy (request override, else
+     *        The caller resolves the policy (request override, branch gate, else
      *        build_workspace_reuse); this is passed per request rather than held on this
      *        shared instance, so concurrent builds cannot affect each other.
+     * @param cubridBranch the branch being built, which forms part of the workspace's
+     *        identity so a workspace is never inherited across branches.
      */
     public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode,
-                              boolean reuseWorkspace) 
+                              boolean reuseWorkspace, String cubridBranch) 
             throws IOException, InterruptedException {
         
         if (!dockerAvailable || !imageReady) {
@@ -210,6 +212,8 @@ public class DockerBuildManager {
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE=" + (reuseWorkspace ? "1" : "0"));
         baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_BRANCH=" + (cubridBranch == null ? "" : cubridBranch));
+        baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
         
         // Pass host UID/GID for output ownership fix (allows cleanup without sudo)
@@ -312,12 +316,12 @@ public class DockerBuildManager {
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
             throws IOException, InterruptedException {
         return buildPullRequest(prBranch, headSha, workDir, buildType, baselineCommit,
-                                config.isBuildWorkspaceReuseEnabled());
+                                config.isBuildWorkspaceReuseEnabled(), null);
     }
 
     /** @param reuseWorkspace see {@link #buildCubrid}. */
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit,
-                                   boolean reuseWorkspace)
+                                   boolean reuseWorkspace, String cubridBranch)
             throws IOException, InterruptedException {
         if (!dockerAvailable || !imageReady) {
             return buildPrDirect(prBranch, headSha, workDir, buildType, baselineCommit);
@@ -424,6 +428,8 @@ public class DockerBuildManager {
         baseDockerCmd.add("BT_ACCEL=" + (config.isBuildAccelEnabled() ? "1" : "0"));
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE=" + (reuseWorkspace ? "1" : "0"));
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_BRANCH=" + (cubridBranch == null ? "" : cubridBranch));
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
 
