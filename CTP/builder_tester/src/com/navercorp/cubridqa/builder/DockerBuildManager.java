@@ -214,6 +214,8 @@ public class DockerBuildManager {
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_BRANCH=" + (cubridBranch == null ? "" : cubridBranch));
         baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_IMAGE_ID=" + resolveBuildImageId());
+        baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
         
         // Pass host UID/GID for output ownership fix (allows cleanup without sudo)
@@ -430,6 +432,8 @@ public class DockerBuildManager {
         baseDockerCmd.add("BT_WORKSPACE_REUSE=" + (reuseWorkspace ? "1" : "0"));
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_BRANCH=" + (cubridBranch == null ? "" : cubridBranch));
+        baseDockerCmd.add("-e");
+        baseDockerCmd.add("BT_IMAGE_ID=" + resolveBuildImageId());
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
 
@@ -651,6 +655,7 @@ public class DockerBuildManager {
             writer.println();
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
+            writer.println("bt_clean_submodules");
             writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
@@ -1021,6 +1026,7 @@ public class DockerBuildManager {
             writer.println("# Clean any previous builds");
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
+            writer.println("bt_clean_submodules");
             writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
@@ -1239,6 +1245,7 @@ public class DockerBuildManager {
             writer.println();
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
+            writer.println("bt_clean_submodules");
             writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
@@ -1885,6 +1892,28 @@ public class DockerBuildManager {
      * Emitted unconditionally, so the script shape does not depend on configuration;
      * the BT_ACCEL environment variable is what turns the accelerators on and off.
      */
+    /**
+     * Image id of the build image, so a republished tag invalidates a reused workspace.
+     * docker_build_image is a moving tag: without this, a workspace keeps 3rdparty
+     * libraries and objects built by the previous image's toolchain. Empty on failure,
+     * which simply means the image stops contributing to the workspace identity.
+     */
+    private String resolveBuildImageId() {
+        try {
+            Process p = new ProcessBuilder("docker", "image", "inspect", "--format", "{{.Id}}",
+                                           config.getDockerBuildImage()).start();
+            String id;
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                id = r.readLine();
+            }
+            p.waitFor();
+            return (id == null) ? "" : id.trim();
+        } catch (Exception e) {
+            logger.warning("Could not resolve build image id: " + e.getMessage());
+            return "";
+        }
+    }
+
     private static void writeBuildAccelHelpers(PrintWriter writer) {
         String[] candidates = {
             "build-accel.sh",

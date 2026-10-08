@@ -215,6 +215,21 @@ bt_workspace_ok() {
   return 0
 }
 
+# bt_clean_submodules - remove build output left inside submodule working trees.
+#
+# `git clean -xdf` in the superproject does not recurse into submodules, and
+# `git submodule update --force` discards modifications but not ignored or untracked
+# files. The jdbc build writes its jars into the submodule source directory, which the
+# superproject then installs by wildcard, so anything left there can be packaged. That
+# did not leak in testing, but only because the Ant build happens to clear its own
+# output; nothing guarantees it.
+bt_clean_submodules() {
+  [ "${BT_WORKSPACE_REUSED:-0}" = "1" ] || return 0
+  git submodule foreach --recursive --quiet 'git clean -xdf >/dev/null 2>&1 || true' 2>/dev/null || true
+  echo "[bt-accel] workspace: cleaned submodule working trees"
+  return 0
+}
+
 # bt_reset_install <build_dir> - drop the staged install tree before a reused build.
 #
 # CMake's install step only ever ADDS files; it never removes one that is no longer
@@ -260,7 +275,8 @@ bt_guard_build_inputs() {
   # The branch is part of the identity: the gate in BuilderTask only vets the incoming
   # request, so without this a develop build could still inherit a workspace left by a
   # maintenance branch whose submodule pointers happened to match.
-  now=$( { echo "branch=${BT_BRANCH:-}"
+  now=$( { echo "image=${BT_IMAGE_ID:-}"
+           echo "branch=${BT_BRANCH:-}"
            cat 3rdparty/CMakeLists.txt 2>/dev/null
            git ls-tree -r HEAD 2>/dev/null | awk '$2=="commit"{print $3, $4}'
          } | md5sum 2>/dev/null | cut -d' ' -f1 || true)

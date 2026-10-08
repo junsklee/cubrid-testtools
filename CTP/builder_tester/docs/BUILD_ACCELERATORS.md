@@ -317,6 +317,35 @@ inherit a workspace a maintenance branch left behind. The branch is therefore al
 of the workspace identity hashed by `bt_guard_build_inputs`, so a branch change rebuilds
 the build directory the same way a submodule bump does.
 
+### What is still not guaranteed
+
+The guards above were each added after a defect was found by testing. That method does
+not converge: three *silent* defects turned up in roughly forty builds, and the list of
+invalidators is only as complete as whoever enumerated it. Two more were closed without
+a defect being observed first, by reasoning about what else is untracked:
+
+- **the build image**, since `docker_build_image` is a moving tag. Its id is now part of
+  the workspace identity, so a republished image rebuilds the build directory rather than
+  leaving 3rdparty libraries built by the previous toolchain.
+- **submodule working trees**, which `git clean -xdf` does not reach and
+  `git submodule update --force` does not clear of ignored files. The jdbc build writes
+  jars there and the superproject installs them by wildcard. Nothing leaked in testing,
+  but only because the Ant build happens to clear its own output.
+
+The honest position is that this is defence by enumeration and cannot be called
+complete. What would close the class is verification rather than prediction:
+
+**Shadow verification.** After every Nth reused build, rebuild the same commit clean and
+compare the two packages; any divergence beyond the known noise floor means an
+invalidator was missed, without anyone having had to predict it. Comparing tar listings
+alone (path, type, size) would have caught all three silent defects above: stale jdbc
+jars as extra entries, the missing cert pair as missing entries, the swapped certificate
+as a size change. On mismatch the workspace should be marked dirty so every later build
+runs clean, and the divergence surfaced through the existing `MattermostSender`.
+
+That turns an unbounded silent risk into a bounded detected one, and it degrades safely.
+It is not implemented; it is the recommended next step if reuse is ever enabled widely.
+
 ### Per-request override
 
 The dashboard's Advanced Configuration has a **Re-use Artifacts** toggle, off by
