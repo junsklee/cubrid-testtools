@@ -37,8 +37,8 @@ public class BuilderTask {
     private String baselineCommit;
     private String baselineKey;
     private String commitBuildMode;
-    /** Per-request "Re-build artifacts": forces a clean build even when workspace reuse is on. */
-    private boolean rebuildArtifacts;
+    /** Resolved per-request answer to "may this build reuse the previous workspace?". */
+    private boolean reuseWorkspace;
     private List<String> commitOrder = Collections.emptyList();
     private Map<String, Long> commitTimestamps = Collections.emptyMap();
     private WorkloadDistributor workloadDistributor;
@@ -239,10 +239,14 @@ public class BuilderTask {
                 persistRequestMetadataSnapshot(requestId);
             }
 
-            // Advanced option: force a clean build for this request, ignoring workspace reuse.
-            this.rebuildArtifacts = request.optBoolean("rebuildArtifacts", false);
-            if (this.rebuildArtifacts) {
-                taskLogger.info("Request override: rebuildArtifacts=true (clean build, workspace reuse ignored)");
+            // Advanced option "Re-use Artifacts". Absent means use the builder's
+            // configured default, which is off; true opts this request into reuse, and
+            // false forces a clean build even where reuse is enabled globally.
+            this.reuseWorkspace = config.isBuildWorkspaceReuseEnabled();
+            if (request.has("reuseArtifacts")) {
+                this.reuseWorkspace = request.optBoolean("reuseArtifacts", this.reuseWorkspace);
+                taskLogger.info("Request override: reuseArtifacts=" + this.reuseWorkspace
+                    + (this.reuseWorkspace ? " (may reuse the previous workspace)" : " (clean build)"));
             }
 
             // Request override: prefer commitBuildMode (string) everywhere. Keep use_baseline_cherrypick as a backward-compatible alias.
@@ -742,7 +746,7 @@ public class BuilderTask {
         try {
             if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
                 buildPackage = dockerManager.buildPullRequest(pr.prBranch, normalizedCommit, workDir.toFile(), buildType, pr.baselineSha,
-                                                              this.rebuildArtifacts);
+                                                              this.reuseWorkspace);
             } else {
                 // Direct PR build: checkout head SHA and build as-is (no cherry-pick)
                 buildPackage = buildFromHeadDirect(normalizedCommit, buildType, workDir.toFile());
@@ -1258,7 +1262,7 @@ public class BuilderTask {
         
         // Use Docker if available
         if (config.useDocker() && dockerManager != null && dockerManager.isReady()) {
-            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode, this.rebuildArtifacts);
+            return dockerManager.buildCubrid(commit, workDir, buildType, baselineCommit, commitBuildMode, this.reuseWorkspace);
         }
 
         if (COMMIT_BUILD_MODE_CHECKOUT.equals(commitBuildMode)) {

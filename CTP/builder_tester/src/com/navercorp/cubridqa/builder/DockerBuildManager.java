@@ -71,17 +71,18 @@ public class DockerBuildManager {
     
     public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode)
             throws IOException, InterruptedException {
-        return buildCubrid(commitHash, workDir, buildType, baselineCommit, commitBuildMode, false);
+        return buildCubrid(commitHash, workDir, buildType, baselineCommit, commitBuildMode,
+                           config.isBuildWorkspaceReuseEnabled());
     }
 
     /**
-     * @param rebuildArtifacts when true, this build ignores workspace reuse and starts
-     *        from a clean clone even if build_workspace_reuse is on. Passed per request
-     *        rather than held on this (shared) instance, so concurrent builds cannot
-     *        affect each other.
+     * @param reuseWorkspace whether this build may reuse the previous build's workspace.
+     *        The caller resolves the policy (request override, else
+     *        build_workspace_reuse); this is passed per request rather than held on this
+     *        shared instance, so concurrent builds cannot affect each other.
      */
     public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode,
-                              boolean rebuildArtifacts) 
+                              boolean reuseWorkspace) 
             throws IOException, InterruptedException {
         
         if (!dockerAvailable || !imageReady) {
@@ -207,8 +208,7 @@ public class DockerBuildManager {
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_ACCEL=" + (config.isBuildAccelEnabled() ? "1" : "0"));
         baseDockerCmd.add("-e");
-        baseDockerCmd.add("BT_WORKSPACE_REUSE="
-            + ((config.isBuildWorkspaceReuseEnabled() && !rebuildArtifacts) ? "1" : "0"));
+        baseDockerCmd.add("BT_WORKSPACE_REUSE=" + (reuseWorkspace ? "1" : "0"));
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
         
@@ -311,12 +311,13 @@ public class DockerBuildManager {
 
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
             throws IOException, InterruptedException {
-        return buildPullRequest(prBranch, headSha, workDir, buildType, baselineCommit, false);
+        return buildPullRequest(prBranch, headSha, workDir, buildType, baselineCommit,
+                                config.isBuildWorkspaceReuseEnabled());
     }
 
-    /** @param rebuildArtifacts see {@link #buildCubrid}. */
+    /** @param reuseWorkspace see {@link #buildCubrid}. */
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit,
-                                   boolean rebuildArtifacts)
+                                   boolean reuseWorkspace)
             throws IOException, InterruptedException {
         if (!dockerAvailable || !imageReady) {
             return buildPrDirect(prBranch, headSha, workDir, buildType, baselineCommit);
@@ -422,8 +423,7 @@ public class DockerBuildManager {
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_ACCEL=" + (config.isBuildAccelEnabled() ? "1" : "0"));
         baseDockerCmd.add("-e");
-        baseDockerCmd.add("BT_WORKSPACE_REUSE="
-            + ((config.isBuildWorkspaceReuseEnabled() && !rebuildArtifacts) ? "1" : "0"));
+        baseDockerCmd.add("BT_WORKSPACE_REUSE=" + (reuseWorkspace ? "1" : "0"));
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
 
@@ -645,7 +645,7 @@ public class DockerBuildManager {
             writer.println();
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
-            writer.println("bt_guard_3rdparty " + config.getBuildDir(buildType) + " \"$target/.bt_3rdparty\"");
+            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
             writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
@@ -1015,7 +1015,7 @@ public class DockerBuildManager {
             writer.println("# Clean any previous builds");
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
-            writer.println("bt_guard_3rdparty " + config.getBuildDir(buildType) + " \"$target/.bt_3rdparty\"");
+            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
             writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
@@ -1233,7 +1233,7 @@ public class DockerBuildManager {
             writer.println();
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
-            writer.println("bt_guard_3rdparty " + config.getBuildDir(buildType) + " \"$target/.bt_3rdparty\"");
+            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
             writer.println("bt_seed_jdk " + config.getBuildDir(buildType));

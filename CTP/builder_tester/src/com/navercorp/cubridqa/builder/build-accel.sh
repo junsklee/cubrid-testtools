@@ -236,24 +236,35 @@ bt_reset_install() {
   return 0
 }
 
-# bt_guard_3rdparty <build_dir> - fall back to a clean build directory when this
-# commit defines its 3rdparty libraries differently from the one the workspace was
-# last built at.
+# bt_guard_build_inputs <build_dir> <marker> - fall back to a clean build directory
+# when this commit's 3rdparty definitions or submodule pointers differ from the ones
+# the workspace was last built at.
 #
-# ExternalProject cannot migrate a built tree across a version change: going from
-# OpenSSL 3.5.7 back to 1.1.1w in a reused workspace fails outright in
-# libopenssl-build. Rather than let that surface as a build failure, compare the
-# 3rdparty definition and wipe the build directory when it moves. The clone and its
-# submodules are still reused, so this costs only the 3rdparty rebuild.
-bt_guard_3rdparty() {
+# Two measured failures motivate this, both silent or costly:
+#
+#   - ExternalProject cannot migrate a built tree across a version change. Going
+#     from OpenSSL 3.5.7 back to 1.1.1w in a reused workspace fails in
+#     libopenssl-build.
+#   - ExternalProject stamps do not track a submodule's source tree. When the
+#     cubridmanager pointer advanced, its stamps stayed valid, the whole subproject
+#     was skipped, and the package shipped the PREVIOUS commit's TLS certificates -
+#     cm_ssl_cert.crt as a 774-byte regular file instead of the new RSA-2048 pair.
+#     The build reported success.
+#
+# Submodule pointers move often on develop, so this will frequently force a rebuild;
+# that is the point. The clone and its submodules are still reused, so the cost is
+# the 3rdparty and subproject rebuild, not the checkout.
+bt_guard_build_inputs() {
   local bdir="$1" marker="$2" now=""
   [ -n "$bdir" ] && [ -n "$marker" ] || return 0
-  now=$(md5sum < 3rdparty/CMakeLists.txt 2>/dev/null | cut -d' ' -f1 || true)
+  now=$( { cat 3rdparty/CMakeLists.txt 2>/dev/null
+           git ls-tree -r HEAD 2>/dev/null | awk '$2=="commit"{print $3, $4}'
+         } | md5sum 2>/dev/null | cut -d' ' -f1 || true)
   [ -n "$now" ] || return 0
   if [ "${BT_WORKSPACE_REUSED:-0}" = "1" ] && [ -d "$bdir" ]; then
     if [ ! -f "$marker" ] || [ "$(cat "$marker" 2>/dev/null)" != "$now" ]; then
       rm -rf "$bdir" 2>/dev/null || true
-      echo "[bt-accel] workspace: 3rdparty definition changed; rebuilding the build directory"
+      echo "[bt-accel] workspace: 3rdparty or submodule pointers changed; rebuilding the build directory"
     fi
   fi
   # Recorded on every build, reused or not, so the next reuse has something to compare.

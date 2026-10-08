@@ -219,6 +219,99 @@ anything else ever writes a per-container path that CMake might cache.
 - Package equivalence: a reused build and a clean build of the same commit produce
   packages with identical file sets (447 entries each, no differences).
 
+## What an adversarial soak found
+
+Four develop commits spread over six months (Apr/Jun/Aug/Oct 2026) were built as a
+reuse chain and each package compared against a clean build of the same commit.
+Adjacent commits would have found nothing; the spread is what surfaced both defects.
+
+Comparing packages needs care, because **CUBRID builds are not bit-reproducible**.
+Two independent *clean* builds of one commit differ in 10 of 447 files, with
+`libcubrid.so` among them — so byte comparison would have hidden exactly the files
+that matter. Traced, the whole ELF difference is **2 bytes**:
+
+```
+build 1:  built on: Thu Oct  8 04:03:06 2026 UTC
+build 2:  built on: Thu Oct  8 04:03:58 2026 UTC
+```
+
+OpenSSL's build timestamp, baked into statically linked libcrypto; `.text`, `.data`
+and `.data.rel.ro` are identical. So packages are compared ELF section by section and
+jars by entry CRC, leaving one known-benign difference: the javadoc jar, whose HTML
+embeds a generation date.
+
+**Defect 1 — stale artifacts outliving their commit (silent).** CMake's install step
+only ever adds files; it never removes one no longer in the install set, and
+`_install/CUBRID` was never cleaned between reused builds. A reused build of the June
+commit shipped **both** `cubrid-jdbc-11.3.2.0000.jar` (correct) and
+`cubrid-jdbc-11.4.0.0000.jar` (left over from the preceding August build), plus four
+stale `cm_ssl` certs — two JDBC drivers on the classpath of the artifact the testers
+install, with no error anywhere. Fixed by `bt_reset_install`.
+
+**Defect 2 — 3rdparty version changes breaking the build (loud).** OpenSSL 3.5.7 back
+to 1.1.1w in a reused workspace fails in `libopenssl-build`; ExternalProject cannot
+migrate a built tree across a version change. The `.bt_dirty` rail contained it, but
+at the cost of a failed build. Fixed by `bt_guard_build_inputs` (see defect 3).
+
+**Defect 3 — a submodule bump shipping the previous commit's artifacts (silent).**
+`cubridmanager` is an ExternalProject, and ExternalProject stamps do not track a
+submodule's source tree. Between two *develop* commits eight days apart
+(`b572177a1` -> `1eebef802`) the cubridmanager pointer advanced, its stamps stayed
+valid, the subproject was skipped entirely (0 steps against 3 in a clean build), and
+the package shipped the previous commit's TLS certificates:
+
+| | clean | reused |
+|---|---|---|
+| `cm_ssl_cert_2048.crt/.key` | present | absent |
+| `cm_ssl_cert_1024.crt/.key` | present | absent |
+| `cm_ssl_cert.crt` | symlink to the 2048 cert | 774-byte regular file from the previous commit |
+
+The submodule checkout was correct in both builds; the build simply never looked at
+it. `cub_manager` is compiled with `CMS_DEFAULT_CERT_MD5` of the cert it expects, so
+the mismatch can also surface at runtime.
+
+Fixed by `bt_guard_build_inputs`, which hashes `3rdparty/CMakeLists.txt` **plus every
+submodule pointer** and rebuilds the build directory when any of it moves. Note what
+this costs: submodule pointers move often on develop (six cubrid-jdbc bumps in six
+weeks, plus cubridmanager), so the guard fires frequently and such a build is barely
+faster than a clean one - 54s against 61s, saving only the clone and submodules.
+
+Branch-gating reuse to develop would **not** have caught this: both commits are on
+develop. The invalidating event is a submodule pointer moving, not a branch change.
+
+With both fixes the same chain passes: all four build, file sets match the clean
+reference exactly, no `.text` differs, every functional jar matches by CRC, and the
+only remaining difference is the javadoc jar — i.e. the clean-vs-clean floor.
+
+**A caveat on that run.** Those four commits have *different* 3rdparty definitions, so
+`bt_guard_3rdparty` wiped the build directory at each step: all three reused builds ran
+25 3rdparty steps where true deep reuse shows 0. That run validated the guard, not the
+incremental-compile path. It also means the headline 37s only holds for commits sharing
+a 3rdparty definition (the ordinary PR case); across distant commits reuse gives back
+most of its benefit, still beating a clean build only because the clone, submodules and
+ccache survive.
+
+### Recommendation
+
+Keep `build_workspace_reuse=false`. A four-commit chain surfaced one silent wrong
+artifact and one hard failure; both are fixed, but that hit rate on a small sample says
+the failure surface is not fully mapped, and the prize is ~13s on a pipeline where tests
+take minutes. Use the per-request **Re-use Artifacts** toggle for single-commit,
+repeat-build work (flaky-test hunting, iterating on one commit), where the speed matters
+and cross-commit contamination cannot apply.
+
+### Per-request override
+
+The dashboard's Advanced Configuration has a **Re-use Artifacts** toggle, off by
+default and matching the global default, which warns when switched on. It sends
+`reuseArtifacts: true` in the request. The field is a three-way override:
+
+| request field | effect |
+|---|---|
+| absent | use `build_workspace_reuse` (off by default) |
+| `true` | reuse the previous workspace for this request |
+| `false` | force a clean build even where reuse is enabled globally |
+
 ## Still worth doing
 
 - **`pigz` is missing from the build image** (~9s/build). The packaging code already
