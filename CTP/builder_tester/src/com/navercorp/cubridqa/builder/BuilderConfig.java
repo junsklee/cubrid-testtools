@@ -184,7 +184,8 @@ public class BuilderConfig {
         try (FileInputStream fis = new FileInputStream(file)) {
             properties.load(fis);
         }
-        
+        stripTrailingCommentsAndSpace();
+
         // Expand environment variables in property values
         expandEnvironmentVariables();
     }
@@ -212,6 +213,21 @@ public class BuilderConfig {
         return configBaseDir.resolve(p);
     }
     
+    /**
+     * java.util.Properties keeps everything after '=' as the value, so `key=true   ` reads as
+     * "true   " (Boolean.parseBoolean -> false) and `key=300   # note` keeps the note.
+     * Treat whitespace followed by '#' as the start of a comment and trim the rest.
+     */
+    private void stripTrailingCommentsAndSpace() {
+        for (String key : properties.stringPropertyNames()) {
+            String value = properties.getProperty(key);
+            String cleaned = value.replaceFirst("\\s+#.*$", "").trim();
+            if (!cleaned.equals(value)) {
+                properties.setProperty(key, cleaned);
+            }
+        }
+    }
+
     private void expandEnvironmentVariables() {
         for (String key : properties.stringPropertyNames()) {
             String value = properties.getProperty(key);
