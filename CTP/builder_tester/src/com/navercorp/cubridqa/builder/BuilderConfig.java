@@ -789,6 +789,15 @@ public class BuilderConfig {
     }
 
     /**
+     * host:port other nodes use to reach this tester, reported as its nodeId; null = local address
+     * and tester_port. Set it when the tester sits behind a published port (e.g. in a container).
+     */
+    public String getTesterAdvertisedAddress() {
+        String raw = properties.getProperty("tester_advertised_address");
+        return raw == null || raw.trim().isEmpty() ? null : raw.trim();
+    }
+
+    /**
      * Tester execution mode: "docker" (containers), "direct" (legacy host run) or "vm".
      * "vm" runs shell cases one at a time on a dedicated QA VM as the VM's own user,
      * replicating CTP's per-case steps (see exec/VmShellExecutor). Defaults to

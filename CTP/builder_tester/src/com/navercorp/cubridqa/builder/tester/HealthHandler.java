@@ -208,6 +208,12 @@ public class HealthHandler implements HttpHandler {
     }
 
     private String getNodeId() {
+        // Behind a published port (e.g. a tester in a container) the local address is not the one
+        // other nodes reach it on.
+        String advertised = config.getTesterAdvertisedAddress();
+        if (advertised != null) {
+            return advertised;
+        }
         try {
             String hostname = InetAddress.getLocalHost().getHostAddress();
             return hostname + ":" + config.getTesterPort();
