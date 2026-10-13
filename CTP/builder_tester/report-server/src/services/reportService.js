@@ -12,7 +12,7 @@ class ReportService {
      */
     generateReportHTML(data, requestId) {
         const timestamp = new Date().toISOString();
-        const resultsJSON = JSON.stringify(data);
+        const resultsJSON = this.embedJSON(data);
 
         // This is a simplified version - in production, use a template engine
         let html = this.getReportTemplate(data, requestId, timestamp, resultsJSON);
@@ -124,6 +124,17 @@ class ReportService {
     /**
      * Get basic report template
      */
+    /**
+     * Serialise data for embedding in a <script> block.
+     *
+     * JSON.stringify does not escape "<", so content containing "</script>" would end
+     * the block early. Escaping it as \u003c is transparent: JSON.parse yields the
+     * same string. Test content is arbitrary user input, so this cannot be assumed away.
+     */
+    embedJSON(data) {
+        return JSON.stringify(data).replace(/</g, '\\u003c');
+    }
+
     getReportTemplate(data, requestId, timestamp, resultsJSON) {
         // Use the integrated template from Java report-template.html for full UI
         try {
@@ -131,10 +142,15 @@ class ReportService {
             const path = require('path');
             const templatePath = path.join(__dirname, '..', '..', '..', 'src', 'com', 'navercorp', 'cubridqa', 'builder', 'report', 'report-template.html');
             const raw = fs.readFileSync(templatePath, 'utf8');
+            // Replacer FUNCTIONS, not strings: in a string replacement JS treats $',
+            // $`, $& and $$ as patterns, and test content legitimately contains them.
+            // A shell case with `grep '^-.*\.access$' | awk '{ print $9 }'` has $',
+            // which splices the rest of the template into the JSON and truncates it,
+            // so JSON.parse fails and the report renders no tests at all.
             return raw
-                .replace(/\{\{REQUEST_ID\}\}/g, requestId)
-                .replace(/\{\{TIMESTAMP\}\}/g, timestamp)
-                .replace(/\{\{RESULTS_JSON\}\}/g, resultsJSON);
+                .replace(/\{\{REQUEST_ID\}\}/g, () => requestId)
+                .replace(/\{\{TIMESTAMP\}\}/g, () => timestamp)
+                .replace(/\{\{RESULTS_JSON\}\}/g, () => resultsJSON);
         } catch (e) {
             // Fallback minimal template
             return `<!DOCTYPE html>
