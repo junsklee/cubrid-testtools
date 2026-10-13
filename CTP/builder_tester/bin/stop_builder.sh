@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 PID_FILE="$SCRIPT_DIR/builder.pid"
 
 stop_by_pid() {
@@ -24,8 +25,10 @@ if [ -f "$PID_FILE" ]; then
   rm -f "$PID_FILE"
 fi
 
-# Fallback: kill by Java main class
-pkill -f 'com.navercorp.cubridqa.builder.Builder' 2>/dev/null || true
+# Fallback: kill by Java main class, only for processes started from this installation
+# (its lib/ is on their classpath): a broad match also kills testers in containers or
+# other checkouts running as the same user on this host.
+pkill -f "${PROJECT_ROOT}/lib/json.jar.*com.navercorp.cubridqa.builder.Builder" 2>/dev/null || true
 
 # Verify port is free (best effort)
 if command -v netstat >/dev/null 2>&1; then
