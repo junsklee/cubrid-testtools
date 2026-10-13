@@ -1951,7 +1951,7 @@ public class BuilderTask {
             
             // Determine if this is a local or remote tester
             String buildPackageRef;
-            if (isLocalTester(host)) {
+            if (isLocalTester(host, port)) {
                 // Local tester - use direct file path (tester will skip if Docker image is cached)
                 buildPackageRef = buildPackage;
                 taskLogger.info("Sending package reference to local tester " + workerIp + ": " + buildPackage);
@@ -2246,7 +2246,7 @@ public class BuilderTask {
             else if (responseJson.has("attemptLogMetadata")) {
                 try {
                     JSONArray metadata = responseJson.getJSONArray("attemptLogMetadata");
-                    boolean isLocal = isLocalTester(host);
+                    boolean isLocal = isLocalTester(host, port);
                     
                     if (isLocal) {
                         taskLogger.info("Received metadata for " + metadata.length() + " attempt logs - copying from local filesystem");
@@ -2493,7 +2493,31 @@ public class BuilderTask {
         return false;
     }
     
-    private boolean isLocalTester(String ip) {
+    /**
+     * A tester is local when it shares this machine's filesystem, so the builder can hand it
+     * package paths and read its logs directly. That is the tester on this host's configured
+     * tester_port; a tester published on another port of this host (e.g. a VM-mode tester in a
+     * container) is remote and gets a download URL like any other node.
+     */
+    private boolean isLocalTester(String host, int port) {
+        return port == config.getTesterPort() && isLocalHost(host);
+    }
+
+    /** Variant for "host[:port]" worker strings. */
+    private boolean isLocalTester(String worker) {
+        String host = worker;
+        int port = config.getTesterPort();
+        int colon = worker.lastIndexOf(':');
+        if (colon > 0) {
+            host = worker.substring(0, colon);
+            try {
+                port = Integer.parseInt(worker.substring(colon + 1));
+            } catch (NumberFormatException ignore) { }
+        }
+        return isLocalTester(host, port);
+    }
+
+    private boolean isLocalHost(String ip) {
         if ("localhost".equalsIgnoreCase(ip) || "127.0.0.1".equals(ip)) {
             taskLogger.info("Tester " + ip + " identified as LOCAL (localhost/127.0.0.1)");
             return true;
@@ -3332,7 +3356,7 @@ public class BuilderTask {
             if (currentTotal == null) {
                 return 0.0;
             }
-            int capacity = workerCapacities.getOrDefault(workerKey, config.getMaxConcurrentTests());
+            int capacity = capacityFor(workerCapacities, workerKey);
             if (capacity <= 0) {
                 capacity = 1;
             }
@@ -3607,7 +3631,9 @@ public class BuilderTask {
                     assignedCount, testInstances.size(), a));
 
                 String nodeId = a.getTargetNodeId();
-                String workerIp = nodeId.contains(":") ? nodeId.substring(0, nodeId.indexOf(":")) : nodeId;
+                // Keep the port: two testers can share a host (e.g. Docker on 8090 and a VM-mode
+                // tester published on another port), and runTest/finalize parse "host:port".
+                String workerIp = extractWorkerKey(nodeId);
                 AtomicInteger inflightCounter = nodeInflight.computeIfAbsent(workerIp, k -> new AtomicInteger());
                 inflightCounter.incrementAndGet();
 
@@ -3708,12 +3734,25 @@ public class BuilderTask {
             .collect(Collectors.toList());
     }
 
-    private String extractWorkerKey(String nodeId) {
-        if (nodeId == null) {
-            return "";
+    /**
+     * Capacity of a scheduler node. Node ids are always "host:port"; workerCapacities is keyed by
+     * the request's workerIps, which may omit the default tester port.
+     */
+    private int capacityFor(Map<String, Integer> workerCapacities, String nodeId) {
+        Integer cap = workerCapacities.get(nodeId);
+        String defaultPortSuffix = ":" + config.getTesterPort();
+        if (cap == null && nodeId.endsWith(defaultPortSuffix)) {
+            cap = workerCapacities.get(nodeId.substring(0, nodeId.length() - defaultPortSuffix.length()));
         }
-        int idx = nodeId.indexOf(':');
-        return idx >= 0 ? nodeId.substring(0, idx) : nodeId;
+        return cap != null ? cap : config.getMaxConcurrentTests();
+    }
+
+    /**
+     * Key for a scheduler node's in-flight counters and dispatch: its full "host:port" id, so two
+     * testers on one host stay distinct.
+     */
+    private String extractWorkerKey(String nodeId) {
+        return nodeId == null ? "" : nodeId.trim();
     }
 
     /**
