@@ -231,7 +231,9 @@ public class Tester {
         this.server.createContext("/log/", logStreamHandler);
         this.server.createContext("/finalize-request", finalizeRequestHandler);
         this.server.createContext("/cancel-request", new CancelRequestHandler(shellTcSync, sqlTcSync, sqlAgentPool));
-        int maxThreads = Math.max(1, config.getMaxConcurrentTests());
+        // /test calls hold a thread for the whole case; keep threads free for /health, /log,
+        // /finalize-request and /cancel-request, or the builder sees a busy node as stale.
+        int maxThreads = Math.max(1, config.getMaxConcurrentTests()) + 8;
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }
     
@@ -298,7 +300,7 @@ public class Tester {
             // Set system property for log directory based on config file location
             if (args.length > 0) {
                 // Config file is absolute path from startup script
-                File configFileObj = new File(configFile);
+                File configFileObj = new File(configFile).getAbsoluteFile();
                 File projectRoot = configFileObj.getParentFile().getParentFile(); // ../.. from conf/tester.conf
                 System.setProperty("tester.project.root", projectRoot.getAbsolutePath());
             }
