@@ -183,6 +183,42 @@ class FileService {
     }
 
     /**
+     * Where a request's tests ran: 'docker', 'vm', 'direct', 'mixed', or null when no test ran
+     * (build-only or cancelled requests).
+     *
+     * results.json does not record the tester's execution mode, but every executor names its
+     * attempt logs with its own prefix (exec/*Executor.java in the tester), so the mode is read
+     * from those names; this also covers reports written before VM mode existed.
+     * @param {Object} resultsData - parsed results.json
+     * @param {Object} requestData - parsed request.json
+     * @returns {string|null}
+     */
+    detectExecutionMode(resultsData, requestData) {
+        const explicit = (resultsData && resultsData.executionMode) || (requestData && requestData.executionMode);
+        if (explicit) return String(explicit).toLowerCase();
+
+        const prefixModes = [
+            ['vm_', 'vm'],
+            ['docker_opt_', 'docker'],
+            ['docker_', 'docker'],
+            ['sql_', 'docker'],
+            ['direct_', 'direct']
+        ];
+        const modes = new Set();
+        const results = resultsData && Array.isArray(resultsData.results) ? resultsData.results : [];
+        for (const r of results) {
+            const metadata = r && Array.isArray(r.attemptLogMetadata) ? r.attemptLogMetadata : [];
+            for (const m of metadata) {
+                if (!m || m.artifactType || typeof m.logFileName !== 'string') continue;
+                const hit = prefixModes.find(([prefix]) => m.logFileName.startsWith(prefix));
+                if (hit) modes.add(hit[1]);
+            }
+        }
+        if (modes.size === 0) return null;
+        return modes.size === 1 ? [...modes][0] : 'mixed';
+    }
+
+    /**
      * Get enriched report row data for a single report
      * @param {string} id - Request ID
      * @param {boolean} enrichData - Whether to enrich with results.json data
@@ -243,6 +279,8 @@ class FileService {
                     const uniqueCommits = [...new Set(resultsData.results.map(r => r.commit).filter(Boolean))];
                     row.commits = uniqueCommits;
                 }
+
+                row.executionMode = this.detectExecutionMode(resultsData, requestData);
 
                 row.commitCount = Array.isArray(row.commits) ? row.commits.length : 0;
 
