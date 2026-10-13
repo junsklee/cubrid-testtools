@@ -15,6 +15,7 @@ import com.navercorp.cubridqa.builder.logs.LogLocator;
 import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
+import com.navercorp.cubridqa.builder.exec.VmShellExecutor;
 import com.navercorp.cubridqa.builder.exec.SqlDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.SqlAgentPool;
 import com.navercorp.cubridqa.builder.exec.CubridInstaller;
@@ -192,6 +193,11 @@ public class Tester {
             nodeCapacity,
             actualSampler
         );
+        if (config.isVmMode()) {
+            testOrchestrator.setVmShellExecutor(new VmShellExecutor(config, buildCache, shellTcSync));
+            logger.info("Execution mode: vm (one shell case at a time, CUBRID=" + config.getVmCubridHome()
+                + ", case timeout " + config.getVmCaseTimeoutSeconds() + "s)");
+        }
 
         // Create HTTP handlers
         this.testHandler = new TestHandler(config, testOrchestrator, logger);

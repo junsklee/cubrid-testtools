@@ -4,6 +4,7 @@ import com.navercorp.cubridqa.builder.exec.DirectExecutor;
 import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.SqlDockerExecutor;
+import com.navercorp.cubridqa.builder.exec.VmShellExecutor;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservation;
@@ -35,6 +36,7 @@ public class TestOrchestrator {
     private final StandardDockerExecutor standardDockerExecutor;
     private final OptimizedDockerExecutor optimizedDockerExecutor;
     private final SqlDockerExecutor sqlDockerExecutor;
+    private volatile VmShellExecutor vmShellExecutor;
     private final boolean useDocker;
     private final Object dockerManager; // DockerManager - using Object to avoid compile dependency
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
@@ -82,6 +84,11 @@ public class TestOrchestrator {
         this.maxConcurrencyPostHeavy = Math.max(this.maxConcurrencyHeavy, config.getMaxConcurrentTestsAfterHeavy());
         this.nodeCapacity = nodeCapacity;
         this.actualSampler = actualSampler;
+    }
+
+    /** Executor for execution_mode=vm (shell cases on a dedicated QA VM). */
+    public void setVmShellExecutor(VmShellExecutor vmShellExecutor) {
+        this.vmShellExecutor = vmShellExecutor;
     }
 
     /**
@@ -441,6 +448,14 @@ public class TestOrchestrator {
                 TestResult result = sqlDockerExecutor.execute(testRequest, workDir, testLogger);
                 return new RunOutcome(testRequest, result, convertToJSONObject(result));
             }
+            if (config.isVmMode()) {
+                if (vmShellExecutor == null) {
+                    throw new IllegalStateException("execution_mode=vm but no VM executor is configured");
+                }
+                testLogger.info("Using VM execution (CTP per-case steps, one case at a time)");
+                TestResult result = vmShellExecutor.execute(testRequest, workDir, testLogger);
+                return new RunOutcome(testRequest, result, convertToJSONObject(result));
+            }
             // Check if we should use Docker for test execution
             if (useDocker && dockerManager != null && isDockerAvailable()) {
                 TestResult result = executeDockerTest(testRequest, workDir, testLogger);
@@ -732,6 +747,10 @@ public class TestOrchestrator {
      * Uses "Elastic Overcommit" logic with a "Circuit Breaker" based on real-time load.
      */
     private boolean hasLocalHeadroom(PredictedDemand pd) {
+        if (config.isVmMode()) {
+            // One case at a time on a dedicated VM: the single concurrency slot is the only gate.
+            return true;
+        }
         // 1. Circuit Breaker: Check Real-Time System Load
         // If the system is actually sweating (regardless of what our bookkeeping says), stop admitting.
         // IMPORTANT: Use EFFECTIVE capacity (with overcommit) for circuit breaker thresholds

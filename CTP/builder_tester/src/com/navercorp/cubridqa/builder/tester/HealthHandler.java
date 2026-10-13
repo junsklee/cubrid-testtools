@@ -62,6 +62,7 @@ public class HealthHandler implements HttpHandler {
         // Basic info
         response.put("v", 1);
         response.put("nodeId", getNodeId());
+        response.put("executionMode", config.getExecutionMode());
         response.put("ts", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
         response.put("status", "healthy");
 

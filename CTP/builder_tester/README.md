@@ -9,6 +9,7 @@ This README is a high-level overview. Detailed docs are in the docs/ directory:
 - docs/usage/README.md – Setup and usage, CLI and APIs
 - docs/configuration/README.md – All configuration options and defaults
 - docs/DOCKER_OPTIMIZATION.md – Docker performance optimization (80-90% faster)
+- docs/VM_MODE.md – Running shell cases on QA VMs exactly as regression does (`execution_mode=vm`)
 - log/LOG_MANAGEMENT.md – Request-based logging design and operations
 
 ## Isolated per-commit builds

@@ -597,6 +597,11 @@ public class BuilderConfig {
     }
 
     public int getMaxConcurrentTestsWhileHeavy() {
+        if (isVmMode()) {
+            // A VM runs one case at a time, as in regression: cases share ~/CUBRID and kill
+            // the user's CUBRID processes between runs.
+            return 1;
+        }
         String raw = properties.getProperty(MAX_CONCURRENT_TESTS_HEAVY_QUEUE);
         if (raw != null && !raw.trim().isEmpty()) {
             try {
@@ -610,6 +615,9 @@ public class BuilderConfig {
     }
 
     public int getMaxConcurrentTestsAfterHeavy() {
+        if (isVmMode()) {
+            return 1;
+        }
         String raw = properties.getProperty(MAX_CONCURRENT_TESTS_POST_HEAVY);
         if (raw != null && !raw.trim().isEmpty()) {
             try {
@@ -774,7 +782,80 @@ public class BuilderConfig {
     }
     
     public boolean useDockerForTester() {
-        return Boolean.parseBoolean(properties.getProperty("use_docker_tester", "true"));
+        if (isVmMode()) {
+            return false;
+        }
+        return Boolean.parseBoolean(properties.getProperty("use_docker_tester", "true").trim());
+    }
+
+    /**
+     * Tester execution mode: "docker" (containers), "direct" (legacy host run) or "vm".
+     * "vm" runs shell cases one at a time on a dedicated QA VM as the VM's own user,
+     * replicating CTP's per-case steps (see exec/VmShellExecutor). Defaults to
+     * "docker" or "direct" according to use_docker_tester.
+     */
+    public String getExecutionMode() {
+        String raw = properties.getProperty("execution_mode");
+        if (raw != null && !raw.trim().isEmpty()) {
+            return raw.trim().toLowerCase(Locale.ENGLISH);
+        }
+        return Boolean.parseBoolean(properties.getProperty("use_docker_tester", "true").trim()) ? "docker" : "direct";
+    }
+
+    public boolean isVmMode() {
+        return "vm".equals(getExecutionMode());
+    }
+
+    /** VM mode: CUBRID installation the cases run against (CTP's $CUBRID). */
+    public String getVmCubridHome() {
+        return vmProperty("vm_cubrid_home", System.getProperty("user.home") + "/CUBRID");
+    }
+
+    /** VM mode: CTP checkout whose shell/init_path the cases source (empty = auto-detect). */
+    public String getVmCtpHome() {
+        return vmProperty("vm_ctp_home", "");
+    }
+
+    /** VM mode: per-case timeout, same meaning as CTP's testcase_timeout_in_secs. */
+    public int getVmCaseTimeoutSeconds() {
+        try {
+            return Math.max(60, Integer.parseInt(vmProperty("vm_testcase_timeout_in_secs", "7200")));
+        } catch (NumberFormatException e) {
+            return 7200;
+        }
+    }
+
+    /** VM mode: value exported as TEST_SSH_PORT (CTP's default.ssh.port). */
+    public String getVmSshPort() {
+        return vmProperty("vm_ssh_port", "22");
+    }
+
+    /** VM mode: TEST_BIG_SPACE directory (CTP's big_space_dir); empty = not set. */
+    public String getVmBigSpaceDir() {
+        return vmProperty("vm_big_space_dir", "");
+    }
+
+    /** VM mode: CUBRID_CHARSET exported for each case (CTP's default dbcharset); empty = inherit. */
+    public String getVmDefaultDbcharset() {
+        return vmProperty("vm_default_dbcharset", "");
+    }
+
+    /** VM mode: CTP's ignore_core_by_keywords (EXCLUDED_CORES_BY_ASSERT_LINE). */
+    public String getVmIgnoreCoreByKeywords() {
+        return vmProperty("vm_ignore_core_by_keywords", "");
+    }
+
+    /** VM mode: when to archive the case directory after a run: fail (default), always or never. */
+    public String getVmKeepArtifacts() {
+        return vmProperty("vm_keep_artifacts", "fail").toLowerCase(Locale.ENGLISH);
+    }
+
+    private String vmProperty(String key, String defaultValue) {
+        String raw = properties.getProperty(key);
+        if (raw == null || raw.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return raw.trim();
     }
     
     public String getDockerBuildImage() {
