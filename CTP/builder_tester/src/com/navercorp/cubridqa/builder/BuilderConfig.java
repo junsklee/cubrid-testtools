@@ -216,13 +216,18 @@ public class BuilderConfig {
     /**
      * java.util.Properties keeps everything after '=' as the value, so `key=true   ` reads as
      * "true   " (Boolean.parseBoolean -> false) and `key=300   # note` keeps the note.
-     * Treat whitespace followed by '#' as the start of a comment and trim the rest.
+     * Treat whitespace, '#', then whitespace or the end of the line as the start of a comment and
+     * trim the rest. A '#' directly followed by text (e.g. "-DFOO=a #b", a URL fragment) is kept,
+     * and every stripped comment is logged so a truncated value is visible.
      */
     private void stripTrailingCommentsAndSpace() {
         for (String key : properties.stringPropertyNames()) {
             String value = properties.getProperty(key);
-            String cleaned = value.replaceFirst("\\s+#.*$", "").trim();
+            String cleaned = value.replaceFirst("\\s+#(\\s.*)?$", "").trim();
             if (!cleaned.equals(value)) {
+                if (!cleaned.equals(value.trim())) {
+                    System.err.println("[config] " + key + ": ignoring inline comment; value is '" + cleaned + "'");
+                }
                 properties.setProperty(key, cleaned);
             }
         }
