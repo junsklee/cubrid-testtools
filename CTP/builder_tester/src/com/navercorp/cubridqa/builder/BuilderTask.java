@@ -1236,7 +1236,7 @@ public class BuilderTask {
             int status = conn.getResponseCode();
             if (status >= 200 && status < 300) {
                 StringBuilder response = new StringBuilder();
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = br.readLine()) != null) {
                         response.append(line);
@@ -2163,7 +2163,7 @@ public class BuilderTask {
             taskLogger.info("Sending test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length())) + ") to tester " + host + ":" + port);
             
             try (OutputStream os = conn.getOutputStream()) {
-                os.write(testRequest.toString().getBytes());
+                os.write(testRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
             
             // Read response - check if it's multipart or JSON
@@ -2225,7 +2225,7 @@ public class BuilderTask {
                 StringBuilder response = new StringBuilder();
                 InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream();
                 if (is != null) {
-                    try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
+                    try (BufferedReader br = new BufferedReader(new InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
                         String line;
                         while ((line = br.readLine()) != null) {
                             response.append(line);
@@ -2691,7 +2691,7 @@ public class BuilderTask {
                 JSONObject requestBody = new JSONObject()
                     .put("requestId", requestId);
                 
-                try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream())) {
+                try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream(), java.nio.charset.StandardCharsets.UTF_8)) {
                     writer.write(requestBody.toString());
                 }
                 
@@ -2746,7 +2746,7 @@ public class BuilderTask {
                     .put("requestId", requestId)
                     .put("killAll", killAll);
 
-                try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream())) {
+                try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream(), java.nio.charset.StandardCharsets.UTF_8)) {
                     writer.write(requestBody.toString());
                 }
 
