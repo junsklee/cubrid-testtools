@@ -5,6 +5,19 @@
 const https = require('https');
 const config = require('../config');
 
+/**
+ * A commit SHA or a simple ref, safe to place in one URL path segment. Anything else could
+ * reach other api.github.com paths with the server's token (new URL() resolves "..").
+ */
+function assertSafeCommitRef(sha) {
+    if (typeof sha !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(sha) || sha.includes('..')) {
+        const err = new Error('Invalid commit SHA');
+        err.status = 400;
+        throw err;
+    }
+    return encodeURIComponent(sha);
+}
+
 class GitHubService {
     constructor() {
         this.apiUrl = config.github.apiUrl;
@@ -19,6 +32,11 @@ class GitHubService {
     async request(path, options = {}) {
         return new Promise((resolve, reject) => {
             const url = new URL(this.apiUrl + path);
+            const repoPrefix = `/repos/${this.owner}/${this.repo}/`;
+            if (url.origin !== new URL(this.apiUrl).origin || !url.pathname.startsWith(repoPrefix)) {
+                reject(new Error('Refusing GitHub request outside ' + repoPrefix));
+                return;
+            }
             
             const headers = {
                 'User-Agent': 'CUBRID-Builder-Tester',
@@ -83,7 +101,7 @@ class GitHubService {
      */
     async validateCommit(sha) {
         try {
-            const path = `/repos/${this.owner}/${this.repo}/commits/${sha}`;
+            const path = `/repos/${this.owner}/${this.repo}/commits/${assertSafeCommitRef(sha)}`;
             const result = await this.request(path);
             return {
                 sha,
@@ -103,10 +121,11 @@ class GitHubService {
      * Get commit details
      */
     async getCommitDetails(sha) {
-        const path = `/repos/${this.owner}/${this.repo}/commits/${sha}`;
+        const path = `/repos/${this.owner}/${this.repo}/commits/${assertSafeCommitRef(sha)}`;
         const result = await this.request(path);
         return result.json;
     }
 }
 
 module.exports = new GitHubService();
+module.exports.assertSafeCommitRef = assertSafeCommitRef;

@@ -76,7 +76,7 @@ class GitHubController {
             res.json(commit);
         } catch (err) {
             console.error('Error fetching commit details:', err);
-            res.status(500).json({ error: err.message });
+            res.status(err.status || 500).json({ error: err.message });
         }
     }
 }

@@ -15,6 +15,9 @@ class ReportController {
         try {
             // Prefer taskId (legacy behavior) then requestId; else generate
             const requestId = req.body.taskId || req.body.requestId || `req_${Date.now()}`;
+            if (!fileService.isValidRequestId(requestId)) {
+                return res.status(400).json({ error: 'Invalid requestId' });
+            }
 
             // Normalize payload so embedded report data matches the directory name
             const normalizedData = Object.assign({}, req.body, {
@@ -106,7 +109,7 @@ class ReportController {
                 return res.status(400).json({ error: 'Request ID and filename are required' });
             }
             
-            const logPath = path.join(config.paths.requests, req_id, 'tests', filename);
+            const logPath = fileService.requestPath(req_id, 'tests', filename);
             const logContent = await fileService.readFile(logPath);
             
             res.type('text/plain').send(logContent);
@@ -122,7 +125,7 @@ class ReportController {
     async listTestLogs(req, res) {
         try {
             const { req_id } = req.params;
-            const logsPath = path.join(config.paths.requests, req_id, 'tests');
+            const logsPath = fileService.requestPath(req_id, 'tests');
             
             if (!await fileService.fileExists(logsPath)) {
                 return res.status(404).json([]);
@@ -145,7 +148,7 @@ class ReportController {
     async listBuildLogs(req, res) {
         try {
             const { req_id } = req.params;
-            const logsPath = path.join(config.paths.requests, req_id, 'builds');
+            const logsPath = fileService.requestPath(req_id, 'builds');
             
             if (!await fileService.fileExists(logsPath)) {
                 return res.status(404).json([]);
@@ -173,7 +176,7 @@ class ReportController {
                 return res.status(400).json({ error: 'Request ID and filename are required' });
             }
             
-            const logPath = path.join(config.paths.requests, req_id, filename);
+            const logPath = fileService.requestPath(req_id, filename);
             const logContent = await fileService.readFile(logPath);
             
             res.type('text/plain').send(logContent);
@@ -194,7 +197,7 @@ class ReportController {
                 return res.status(400).json({ error: 'Request ID and filename are required' });
             }
             
-            const logPath = path.join(config.paths.requests, req_id, 'builds', filename);
+            const logPath = fileService.requestPath(req_id, 'builds', filename);
             const logContent = await fileService.readFile(logPath);
             
             res.type('text/plain').send(logContent);
@@ -219,11 +222,11 @@ class ReportController {
             }
 
             // Security: validate taskId format to prevent directory traversal
-            if (!/^[A-Za-z0-9_-]+$/.test(taskId)) {
+            if (!fileService.isValidRequestId(taskId)) {
                 return res.status(400).json({ status: 'invalid', message: 'Invalid taskId format' });
             }
 
-            const logPath = path.join(config.paths.requests, taskId, 'builder.log');
+            const logPath = fileService.requestPath(taskId, 'builder.log');
 
             if (!await fileService.fileExists(logPath)) {
                 return res.json({ status: 'not_found', taskId, message: 'builder.log not found yet' });

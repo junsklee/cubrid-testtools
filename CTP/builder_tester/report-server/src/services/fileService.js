@@ -112,10 +112,53 @@ class FileService {
     }
 
     /**
+     * Request IDs come from unauthenticated callbacks and URLs and become directory names.
+     * Same rule as the Java RequestIds class: one path segment, no "..", not hidden.
+     */
+    isValidRequestId(id) {
+        return typeof id === 'string'
+            && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(id)
+            && !id.includes('..');
+    }
+
+    /** A single file name inside a request directory (no separators, not hidden). */
+    isPlainFileName(name) {
+        return typeof name === 'string' && name.length > 0 && name.length <= 255
+            && !name.startsWith('.') && !/[\\/\0]/.test(name);
+    }
+
+    /**
+     * Resolve a path inside log/requests/<id>/. Throws if the ID or any segment is unsafe.
+     * Every route that turns a request ID or file name into a path must go through here.
+     */
+    requestPath(requestId, ...segments) {
+        if (!this.isValidRequestId(requestId)) {
+            const err = new Error('Invalid request ID');
+            err.status = 400;
+            throw err;
+        }
+        for (const segment of segments) {
+            if (!this.isPlainFileName(segment)) {
+                const err = new Error('Invalid file name');
+                err.status = 400;
+                throw err;
+            }
+        }
+        const root = path.resolve(config.paths.requests);
+        const target = path.resolve(root, requestId, ...segments);
+        if (!target.startsWith(root + path.sep)) {
+            const err = new Error('Invalid request path');
+            err.status = 400;
+            throw err;
+        }
+        return target;
+    }
+
+    /**
      * Save test results
      */
     async saveTestResults(requestId, data) {
-        const requestDir = path.join(config.paths.requests, requestId);
+        const requestDir = this.requestPath(requestId);
         await fs.mkdir(requestDir, { recursive: true });
         
         const resultsPath = path.join(requestDir, 'results.json');
@@ -128,7 +171,7 @@ class FileService {
      * Save report HTML
      */
     async saveReport(requestId, html) {
-        const requestDir = path.join(config.paths.requests, requestId);
+        const requestDir = this.requestPath(requestId);
         await fs.mkdir(requestDir, { recursive: true });
         
         const reportPath = path.join(requestDir, 'report.html');
@@ -141,14 +184,14 @@ class FileService {
      * Get report path
      */
     getReportPath(requestId) {
-        return path.join(config.paths.requests, requestId, 'report.html');
+        return this.requestPath(requestId, 'report.html');
     }
 
     /**
      * Get results path
      */
     getResultsPath(requestId) {
-        return path.join(config.paths.requests, requestId, 'results.json');
+        return this.requestPath(requestId, 'results.json');
     }
 
     /**
@@ -447,8 +490,7 @@ class FileService {
                 throw new Error('Invalid request ID');
             }
 
-            // Only allow alphanumeric, underscore, and hyphen
-            if (!/^req_[A-Za-z0-9_\-]+$/.test(id)) {
+            if (!this.isValidRequestId(id)) {
                 throw new Error('Invalid request ID format');
             }
 

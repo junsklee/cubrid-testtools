@@ -72,7 +72,7 @@ class ReportService {
             // Try to read existing request.json for configuration data
             let combinedData = data;
             try {
-                const requestPath = path.join(config.paths.requests, requestId, 'request.json');
+                const requestPath = fileService.requestPath(requestId, 'request.json');
                 const requestConfig = JSON.parse(await fileService.readFile(requestPath));
                 
                 // Combine results data with request configuration

@@ -58,12 +58,15 @@ app.use('/api/', (req, res, next) => {
     return defaultLimiter(req, res, next);
 });
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// CORS middleware
+// CORS and cross-site write protection (before body parsing, so refused writes are not parsed)
 app.use(corsMiddleware);
+
+// Body parsing middleware. JSON only: no page posts forms, and accepting form encoding
+// would let any web page submit to the unauthenticated APIs without a CORS preflight.
+// Builder callbacks carry every result of a run (with per-attempt metadata) and can exceed
+// the default limit on large runs; a 413 there loses the whole run's results.
+app.use('/callback', express.json({ limit: '200mb' }));
+app.use(express.json({ limit: '10mb' }));
 
 // Static files
 app.use(express.static(path.join(__dirname, '..', 'public')));
