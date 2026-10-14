@@ -691,7 +691,9 @@ public class DockerBuildManager {
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
             writer.println("bt_clean_submodules");
-            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
+            // One marker per build directory: release and debug directories both survive a reused
+            // workspace, and a shared marker let one type's build vouch for the other's stale inputs.
+            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs." + config.getBuildDir(buildType) + "\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
             writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
@@ -1062,7 +1064,9 @@ public class DockerBuildManager {
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
             writer.println("bt_clean_submodules");
-            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
+            // One marker per build directory: release and debug directories both survive a reused
+            // workspace, and a shared marker let one type's build vouch for the other's stale inputs.
+            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs." + config.getBuildDir(buildType) + "\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
             writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
@@ -1281,7 +1285,9 @@ public class DockerBuildManager {
             writer.println("git clean -xdf -e \"build_x86_64_*\"");
             writer.println("[ \"${BT_WORKSPACE_REUSED:-0}\" = \"1\" ] || rm -rf build_x86_64_*");
             writer.println("bt_clean_submodules");
-            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs\"");
+            // One marker per build directory: release and debug directories both survive a reused
+            // workspace, and a shared marker let one type's build vouch for the other's stale inputs.
+            writer.println("bt_guard_build_inputs " + config.getBuildDir(buildType) + " \"$target/.bt_inputs." + config.getBuildDir(buildType) + "\"");
             writer.println("bt_reset_install " + config.getBuildDir(buildType));
             writer.println("mkdir -p " + config.getBuildDir(buildType));
             writer.println("bt_seed_jdk " + config.getBuildDir(buildType));
