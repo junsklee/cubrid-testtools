@@ -10,7 +10,6 @@ import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
-import com.navercorp.cubridqa.builder.docker.SecureDockerEnv;
 import com.navercorp.cubridqa.builder.tester.CancelledRequests;
 
 import java.io.IOException;
@@ -236,23 +235,9 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             }
         } catch (Exception ignore) {}
         
-        // Check for GitHub token
-        String githubToken = System.getenv("GITHUB_TOKEN");
-        if (githubToken == null || githubToken.trim().isEmpty()) {
-            testLogger.severe("GITHUB_TOKEN not set");
-            return finalizeResult(
-                TestResult.builder()
-                    .testName(request.getTestName())
-                    .status(TestStatus.ENVIRONMENT_ERROR)
-                    .message("GITHUB_TOKEN environment variable not configured"),
-                metricsBuilder, startNs, dockerImage, dockerImageCached, null);
-        }
-
-        // Create secure environment file for sensitive variables (GITHUB_TOKEN)
-        // This prevents the token from appearing in ps -ef output
-        try (SecureDockerEnv secureEnv = new SecureDockerEnv(dockerWorkDir)) {
-            secureEnv.add("GITHUB_TOKEN", githubToken);
-            String envFilePath = secureEnv.getFilePath();
+        // Test containers get no credentials: nothing in a case needs GitHub, and cases and
+        // custom scripts are arbitrary code whose output is uploaded to the report server.
+        {
 
             // Run Docker container with optimized flags
             List<String> dockerCommand = new ArrayList<>();
@@ -404,9 +389,6 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         dockerCommand.add("-e");
         dockerCommand.add("HOST_GID=" + getHostGid());
 
-        // Add secure environment file containing GITHUB_TOKEN
-        dockerCommand.add("--env-file");
-        dockerCommand.add(envFilePath);
 
         // Working directory
         dockerCommand.add("-w");
@@ -606,7 +588,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         }
 
         return finalizeResult(resultBuilder, metricsBuilder, startNs, dockerImage, dockerImageCached, statsSummary);
-        } // SecureDockerEnv auto-closes here, removing the env file
+        }
     }
     
     private String computeRelativeTestDir(Path repoRoot, Path testDir, Logger logger) {
