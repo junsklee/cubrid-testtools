@@ -261,7 +261,11 @@ public class Builder {
                 String requestId = RequestContext.generateRequestId();
                 
                 // Perform cleanup of old logs and tar files
-                logRotationManager.performCleanup(config.getWorkDir());
+                Set<String> packagesInUse = new HashSet<>();
+                for (BuilderTask running : activeTasks.values()) {
+                    packagesInUse.addAll(running.getPackagesInUse());
+                }
+                logRotationManager.performCleanup(config.getWorkDir(), packagesInUse);
                 
                 // Clean up stale containers from previous runs before starting new task
                 try {

@@ -89,6 +89,8 @@ public class BuilderTask {
 
     // Shell case file names that repeat across directories in this request (see buildShellTestName)
     private volatile Set<String> duplicateShellBasenames = Collections.emptySet();
+    // Packages this request tests with; build-directory rotation keeps them while it runs
+    private final Set<String> packagesInUse = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
     private final AtomicBoolean deleteLogsOnCancel = new AtomicBoolean(false);
     private final Set<HttpURLConnection> inflightConnections = ConcurrentHashMap.newKeySet();
@@ -352,6 +354,7 @@ public class BuilderTask {
                 taskLogger.info(String.format("Tester %s reports max_concurrent_tests=%d (peak=%d)", worker, caps.heavyCap, caps.peakCap));
             }
             // Calculate total number of test executions
+            packagesInUse.addAll(builtPackages.values());
             int totalTestExecutions = builtPackages.size() * tests.length();
             taskLogger.info(String.format("Distributing %d test executions (%d commits × %d tests) across %d workers",
                 totalTestExecutions, builtPackages.size(), tests.length(), workerIps.size()));
@@ -3044,6 +3047,10 @@ public class BuilderTask {
         }
     }
     
+    public Set<String> getPackagesInUse() {
+        return Collections.unmodifiableSet(packagesInUse);
+    }
+
     public JSONObject getProgress() {
         JSONObject progressJson = new JSONObject();
         for (Map.Entry<String, Integer> entry : progress.entrySet()) {

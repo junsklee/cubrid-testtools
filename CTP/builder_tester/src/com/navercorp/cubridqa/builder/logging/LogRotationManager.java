@@ -32,9 +32,17 @@ public class LogRotationManager {
      * Perform cleanup of old request logs and tar files
      */
     public void performCleanup(String workDir) {
+        performCleanup(workDir, java.util.Collections.emptySet());
+    }
+
+    /**
+     * @param packagesInUse build packages of running requests; their build directories are kept
+     */
+    public void performCleanup(String workDir, java.util.Set<String> packagesInUse) {
         try {
             cleanupRequestLogs();
             cleanupTarFiles(workDir);
+            cleanupBuildDirectories(workDir, packagesInUse);
             updateMetadata();
         } catch (Exception e) {
             logger.warning("Error during cleanup: " + e.getMessage());
@@ -135,6 +143,52 @@ public class LogRotationManager {
         }
     }
     
+    // A build directory this recent may belong to a build that is still running
+    private static final long BUILD_DIR_MIN_AGE_MS = 6L * 60 * 60 * 1000;
+
+    /**
+     * Keeps the newest max_tar_files build directories (build_*&#47;cubrid_*.tar.gz, where the Builder
+     * stores packages). cleanupTarFiles only looks at tar files directly in work_dir, where none
+     * are, so packages were never rotated (285 build directories, 72GB). Directories holding a
+     * package of a running request, or modified in the last 6 hours, are kept.
+     */
+    private void cleanupBuildDirectories(String workDir, java.util.Set<String> packagesInUse) {
+        if (workDir == null || workDir.isEmpty()) {
+            return;
+        }
+        File[] buildDirs = new File(workDir).listFiles(f -> f.isDirectory() && f.getName().startsWith("build_")
+            && hasPackage(f));
+        if (buildDirs == null || buildDirs.length <= config.getMaxTarFiles()) {
+            return;
+        }
+        java.util.Set<String> inUseDirs = new java.util.HashSet<>();
+        for (String pkg : packagesInUse) {
+            File parent = new File(pkg).getAbsoluteFile().getParentFile();
+            if (parent != null) {
+                inUseDirs.add(parent.getAbsolutePath());
+            }
+        }
+        Arrays.sort(buildDirs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        long now = System.currentTimeMillis();
+        for (int i = config.getMaxTarFiles(); i < buildDirs.length; i++) {
+            File dir = buildDirs[i];
+            if (inUseDirs.contains(dir.getAbsolutePath()) || now - dir.lastModified() < BUILD_DIR_MIN_AGE_MS) {
+                continue;
+            }
+            try {
+                deleteDirectory(dir);
+                logger.info("Deleted old build directory: " + dir.getName());
+            } catch (Exception e) {
+                logger.warning("Failed to delete build directory " + dir.getName() + ": " + e.getMessage());
+            }
+        }
+    }
+
+    private static boolean hasPackage(File dir) {
+        String[] packages = dir.list((d, name) -> name.startsWith("cubrid_") && name.endsWith(".tar.gz"));
+        return packages != null && packages.length > 0;
+    }
+
     /**
      * Update metadata file with current request information
      */
