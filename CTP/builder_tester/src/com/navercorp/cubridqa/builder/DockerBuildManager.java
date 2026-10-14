@@ -83,8 +83,11 @@ public class DockerBuildManager {
      *        shared instance, so concurrent builds cannot affect each other.
      * @param cubridBranch the branch being built, which forms part of the workspace's
      *        identity so a workspace is never inherited across branches.
+     *
+     * Builds are serialized: /build and /build-single (and the direct fallback's /cubrid-src
+     * worktrees) share one build workspace, /work/cubrid-build, and its reuse markers.
      */
-    public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode,
+    public synchronized String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode,
                               boolean reuseWorkspace, String cubridBranch) 
             throws IOException, InterruptedException {
         
@@ -404,8 +407,8 @@ public class DockerBuildManager {
                                 config.isBuildWorkspaceReuseEnabled(), null);
     }
 
-    /** @param reuseWorkspace see {@link #buildCubrid}. */
-    public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit,
+    /** @param reuseWorkspace see {@link #buildCubrid}. Serialized with buildCubrid (shared workspace). */
+    public synchronized String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit,
                                    boolean reuseWorkspace, String cubridBranch)
             throws IOException, InterruptedException {
         if (!dockerAvailable || !imageReady) {

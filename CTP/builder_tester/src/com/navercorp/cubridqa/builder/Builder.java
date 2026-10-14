@@ -89,7 +89,14 @@ public class Builder {
             logger.warning("Failed to initialize report handler: " + e.getMessage());
         }
         
-        this.server.setExecutor(null); // creates a default executor
+        // A pool, not the JDK default (null), which runs every handler on the single dispatcher
+        // thread: a /build-single build or a package download to a remote tester would otherwise
+        // stall /status, /queue/remove (cancel), /callback and every other request.
+        this.server.setExecutor(Executors.newFixedThreadPool(32, r -> {
+            Thread t = new Thread(r, "builder-http");
+            t.setDaemon(true);
+            return t;
+        }));
     }
 
     private static boolean isAllowedShellTestPath(String t) {
@@ -349,8 +356,10 @@ public class Builder {
                 
                 // Capacity check + queue/task admission must be atomic to prevent over-admission
                 synchronized (taskDispatchLock) {
-                    // Check if at capacity - queue the request
-                    if (activeTasks.size() >= MAX_CONCURRENT_REQUESTS) {
+                    // Queue the request if at capacity, or if others are already waiting: requests
+                    // start in arrival order (a slot freed by a finishing task belongs to the
+                    // head of the queue, which processNextQueuedRequest starts).
+                    if (activeTasks.size() >= MAX_CONCURRENT_REQUESTS || !pendingRequests.isEmpty()) {
                         QueuedBuildRequest queuedRequest = new QueuedBuildRequest(taskId, request);
                         pendingRequests.offer(queuedRequest);
 
@@ -366,6 +375,8 @@ public class Builder {
                             .put("queuePosition", queuePosition)
                             .put("message", "Build request queued - will start when capacity available");
 
+                        // Start the queue head if a slot is free (a task just finished)
+                        processNextQueuedRequest();
                         sendJsonResponse(exchange, 202, response);
                         return;
                     }
