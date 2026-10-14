@@ -1,5 +1,5 @@
 - **Remote Testers**: Build packages are served via HTTP from the Builder node
-  - Builder exposes packages at: `http://<builder-ip>:<port>/download/build/<filename>`
+  - Builder exposes packages at: `http://<builder-ip>:<port>/download/build/<build dir>/<filename>` (the build directory tells release, debug and other-baseline builds of one commit apart; the legacy `/download/build/<filename>` still works but picks an arbitrary build of that commit)
   - Testers automatically download packages when needed
   - Downloaded packages are cached to avoid re-downloading
 

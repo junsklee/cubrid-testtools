@@ -45,6 +45,57 @@ public class DockerImageBuilder {
     }
     
     /**
+     * The image variant for a test request: baseline, build type and the Builder build directory
+     * the package came from (build_&lt;commit&gt;_&lt;id&gt;, the same for a local path and a download URL).
+     * The commit alone does not identify a binary: release and debug builds of one commit, or one
+     * commit cherry-picked onto different baselines, must not share an image.
+     */
+    public static String imageVariant(String baselineShort, String buildType, String buildPackageRef) {
+        String type = buildType == null || buildType.trim().isEmpty() ? "release" : buildType.trim();
+        StringBuilder variant = new StringBuilder();
+        variant.append(baselineShort == null || baselineShort.isEmpty() ? "unknown" : baselineShort)
+               .append('_').append(type);
+        String buildDir = buildDirectoryOf(buildPackageRef);
+        if (buildDir != null) {
+            variant.append('_').append(shortHash(buildDir));
+        }
+        return variant.toString().replaceAll("[^A-Za-z0-9_.-]", "_");
+    }
+
+    /** Name of the build_* directory in a package path or URL, or null. */
+    public static String buildDirectoryOf(String buildPackageRef) {
+        if (buildPackageRef == null) {
+            return null;
+        }
+        String path = buildPackageRef.replace('\\', '/');
+        int q = path.indexOf('?');
+        if (q >= 0) {
+            path = path.substring(0, q);
+        }
+        String[] parts = path.split("/");
+        for (int i = parts.length - 2; i >= 0; i--) {
+            if (parts[i].startsWith("build_")) {
+                return parts[i];
+            }
+        }
+        return null;
+    }
+
+    private static String shortHash(String value) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-1")
+                .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < 4; i++) {
+                hex.append(String.format("%02x", digest[i]));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return Integer.toHexString(value.hashCode());
+        }
+    }
+
+    /**
      * Get or build a Docker image for the given commit built on the given baseline.
      * This method first extracts the build package, then builds a Docker image.
      * The image name includes both commit and baseline to prevent incorrect reuse.

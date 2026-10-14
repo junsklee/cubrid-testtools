@@ -1961,8 +1961,10 @@ public class BuilderTask {
                 // Remote tester - provide HTTP URL for download (tester will skip if Docker image is cached)
                 File packageFile = new File(buildPackage);
                 String builderHost = InetAddress.getLocalHost().getHostAddress();
-                buildPackageRef = String.format("http://%s:%d/download/build/%s",
-                    builderHost, config.getListenPort(), packageFile.getName());
+                // Name the build directory: the file name (cubrid_<sha7>.tar.gz) is the same for
+                // every build of a commit, e.g. release and debug.
+                buildPackageRef = String.format("http://%s:%d/download/build/%s/%s",
+                    builderHost, config.getListenPort(), packageFile.getParentFile().getName(), packageFile.getName());
                 taskLogger.info("Sending package URL to remote tester " + workerIp + ": " + buildPackageRef);
             }
             

@@ -650,14 +650,27 @@ public class Builder {
                     return;
                 }
 
-                String filename = path.substring(prefix.length());
-                if (filename.isEmpty() || filename.contains("..")) {
+                // /download/build/<build dir>/<file>, or the legacy /download/build/<file>
+                String relative = path.substring(prefix.length());
+                String[] segments = relative.split("/");
+                for (String segment : segments) {
+                    if (segment.isEmpty() || segment.startsWith(".")) {
+                        sendResponse(exchange, 400, "Invalid filename");
+                        return;
+                    }
+                }
+                String filename = segments[segments.length - 1];
+                File buildFile;
+                if (segments.length == 2 && segments[0].startsWith("build_")) {
+                    buildFile = new File(new File(config.getWorkDir(), segments[0]), filename);
+                } else if (segments.length == 1) {
+                    // Legacy URL without the build directory: ambiguous when a commit was built
+                    // more than once (release/debug, other baselines).
+                    buildFile = findBuildFile(config.getWorkDir(), filename);
+                } else {
                     sendResponse(exchange, 400, "Invalid filename");
                     return;
                 }
-
-                // Look for file in work directory build subdirectories
-                File buildFile = findBuildFile(config.getWorkDir(), filename);
                 if (buildFile == null || !buildFile.exists() || !buildFile.isFile()) {
                     sendResponse(exchange, 404, "Build package not found");
                     return;

@@ -237,7 +237,7 @@ Builder output directory:
 
 Package format:
   - Contains: tar.gz of _install/CUBRID or full build directory
-  - Can be downloaded from: http://builder:8089/download/build/<filename>
+  - Can be downloaded from: http://builder:8089/download/build/<build dir>/<filename>
   - Downloaded to: ~/tmp/tester_work/cache/
 ```
 

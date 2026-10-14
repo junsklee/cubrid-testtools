@@ -32,6 +32,27 @@ public class BuildCache {
     }
     
     /**
+     * Local cache file name for a package URL. Builder URLs name the build directory
+     * (/download/build/build_&lt;commit&gt;_&lt;id&gt;/cubrid_&lt;sha7&gt;.tar.gz), and the file name alone is
+     * the same for every build of a commit (release/debug, other baselines), so the directory is
+     * part of the local name. Returns null if the URL has no file name.
+     */
+    public static String localFileName(URL url) {
+        String urlPath = url.getPath();
+        if (urlPath == null || urlPath.isEmpty() || urlPath.endsWith("/")) {
+            return null;
+        }
+        String[] parts = urlPath.split("/");
+        String file = parts[parts.length - 1];
+        String name = file;
+        if (parts.length >= 2 && parts[parts.length - 2].startsWith("build_")) {
+            name = parts[parts.length - 2] + "__" + file;
+        }
+        name = name.replaceAll("[^A-Za-z0-9_.-]", "_");
+        return name.startsWith(".") ? "_" + name : name;
+    }
+
+    /**
      * Download build package if it's a URL, otherwise return the local path.
      * Caches downloaded packages to avoid re-downloading.
      * Validates cached packages against expected commit and baseline.
@@ -53,17 +74,7 @@ public class BuildCache {
             
             // Check for existing file on disk (in case cache was cleared or service restarted)
             try {
-                URL url = new URL(buildPackage);
-                String urlPath = url.getPath();
-                String fileName = null;
-                
-                // Try to extract filename from URL
-                if (urlPath != null && !urlPath.isEmpty()) {
-                    int lastSlash = urlPath.lastIndexOf('/');
-                    if (lastSlash >= 0 && lastSlash < urlPath.length() - 1) {
-                        fileName = urlPath.substring(lastSlash + 1);
-                    }
-                }
+                String fileName = localFileName(new URL(buildPackage));
                 
                 if (fileName != null) {
                     Path potentialExistingFile = workDir.resolve(fileName);
@@ -96,15 +107,9 @@ public class BuildCache {
                 // Download the package
                 testLogger.info("Downloading build package from: " + buildPackage);
                 URL url = new URL(buildPackage);
-                String fileName = "build_" + System.currentTimeMillis() + ".tar.gz";
-                
-                // Try to extract filename from URL
-                String urlPath = url.getPath();
-                if (urlPath != null && !urlPath.isEmpty()) {
-                    int lastSlash = urlPath.lastIndexOf('/');
-                    if (lastSlash >= 0 && lastSlash < urlPath.length() - 1) {
-                        fileName = urlPath.substring(lastSlash + 1);
-                    }
+                String fileName = localFileName(url);
+                if (fileName == null) {
+                    fileName = "build_" + System.currentTimeMillis() + ".tar.gz";
                 }
                 
                 Path downloadPath = workDir.resolve(fileName);

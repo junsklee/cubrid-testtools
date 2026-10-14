@@ -75,17 +75,19 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         // This optimization avoids unnecessary package downloads when image is cached
         String commitShort = request.getCommitShort() != null ? request.getCommitShort() : "unknown";
         String baselineShort = request.getBaselineShort() != null ? request.getBaselineShort() : "unknown";
+        // Image key: commit + baseline + build type + the build the package came from
+        String imageVariant = DockerImageBuilder.imageVariant(baselineShort, request.getBuildType(), request.getBuildPackage());
         boolean imageExistsAlready = false;
 
         if (imageBuilder != null) {
             try {
                 Object hasImageResult = imageBuilder.getClass()
                     .getMethod("hasImage", String.class, String.class)
-                    .invoke(imageBuilder, commitShort, baselineShort);
+                    .invoke(imageBuilder, commitShort, imageVariant);
                 if (hasImageResult instanceof Boolean) {
                     imageExistsAlready = (Boolean) hasImageResult;
                     if (imageExistsAlready) {
-                        testLogger.info("Docker image already exists for " + commitShort + "_" + baselineShort +
+                        testLogger.info("Docker image already exists for " + commitShort + "_" + imageVariant +
                                       " - skipping package download");
                     }
                 }
@@ -135,7 +137,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 // Use reflection to call getOrBuildImage method
                 dockerImage = (String) imageBuilder.getClass()
                     .getMethod("getOrBuildImage", String.class, String.class, Path.class)
-                    .invoke(imageBuilder, commitShort, baselineShort, localBuildPackage);
+                    .invoke(imageBuilder, commitShort, imageVariant, localBuildPackage);
                 testLogger.info("Using Docker image: " + dockerImage);
                 try {
                     Object cacheResult = imageBuilder.getClass()

@@ -96,9 +96,11 @@ public class SqlDockerExecutor implements ExecutorStrategy {
 
         String commitShort = request.getCommitShort() != null ? request.getCommitShort() : "unknown";
         String baselineShort = request.getBaselineShort() != null ? request.getBaselineShort() : "unknown";
+        // Image key: commit + baseline + build type + the build the package came from
+        String imageVariant = DockerImageBuilder.imageVariant(baselineShort, request.getBuildType(), request.getBuildPackage());
 
         // 1) Per-commit Docker image (CUBRID pre-installed), same cache as the shell path
-        boolean imageExistsAlready = hasImage(commitShort, baselineShort, testLogger);
+        boolean imageExistsAlready = hasImage(commitShort, imageVariant, testLogger);
         Path localBuildPackage = null;
         if (!imageExistsAlready) {
             try {
@@ -121,7 +123,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
             }
             dockerImage = (String) imageBuilder.getClass()
                 .getMethod("getOrBuildImage", String.class, String.class, Path.class)
-                .invoke(imageBuilder, commitShort, baselineShort, localBuildPackage);
+                .invoke(imageBuilder, commitShort, imageVariant, localBuildPackage);
             try {
                 Object cacheResult = imageBuilder.getClass().getMethod("wasLastOperationCacheHit").invoke(imageBuilder);
                 if (cacheResult instanceof Boolean) {
@@ -700,14 +702,14 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         return run.failureMessage != null ? run.failureMessage : "no outcome";
     }
 
-    private boolean hasImage(String commitShort, String baselineShort, Logger testLogger) {
+    private boolean hasImage(String commitShort, String imageVariant, Logger testLogger) {
         if (imageBuilder == null) {
             return false;
         }
         try {
             Object result = imageBuilder.getClass()
                 .getMethod("hasImage", String.class, String.class)
-                .invoke(imageBuilder, commitShort, baselineShort);
+                .invoke(imageBuilder, commitShort, imageVariant);
             return result instanceof Boolean && (Boolean) result;
         } catch (Exception e) {
             return false;
