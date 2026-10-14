@@ -182,6 +182,24 @@ public class TcRepoSync {
 
         Object lock = requestWorkspaceLocks.computeIfAbsent(safeRequestId, k -> new Object());
         synchronized (lock) {
+            // A test that was already in flight when its request was cancelled must not recreate the
+            // workspace the cancel just removed (it would only be cleaned at the next tester start).
+            if (com.navercorp.cubridqa.builder.tester.CancelledRequests.isCancelled(requestId)) {
+                throw new IOException("Request " + requestId + " was cancelled");
+            }
+            synchronized (baseRepoLock) {
+                return prepareRequestWorkspaceLocked(log, safeRequestId, branch, commit);
+            }
+        }
+    }
+
+    // The base repo, its FETCH_HEAD and checked-out branch are shared by every request: two requests
+    // fetching different branches could each read the other's FETCH_HEAD and pin the wrong commit.
+    private final Object baseRepoLock = new Object();
+
+    private Path prepareRequestWorkspaceLocked(Logger log, String safeRequestId, String branch, String commit)
+            throws IOException, InterruptedException {
+        {
             cleanupOldRequests();
             Files.createDirectories(getRequestsRoot());
             boolean shouldRefreshBaseRepo = !syncedRequests.containsKey(safeRequestId);
@@ -217,9 +235,12 @@ public class TcRepoSync {
         String safeRequestId = sanitizeRequestId(requestId);
         Object lock = requestWorkspaceLocks.computeIfAbsent(safeRequestId, k -> new Object());
         synchronized (lock) {
-            cleanupRequestWorkspaceInternal(log, safeRequestId);
+            synchronized (baseRepoLock) {
+                cleanupRequestWorkspaceInternal(log, safeRequestId);
+            }
         }
-        requestWorkspaceLocks.remove(safeRequestId);
+        // The lock object stays mapped: removing it let a test still waiting on it and a new caller
+        // (with a fresh lock) prepare the same workspace at the same time.
     }
 
     public void cleanupStaleRequestWorkspaces(Logger log) {
