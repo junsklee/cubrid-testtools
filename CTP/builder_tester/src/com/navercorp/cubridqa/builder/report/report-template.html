@@ -2421,7 +2421,7 @@
                     // Extract just the script name like the Builder does: testPath -> testScript -> testName
                     const testScript = testName.substring(testName.lastIndexOf('/') + 1);
                     const extractedTestName = testScript.replace('.sh', '');
-                    const safeTestName = extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                    const safeTestName = getSafeTestNameForLogs(testName);
                     
                     // Try multiple log file patterns (docker_opt, docker, direct, test)
                     const logPatterns = [
@@ -2529,10 +2529,32 @@
             }
         }
 
+        // Same rule as BuilderTask.buildShellTestName: a shell case's logs are named after its
+        // file name, unless another case in this request has the same file name in a different
+        // directory, in which case they are named after its path (shell/ and cases/ dropped).
+        let duplicateShellBasenames = null;
+        function shellBasename(testPath) {
+            const script = testPath.substring(testPath.lastIndexOf('/') + 1);
+            return script.endsWith('.sh') ? script.slice(0, -3) : script;
+        }
         function getSafeTestNameForLogs(testName) {
-            const testScript = testName.substring(testName.lastIndexOf('/') + 1);
-            const extractedTestName = testScript.replace('.sh', '');
-            return extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+            if (duplicateShellBasenames === null) {
+                const seen = new Set();
+                duplicateShellBasenames = new Set();
+                Object.keys(processedData).filter(t => t.endsWith('.sh')).forEach(t => {
+                    const base = shellBasename(t);
+                    if (seen.has(base)) duplicateShellBasenames.add(base);
+                    seen.add(base);
+                });
+            }
+            const base = shellBasename(testName);
+            if (testName.endsWith('.sh') && duplicateShellBasenames.has(base)) {
+                const segments = testName.slice(0, -3).split('/')
+                    .filter((seg, i) => seg && !(i === 0 && seg === 'shell') && seg !== 'cases')
+                    .map(seg => seg.replace(/[^a-zA-Z0-9_.-]/g, '_'));
+                if (segments.length > 0) return segments.join('.');
+            }
+            return testName.substring(testName.lastIndexOf('/') + 1).replace('.sh', '').replace(/[^a-zA-Z0-9_.-]/g, '_');
         }
 
         function escapeRegExp(text) {
@@ -2793,7 +2815,7 @@
                     // Extract just the script name
                     const testScript = testName.substring(testName.lastIndexOf('/') + 1);
                     const extractedTestName = testScript.replace('.sh', '');
-                    const safeTestName = extractedTestName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                    const safeTestName = getSafeTestNameForLogs(testName);
                     
                     // Find all log files for this test
                     const allLogFiles = testFiles.filter(file => 

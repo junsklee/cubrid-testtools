@@ -87,6 +87,8 @@ public class BuilderTask {
     // Thread-safe build cache shared across all tasks
     private static final ConcurrentHashMap<String, String> buildCache = new ConcurrentHashMap<>();
 
+    // Shell case file names that repeat across directories in this request (see buildShellTestName)
+    private volatile Set<String> duplicateShellBasenames = Collections.emptySet();
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
     private final AtomicBoolean deleteLogsOnCancel = new AtomicBoolean(false);
     private final Set<HttpURLConnection> inflightConnections = ConcurrentHashMap.newKeySet();
@@ -135,6 +137,7 @@ public class BuilderTask {
             JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
             boolean buildOnly = request.optBoolean("buildOnly", false);
             JSONArray tests = buildOnly ? new JSONArray() : request.getJSONArray("tests");
+            duplicateShellBasenames = findDuplicateShellBasenames(tests);
             String buildType = request.optString("buildType", "release");
             boolean hasCustomShellScript = request.has("customShellScript") &&
                                            !request.optString("customShellScript", "").trim().isEmpty();
@@ -1850,6 +1853,50 @@ public class BuilderTask {
      * "sql/_01_object/_01_type/_004_integer/cases/1014.sql" → "_01_object._01_type._004_integer.1014"
      * (case basenames like "1014.sql" repeat across suites, so path context is required).
      */
+    /** Shell case file names (without .sh) that occur under more than one directory in {@code tests}. */
+    static Set<String> findDuplicateShellBasenames(JSONArray tests) {
+        Set<String> seen = new HashSet<>();
+        Set<String> duplicates = new HashSet<>();
+        for (int i = 0; i < tests.length(); i++) {
+            String path = tests.optString(i, "");
+            if (!path.endsWith(".sh")) {
+                continue;
+            }
+            String base = path.substring(path.lastIndexOf('/') + 1, path.length() - 3);
+            if (!seen.add(base)) {
+                duplicates.add(base);
+            }
+        }
+        return duplicates;
+    }
+
+    /**
+     * Test name for a shell case: its file name without .sh, which names its logs, results and
+     * containers. When the request has another case with the same file name in a different
+     * directory (itrack_10001.sh exists 30 times), the name is derived from the path instead so
+     * the two cases' logs and results do not overwrite each other. The report template applies
+     * the same rule (getSafeTestNameForLogs).
+     */
+    public static String buildShellTestName(String testPath, Set<String> duplicateBasenames) {
+        String script = testPath.substring(testPath.lastIndexOf('/') + 1);
+        String base = script.endsWith(".sh") ? script.substring(0, script.length() - 3) : script;
+        if (duplicateBasenames == null || !duplicateBasenames.contains(base)) {
+            return base;
+        }
+        String p = testPath.endsWith(".sh") ? testPath.substring(0, testPath.length() - 3) : testPath;
+        StringBuilder name = new StringBuilder();
+        String[] segments = p.split("/");
+        for (int i = 0; i < segments.length; i++) {
+            String seg = segments[i];
+            if ((i == 0 && "shell".equals(seg)) || "cases".equals(seg) || seg.isEmpty()) continue;
+            if (name.length() > 0) {
+                name.append('.');
+            }
+            name.append(seg.replaceAll("[^a-zA-Z0-9_.-]", "_"));
+        }
+        return name.length() > 0 ? name.toString() : base;
+    }
+
     public static String buildSqlTestName(String testPath) {
         String p = testPath;
         if (p.endsWith(".sql")) {
@@ -1942,13 +1989,13 @@ public class BuilderTask {
                 testDir = config.getShellTcDir() + "/" +
                          customScriptTestPath.substring(0, customScriptTestPath.lastIndexOf("/"));
                 testScript = customScriptTestPath.substring(customScriptTestPath.lastIndexOf("/") + 1);
-                testName = testScript.replace(".sh", "");
+                testName = buildShellTestName(customScriptTestPath, duplicateShellBasenames);
             } else {
                 // Standard mode - extract from testPath
                 testDir = config.getShellTcDir() + "/" +
                          testPath.substring(0, testPath.lastIndexOf("/"));
                 testScript = testPath.substring(testPath.lastIndexOf("/") + 1);
-                testName = testScript.replace(".sh", "");
+                testName = buildShellTestName(testPath, duplicateShellBasenames);
             }
             
             // Determine if this is a local or remote tester
