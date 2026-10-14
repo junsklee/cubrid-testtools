@@ -69,7 +69,7 @@ public class BuildCache {
             if (cached != null && Files.exists(cached)) {
                 lastFetchCached.set(Boolean.TRUE);
                 testLogger.info("Using cached build package: " + cached);
-                return cached;
+                return touch(cached);
             }
             
             // Check for existing file on disk (in case cache was cleared or service restarted)
@@ -85,7 +85,7 @@ public class BuildCache {
                             // Add to in-memory cache for faster future lookups
                             buildPackageCache.put(buildPackage, potentialExistingFile);
                             lastFetchCached.set(Boolean.TRUE);
-                            return potentialExistingFile;
+                            return touch(potentialExistingFile);
                         } else {
                             testLogger.warning("Cached build package validation failed, will re-download: " + potentialExistingFile);
                         }
@@ -101,7 +101,7 @@ public class BuildCache {
                 cached = buildPackageCache.get(buildPackage);
                 if (cached != null && Files.exists(cached)) {
                     lastFetchCached.set(Boolean.TRUE);
-                    return cached;
+                    return touch(cached);
                 }
                 
                 // Download the package
@@ -120,7 +120,7 @@ public class BuildCache {
                         testLogger.info("Valid build package already exists on disk: " + downloadPath);
                         buildPackageCache.put(buildPackage, downloadPath);
                         lastFetchCached.set(Boolean.TRUE);
-                        return downloadPath;
+                        return touch(downloadPath);
                     } else {
                         testLogger.warning("Invalid cached package found, removing and re-downloading: " + downloadPath);
                         try {
@@ -251,11 +251,9 @@ public class BuildCache {
                         }
                     } catch (Exception ignore) { }
                     
-                    // Clean old cached packages if cache is too large
-                    if (buildPackageCache.size() > 10) {
-                        cleanOld();
-                    }
-                    
+                    touch(downloadPath);
+                    cleanOld();
+
                     lastFetchCached.set(Boolean.FALSE);
                     return downloadPath;
                     
@@ -469,28 +467,59 @@ public class BuildCache {
         }
     }
     
-    private void cleanOld() {
-        // Keep only the 5 most recently used packages
-        if (buildPackageCache.size() <= 5) return;
-        
-        List<Map.Entry<String, Path>> entries = new ArrayList<>(buildPackageCache.entrySet());
-        entries.sort((a, b) -> {
-            try {
-                BasicFileAttributes attrA = Files.readAttributes(a.getValue(), BasicFileAttributes.class);
-                BasicFileAttributes attrB = Files.readAttributes(b.getValue(), BasicFileAttributes.class);
-                return attrB.lastAccessTime().compareTo(attrA.lastAccessTime());
-            } catch (IOException e) {
-                return 0;
+    // When each package was last handed to a test (atime is unreliable under relatime)
+    private static final Map<Path, Long> LAST_USED = new ConcurrentHashMap<>();
+    private static final int KEEP_PACKAGES = 10;
+    private static final long IN_USE_GRACE_MS = 2L * 60 * 60 * 1000;
+    private static final java.util.regex.Pattern PACKAGE_NAME =
+        java.util.regex.Pattern.compile("(build_[A-Za-z0-9_.-]+__)?cubrid_[0-9a-f]+\\.tar\\.gz|build_[0-9]+\\.tar\\.gz");
+
+    private static Path touch(Path pkg) {
+        LAST_USED.put(pkg.toAbsolutePath().normalize(), System.currentTimeMillis());
+        return pkg;
+    }
+
+    /**
+     * Keeps the KEEP_PACKAGES most recently used packages in the cache directory. Every package
+     * file there counts, including ones downloaded before a restart (the in-memory map never saw
+     * them, so they were never evicted), and a package used within the last 2 hours is never
+     * deleted: a test that just received it may still be copying it or building an image.
+     */
+    private synchronized void cleanOld() {
+        List<Path> packages = new ArrayList<>();
+        try (java.util.stream.Stream<Path> files = Files.list(workDir)) {
+            files.filter(f -> PACKAGE_NAME.matcher(f.getFileName().toString()).matches()).forEach(packages::add);
+        } catch (IOException e) {
+            logger.warning("Failed to list cached packages: " + e.getMessage());
+            return;
+        }
+        if (packages.size() <= KEEP_PACKAGES) {
+            return;
+        }
+        java.util.function.ToLongFunction<Path> lastUse = f -> {
+            Long used = LAST_USED.get(f.toAbsolutePath().normalize());
+            if (used != null) {
+                return used;
             }
-        });
-        
-        // Remove oldest entries
-        for (int i = 5; i < entries.size(); i++) {
-            Map.Entry<String, Path> entry = entries.get(i);
             try {
-                Files.deleteIfExists(entry.getValue());
-                buildPackageCache.remove(entry.getKey());
-                logger.info("Removed old cached package: " + entry.getValue());
+                return Files.getLastModifiedTime(f).toMillis();
+            } catch (IOException e) {
+                return 0L;
+            }
+        };
+        packages.sort((x, y) -> Long.compare(lastUse.applyAsLong(y), lastUse.applyAsLong(x)));
+        long now = System.currentTimeMillis();
+        for (int i = KEEP_PACKAGES; i < packages.size(); i++) {
+            Path pkg = packages.get(i);
+            if (now - lastUse.applyAsLong(pkg) < IN_USE_GRACE_MS) {
+                continue;
+            }
+            try {
+                Files.deleteIfExists(pkg);
+                Files.deleteIfExists(pkg.resolveSibling(pkg.getFileName() + ".meta.json"));
+                buildPackageCache.values().removeIf(cached -> cached.toAbsolutePath().normalize().equals(pkg.toAbsolutePath().normalize()));
+                LAST_USED.remove(pkg.toAbsolutePath().normalize());
+                logger.info("Removed old cached package: " + pkg);
             } catch (IOException e) {
                 logger.warning("Failed to delete cached package: " + e.getMessage());
             }
