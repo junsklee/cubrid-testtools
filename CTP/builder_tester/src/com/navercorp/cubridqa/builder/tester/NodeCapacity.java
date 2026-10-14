@@ -36,6 +36,8 @@ public class NodeCapacity {
     private final double netMbPerSec;
     private final long diskFreeMb;
     private final long diskTotalMb;
+    // Directory whose volume is re-measured for disk pressure (null: use the startup figures)
+    private final String diskPath;
 
     private NodeCapacity(Builder builder) {
         this.cpuMillicores = builder.cpuMillicores;
@@ -47,6 +49,7 @@ public class NodeCapacity {
         this.netMbPerSec = builder.netMbPerSec;
         this.diskFreeMb = builder.diskFreeMb;
         this.diskTotalMb = builder.diskTotalMb;
+        this.diskPath = builder.diskPath;
     }
 
     public double getCpuMillicores() {
@@ -101,10 +104,25 @@ public class NodeCapacity {
         return diskTotalMb;
     }
 
+    /**
+     * Disk pressure on the work directory's volume, measured now (it was measured once at startup,
+     * so a tester that started on a fuller disk was excluded from scheduling for its whole life,
+     * and one that filled its disk later never was): less than 5GB free, or less than 10% free
+     * when that is also under 50GB (10% of a 2TB volume is plenty).
+     */
     public boolean isDiskPressure() {
-        // Consider disk pressure if less than 10% free or less than 5GB
-        double freePercent = diskTotalMb > 0 ? ((double) diskFreeMb / diskTotalMb) * 100.0 : 100.0;
-        return freePercent < 10.0 || diskFreeMb < 5120; // 5GB
+        long freeMb = diskFreeMb;
+        long totalMb = diskTotalMb;
+        if (diskPath != null) {
+            File dir = new File(diskPath);
+            long total = dir.getTotalSpace();
+            if (total > 0) {
+                freeMb = dir.getUsableSpace() / (1024 * 1024);
+                totalMb = total / (1024 * 1024);
+            }
+        }
+        double freePercent = totalMb > 0 ? ((double) freeMb / totalMb) * 100.0 : 100.0;
+        return freeMb < 5120 || (freePercent < 10.0 && freeMb < 51200);
     }
 
     /**
@@ -150,6 +168,7 @@ public class NodeCapacity {
             long totalSpace = workDirFile.getTotalSpace();
             builder.diskFreeMb(freeSpace / (1024 * 1024));
             builder.diskTotalMb(totalSpace / (1024 * 1024));
+            builder.diskPath(workDirFile.getAbsolutePath());
             logger.info("NodeCapacity: Disk: " + builder.diskFreeMb + " MB free / " + builder.diskTotalMb + " MB total");
         } catch (Exception e) {
             logger.warning("Could not determine disk space: " + e.getMessage());
@@ -235,6 +254,7 @@ public class NodeCapacity {
             long totalSpace = workDirFile.getTotalSpace();
             builder.diskFreeMb(freeSpace / (1024 * 1024));
             builder.diskTotalMb(totalSpace / (1024 * 1024));
+            builder.diskPath(workDirFile.getAbsolutePath());
             logger.info("NodeCapacity: Disk: " + builder.diskFreeMb + " MB free / " + builder.diskTotalMb + " MB total");
         } catch (Exception e) {
             logger.warning("Could not determine disk space: " + e.getMessage());
@@ -400,6 +420,12 @@ public class NodeCapacity {
         private double netMbPerSec = 0.0;
         private long diskFreeMb = 0L;
         private long diskTotalMb = 0L;
+        private String diskPath;
+
+        public Builder diskPath(String val) {
+            this.diskPath = val;
+            return this;
+        }
 
         public Builder cpuMillicores(double val) {
             this.cpuMillicores = val;

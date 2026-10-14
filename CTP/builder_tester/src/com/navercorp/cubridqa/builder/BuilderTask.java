@@ -3811,7 +3811,9 @@ public class BuilderTask {
                 noEligibleCount = 0;
                 idleSinceNanos = -1L;
                 Assignment a = assignment.get();
-                if (isHeavyCandidate(a.getTest())) {
+                // Same definition as heavyCandidates (profile HEAVY/EXTREME): counting assignments with
+                // a different predicate left heavyBacklog true forever and capacity never ramped up.
+                if (a.getTest().isHeavy()) {
                     heavyAssigned.incrementAndGet();
                 }
                 assignedCount++;
@@ -3941,20 +3943,6 @@ public class BuilderTask {
      */
     private String extractWorkerKey(String nodeId) {
         return nodeId == null ? "" : nodeId.trim();
-    }
-
-    /**
-     * Lightweight builder-side heuristic to estimate whether a test will be treated
-     * as heavy by the tester (duration + IO). Used only for pre-dispatch logging.
-     */
-    private boolean isHeavyCandidate(TestInstance test) {
-        long duration = test.getPredictedDurationMs();
-        double io = test.getPredictedIoReadMbPerSec() + test.getPredictedIoWriteMbPerSec();
-        if (io <= 0) {
-            io = test.getPredictedIoMbPerSec();
-        }
-        return duration >= config.getSchedulingMiceThresholdMs()
-                && io >= config.getSchedulingIoHeavyThreshold();
     }
 
     /**
