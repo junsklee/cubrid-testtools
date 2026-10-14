@@ -25,6 +25,7 @@ public class SchedulerServiceTest {
         testMiceAreScheduledBeforeElephants();
         testMouseRequeuedWhenNoEligibleNodes();
         testElephantsChooseBestNode();
+        testUnplaceableHeadDoesNotBlockQueue();
 
         System.out.println("\n=== All SchedulerServiceTest tests passed! ===");
     }
@@ -130,6 +131,35 @@ public class SchedulerServiceTest {
         System.out.println();
     }
 
+
+    private static void testUnplaceableHeadDoesNotBlockQueue() {
+        System.out.println("Test 4: An elephant that fits no node does not block the elephants behind it");
+
+        NodeDirectory directory = new NodeDirectory(Collections.emptyList(), 5, 60);
+        directory.updateSnapshot("node-a", healthySnapshot("node-a"));
+
+        ReadyQueue queue = new ReadyQueue(20_000);
+        SchedulerService scheduler = new SchedulerService(directory, new ScoreFunction(), queue, 1.0);
+
+        TestInstance huge = baseTest("shell/sql/huge.sh")
+            .predictedDurationMs(600_000)
+            .predictedMemMb(10_000_000.0)  // more than any node will ever have
+            .build();
+        TestInstance small = baseTest("shell/sql/small_elephant.sh")
+            .predictedDurationMs(60_000)
+            .build();
+
+        scheduler.offer(Arrays.asList(huge, small));
+
+        Optional<Assignment> assignment = scheduler.assignNext();
+        assert assignment.isPresent() : "The smaller elephant should be placed past the unplaceable head";
+        assert "shell/sql/small_elephant.sh".equals(assignment.get().getTestKey());
+        assert scheduler.getPendingCount() == 1 : "The unplaceable elephant stays queued";
+        assert scheduler.drainPending().size() == 1 && !scheduler.hasPending() : "drainPending empties the queue";
+
+        System.out.println("  ✓ Smaller elephant assigned; unplaceable one left queued");
+        System.out.println();
+    }
 
     private static TestInstance.Builder baseTest(String testKey) {
         return TestInstance.builder()

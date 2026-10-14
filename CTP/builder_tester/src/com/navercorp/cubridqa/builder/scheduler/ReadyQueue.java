@@ -94,6 +94,39 @@ public class ReadyQueue {
     }
 
     /**
+     * Removes up to {@code limit} elephants in priority order (longest first). The caller must
+     * offer back every test it does not assign.
+     */
+    public java.util.List<TestInstance> pollElephants(int limit) {
+        return pollUpTo(elephantsQueue, limit);
+    }
+
+    /**
+     * Removes up to {@code limit} mice in priority order (shortest first). The caller must offer
+     * back every test it does not assign.
+     */
+    public java.util.List<TestInstance> pollMice(int limit) {
+        return pollUpTo(miceQueue, limit);
+    }
+
+    /** Removes and returns every pending test. */
+    public java.util.List<TestInstance> drainAll() {
+        java.util.List<TestInstance> all = new java.util.ArrayList<>(miceQueue);
+        all.addAll(elephantsQueue);
+        miceQueue.clear();
+        elephantsQueue.clear();
+        return all;
+    }
+
+    private static java.util.List<TestInstance> pollUpTo(PriorityQueue<TestInstance> queue, int limit) {
+        java.util.List<TestInstance> polled = new java.util.ArrayList<>();
+        while (polled.size() < limit && !queue.isEmpty()) {
+            polled.add(queue.poll());
+        }
+        return polled;
+    }
+
+    /**
      * Removes the given test from either queue.
      */
     public boolean remove(TestInstance test) {

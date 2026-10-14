@@ -3588,6 +3588,7 @@ public class BuilderTask {
         taskLogger.info("[Smart Scheduling] Offering " + testInstances.size() + " tests to scheduler");
         if (isCancelRequested()) {
             taskLogger.warning("Cancellation requested; skipping scheduler offer");
+            nodeDirectory.stop();
             return;
         }
         scheduler.offer(testInstances);
@@ -3610,6 +3611,8 @@ public class BuilderTask {
 
         int assignedCount = 0;
         int noEligibleCount = 0;
+        long idleSinceNanos = -1L;  // since when nothing could be placed while nothing was running
+        final long stallTimeoutNanos = TimeUnit.SECONDS.toNanos(config.getSchedulingStallTimeoutSeconds());
         try {
             while (scheduler.hasPending()) {
                 if (isCancelRequested()) {
@@ -3665,6 +3668,32 @@ public class BuilderTask {
                 if (!assignment.isPresent()) {
                     capacitySemaphore.release();
                     noEligibleCount++;
+                    boolean anyRunning;
+                    synchronized (inflightTests) {
+                        anyRunning = inflightTests.stream().anyMatch(f -> !f.isDone());
+                    }
+                    if (anyRunning) {
+                        idleSinceNanos = -1L;  // running tests will free capacity
+                    } else if (idleSinceNanos < 0) {
+                        idleSinceNanos = System.nanoTime();
+                    } else if (System.nanoTime() - idleSinceNanos > stallTimeoutNanos) {
+                        // Nothing runs and nothing fits: every tester is down/unhealthy, or the
+                        // remaining tests need more than any tester has. Report them and finish
+                        // instead of holding the build slot forever.
+                        List<TestInstance> unplaced = scheduler.drainPending();
+                        String reason = String.format(
+                            "Not run: no tester could take this test for %d minutes (testers %s unavailable, or the test needs more resources than any of them has)",
+                            TimeUnit.NANOSECONDS.toMinutes(stallTimeoutNanos), workerIps);
+                        taskLogger.severe("[Smart Scheduling] " + unplaced.size() + " test(s) could not be placed; " + reason);
+                        for (TestInstance t : unplaced) {
+                            results.add(new JSONObject()
+                                .put("commit", t.getCommit())
+                                .put("test", t.getTestKey())
+                                .put("status", "error")
+                                .put("message", reason));
+                        }
+                        break;
+                    }
                     if (noEligibleCount > 10) {
                         taskLogger.warning("[Smart Scheduling] No eligible nodes after 10 attempts, waiting...");
                         try {
@@ -3679,6 +3708,7 @@ public class BuilderTask {
                 }
 
                 noEligibleCount = 0;
+                idleSinceNanos = -1L;
                 Assignment a = assignment.get();
                 if (isHeavyCandidate(a.getTest())) {
                     heavyAssigned.incrementAndGet();

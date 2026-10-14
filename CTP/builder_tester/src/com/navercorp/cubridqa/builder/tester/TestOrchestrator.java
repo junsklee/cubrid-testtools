@@ -677,7 +677,14 @@ public class TestOrchestrator {
                     // If I am the head (highest priority), I get exclusive right to try acquiring resources.
                     // This prevents small tests from jumping ahead of a large waiting test.
                     if (head != null && head.testId.equals(testId)) {
-                        if (hasLocalHeadroom(pd) && tryAcquireSlot(heavyTest)) {
+                        // An idle node is as good as this node gets: a demand that does not fit
+                        // even then (or that the tester sizes more strictly than the Builder did)
+                        // runs alone instead of blocking every later test until the wait times out.
+                        boolean idle = runningTestCount.get() == 0;
+                        if ((hasLocalHeadroom(pd) || idle) && tryAcquireSlot(heavyTest)) {
+                            if (idle && !hasLocalHeadroom(pd)) {
+                                logger.warning("Admitting " + testKey + " on an idle node although its predicted demand exceeds the free capacity");
+                            }
                             // Success! Claim the resources.
                             runningTestTracker.admit(testId, testKey, pd);
                             runningTestTracker.startRunning(testId);

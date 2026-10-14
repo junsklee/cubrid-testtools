@@ -1421,6 +1421,15 @@ public class BuilderConfig {
         return Long.parseLong(properties.getProperty(SCHEDULING_NODE_POLL_INTERVAL_SECONDS, "5"));
     }
 
+    /**
+     * Smart scheduling gives up on the remaining tests (reporting them as errors) when none could be
+     * placed on any tester for this long while nothing was running: every tester is down, or a test
+     * needs more than any tester has.
+     */
+    public long getSchedulingStallTimeoutSeconds() {
+        return Math.max(60L, Long.parseLong(properties.getProperty("smart_scheduling_stall_timeout_minutes", "10").trim()) * 60L);
+    }
+
     public long getSchedulingNodeStaleThresholdSeconds() {
         return Long.parseLong(properties.getProperty(SCHEDULING_NODE_STALE_THRESHOLD_SECONDS, "30"));
     }

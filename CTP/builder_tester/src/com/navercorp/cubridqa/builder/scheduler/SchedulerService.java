@@ -169,40 +169,45 @@ public class SchedulerService {
         }
     }
 
+    // How many queued tests of a kind are tried per pick. Trying only the head let one test that
+    // fits no node (now or ever) block every test behind it while nodes sat idle.
+    private static final int LOOKAHEAD = 32;
+
     private Optional<Assignment> attemptElephant(String reason) {
         if (readyQueue.isElephantsEmpty()) {
             return Optional.empty();
         }
-        TestInstance elephant = readyQueue.pollElephant();
-        if (elephant == null) return Optional.empty();
-
-        Optional<Assignment> assignment = assignTest(elephant);
-        if (assignment.isPresent()) {
-            logger.info(String.format("Assigned elephant (%s): %s", reason, assignment.get()));
-            return assignment;
-        }
-        
-        // Failed to assign (resources), put back
-        readyQueue.offer(elephant);
-        return Optional.empty();
+        return attemptInOrder(readyQueue.pollElephants(LOOKAHEAD), "elephant", reason);
     }
 
     private Optional<Assignment> attemptMouse(String reason) {
         if (readyQueue.isMiceEmpty()) {
             return Optional.empty();
         }
-        TestInstance mouse = readyQueue.pollMouse();
-        if (mouse == null) return Optional.empty();
+        return attemptInOrder(readyQueue.pollMice(LOOKAHEAD), "mouse", reason);
+    }
 
-        Optional<Assignment> assignment = assignTest(mouse);
-        if (assignment.isPresent()) {
-            logger.info(String.format("Assigned mouse (%s): %s", reason, assignment.get()));
-            return assignment;
+    /** Assigns the first candidate (in priority order) that fits a node; offers the rest back. */
+    private Optional<Assignment> attemptInOrder(List<TestInstance> candidates, String kind, String reason) {
+        Optional<Assignment> assignment = Optional.empty();
+        for (TestInstance candidate : candidates) {
+            if (!assignment.isPresent()) {
+                assignment = assignTest(candidate);
+                if (assignment.isPresent()) {
+                    logger.info(String.format("Assigned %s (%s): %s", kind, reason, assignment.get()));
+                    continue;
+                }
+            }
+            readyQueue.offer(candidate);
         }
+        return assignment;
+    }
 
-        // Failed to assign (resources), put back
-        readyQueue.offer(mouse);
-        return Optional.empty();
+    /**
+     * Removes and returns every pending test (used when the remaining tests cannot be placed).
+     */
+    public synchronized List<TestInstance> drainPending() {
+        return readyQueue.drainAll();
     }
 
     /**
