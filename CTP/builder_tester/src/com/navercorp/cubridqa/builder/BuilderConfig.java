@@ -605,9 +605,10 @@ public class BuilderConfig {
     }
 
     public int getMaxConcurrentTestsWhileHeavy() {
-        if (isVmMode()) {
+        if (isVmMode() || !useDockerForTester()) {
             // A VM runs one case at a time, as in regression: cases share ~/CUBRID and kill
-            // the user's CUBRID processes between runs.
+            // the user's CUBRID processes between runs. Direct (no-Docker) mode shares ~/CUBRID
+            // the same way.
             return 1;
         }
         String raw = properties.getProperty(MAX_CONCURRENT_TESTS_HEAVY_QUEUE);
@@ -623,7 +624,7 @@ public class BuilderConfig {
     }
 
     public int getMaxConcurrentTestsAfterHeavy() {
-        if (isVmMode()) {
+        if (isVmMode() || !useDockerForTester()) {
             return 1;
         }
         String raw = properties.getProperty(MAX_CONCURRENT_TESTS_POST_HEAVY);

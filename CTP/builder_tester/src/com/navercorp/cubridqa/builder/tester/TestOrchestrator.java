@@ -443,6 +443,11 @@ public class TestOrchestrator {
             if (useDocker && dockerManager != null && isDockerAvailable()) {
                 TestResult result = executeDockerTest(testRequest, workDir, testLogger);
                 return new RunOutcome(testRequest, result, convertToJSONObject(result));
+            } else if (useDocker) {
+                // A Docker tester must not quietly run the case on the host instead: a different
+                // environment (and a shared ~/CUBRID) whose verdict would be reported as the docker run's.
+                TestResult result = dockerUnavailable(testRequest, testLogger);
+                return new RunOutcome(testRequest, result, convertToJSONObject(result));
             } else {
                 testLogger.info("Using direct test execution");
                 TestResult result = executeDirectTest(testRequest, workDir, testLogger);
@@ -452,7 +457,13 @@ public class TestOrchestrator {
             // Cleanup unless keep-alive requested or a keep marker is present
             try {
                 if (!keepAliveRequested && !Files.exists(workDir.resolve("KEEP_WORKSPACE"))) {
-                    SafeIo.deleteDirectoryWithPrivileges(workDir.toFile(), testLogger);
+                    // Plain delete first: on a tester without passwordless sudo (VM_MODE asks only
+                    // for a non-root user) the sudo-only delete failed and every workDir leaked.
+                    // Files left root-owned by a container still need the privileged delete.
+                    SafeIo.deleteDirectory(workDir.toFile());
+                    if (Files.exists(workDir)) {
+                        SafeIo.deleteDirectoryWithPrivileges(workDir.toFile(), testLogger);
+                    }
                 } else {
                     testLogger.info("Preserving workDir for debugging: " + workDir);
                 }
@@ -481,11 +492,22 @@ public class TestOrchestrator {
             return result;
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("Docker not available")) {
-                testLogger.warning("Docker not available, falling back to direct execution");
-                return executeDirectTest(request, workDir, testLogger);
+                return dockerUnavailable(request, testLogger);
             }
             throw e;
         }
+    }
+
+    private TestResult dockerUnavailable(TestRequest request, Logger testLogger) {
+        testLogger.severe("Docker is configured for this tester but not available; not running the case");
+        return TestResult.builder()
+            .testName(request.getTestName())
+            .status(TestStatus.ENVIRONMENT_ERROR)
+            .message("Docker not available on the tester")
+            .commit(request.getCommit() != null ? request.getCommit() : "unknown")
+            .commitShort(request.getCommitShort())
+            .timestamp(System.currentTimeMillis())
+            .build();
     }
 
     private TestResult executeDirectTest(TestRequest request, Path workDir, Logger testLogger) throws Exception {

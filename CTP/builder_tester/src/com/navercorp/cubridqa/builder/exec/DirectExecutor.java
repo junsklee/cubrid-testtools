@@ -34,8 +34,17 @@ public class DirectExecutor implements ExecutorStrategy {
         this.cubridInstaller = cubridInstaller;
     }
 
+    // Every direct run replaces the shared ~/CUBRID and uses its databases, ports and shared memory
+    private static final Object HOST_CUBRID_LOCK = new Object();
+
     @Override
     public TestResult execute(TestRequest request, Path workDir, Logger testLogger) throws Exception {
+        synchronized (HOST_CUBRID_LOCK) {
+            return executeLocked(request, workDir, testLogger);
+        }
+    }
+
+    private TestResult executeLocked(TestRequest request, Path workDir, Logger testLogger) throws Exception {
         testLogger.info("Direct test execution");
         testLogger.info("  Build package: " + request.getBuildPackage());
         testLogger.info("  Test: " + request.getTestName());
