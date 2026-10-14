@@ -25,15 +25,22 @@ PORT=${REPORT_PORT:-8091}
 # (dotenv does not overwrite variables that are already set). Every restart
 # through this script therefore bound ::1 and silently cut off every client
 # except this machine.
+#
+# REPORT_HOST overrides; HOST from the login environment is not used (tcsh and zsh set it
+# to the machine's hostname). Without either, HOST is left unset and the server applies its
+# own default (0.0.0.0) - falling back to localhost here cut off every other client.
+HOST="${REPORT_HOST:-}"
 if [ -z "$HOST" ] && [ -f "${SCRIPT_DIR}/.env" ]; then
-    HOST=$(grep -E '^[[:space:]]*HOST=' "${SCRIPT_DIR}/.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"' \r')
+    # Last HOST= line; drop an inline "# comment", surrounding quotes and whitespace (not inner text)
+    HOST=$(grep -E '^[[:space:]]*HOST=' "${SCRIPT_DIR}/.env" | tail -1 | cut -d= -f2- \
+        | sed -e 's/[[:space:]]#.*$//' -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+              -e 's/^"\(.*\)"$/\1/' -e "s/^'\\(.*\\)'$/\\1/")
 fi
-HOST=${HOST:-localhost}
 
 # 0.0.0.0 is a bind address, not a routable target - health checks still go to
 # localhost.
-HEALTH_HOST="$HOST"
-if [ "$HOST" = "0.0.0.0" ] || [ "$HOST" = "::" ]; then
+HEALTH_HOST="${HOST:-localhost}"
+if [ "$HEALTH_HOST" = "0.0.0.0" ] || [ "$HEALTH_HOST" = "::" ]; then
     HEALTH_HOST="localhost"
 fi
 HEALTH_CHECK_URL="http://${HEALTH_HOST}:${PORT}/health"
@@ -157,7 +164,11 @@ start_server() {
     fi
     
     # Start server in background (ensure config and health check target match)
-    nohup env REPORT_PORT="$PORT" HOST="$HOST" node src/server.js "$PORT" > "${SCRIPT_DIR}/server.log" 2>&1 &
+    if [ -n "$HOST" ]; then
+        nohup env REPORT_PORT="$PORT" HOST="$HOST" node src/server.js "$PORT" > "${SCRIPT_DIR}/server.log" 2>&1 &
+    else
+        nohup env -u HOST REPORT_PORT="$PORT" node src/server.js "$PORT" > "${SCRIPT_DIR}/server.log" 2>&1 &
+    fi
     local server_pid=$!
     
     # Wait a moment for server to start

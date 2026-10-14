@@ -109,7 +109,7 @@ pm2 startup
 The monitor script uses the following environment variables (with defaults):
 
 - `REPORT_PORT` - Server port (default: 8091)
-- `HOST` - Server host (default: localhost)
+- `REPORT_HOST` - Bind address override; otherwise `HOST` from `.env`, otherwise the server default (0.0.0.0). A `HOST` set by the login shell is ignored.
 
 You can set these in your crontab or systemd service:
 ```bash

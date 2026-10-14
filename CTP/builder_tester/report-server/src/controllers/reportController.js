@@ -52,7 +52,9 @@ class ReportController {
         if (typeof html !== 'string') return html;
         if (html.includes('/css/report-theme.css')) return html;
         const link = '    <link rel="stylesheet" href="/css/report-theme.css">\n';
-        const headEnd = html.lastIndexOf('</head>');
+        // The first </head> closes the document head; a later one can only be inside embedded
+        // data or script text (older reports embed results JSON unescaped).
+        const headEnd = html.indexOf('</head>');
         if (headEnd === -1) return html;
         return html.slice(0, headEnd) + link + html.slice(headEnd);
     }
