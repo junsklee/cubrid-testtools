@@ -196,23 +196,12 @@ public class BuilderTask {
                 resolveCtpSqlProvenance();
             }
 
-            // Initialize WorkloadDistributor with all nodes (including localhost)
-            // Format: "host:port" - add default builder port if not specified
+            // Builds run on this Builder only. workerIps are testers (port 8090), not builders:
+            // distributing commits to them sent every other commit of a request whose worker had a
+            // hostname or public address to <worker>/build-single, which a tester does not serve
+            // (and a remote build's package path is never copied back), so those commits failed.
             List<String> nodeIds = new ArrayList<>();
-            for (String workerIp : workerIps) {
-                if (workerIp.contains(":")) {
-                    nodeIds.add(workerIp);
-                } else {
-                    // Add default builder port (8089)
-                    nodeIds.add(workerIp + ":8089");
-                }
-            }
-            // Add localhost if not already in the list
-            boolean hasLocalhost = nodeIds.stream().anyMatch(n ->
-                n.startsWith("localhost:") || n.startsWith("127.0.0.1:"));
-            if (!hasLocalhost) {
-                nodeIds.add(0, "localhost:8089"); // Add at beginning for priority
-            }
+            nodeIds.add("localhost:8089");
 
             this.workloadDistributor = new WorkloadDistributor(nodeIds);
             taskLogger.info("Initialized WorkloadDistributor with nodes: " + nodeIds);
