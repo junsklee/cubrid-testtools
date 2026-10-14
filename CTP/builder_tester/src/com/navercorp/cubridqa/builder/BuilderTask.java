@@ -674,18 +674,20 @@ public class BuilderTask {
             try { executeCommand(pb, "git", "fetch", "--all", "--prune", "--recurse-submodules=on-demand"); } catch (Exception ignore) {}
 
             String prBranch = "pr_" + prNumber + "_br";
+            // "+": the PR head moves when its author rebases or force-pushes, and pr_N_br is kept
+            // from the previous run; without it the fetch is rejected as non-fast-forward.
 
             boolean fetched = false;
             Exception lastEx = null;
             // Try origin first
             try {
-                executeCommand(pb, "git", "fetch", "origin", "pull/" + prNumber + "/head:" + prBranch);
+                executeCommand(pb, "git", "fetch", "origin", "+pull/" + prNumber + "/head:" + prBranch);
                 fetched = true;
             } catch (Exception e1) {
                 lastEx = e1;
                 // Fallback to upstream if configured
                 try {
-                    executeCommand(pb, "git", "fetch", "upstream", "pull/" + prNumber + "/head:" + prBranch);
+                    executeCommand(pb, "git", "fetch", "upstream", "+pull/" + prNumber + "/head:" + prBranch);
                     fetched = true;
                 } catch (Exception e2) {
                     lastEx = e2;

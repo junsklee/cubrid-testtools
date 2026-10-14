@@ -661,7 +661,7 @@ public class DockerBuildManager {
             writer.println("prn=''\nif [ -n \"${PR_NUMBER}\" ]; then prn=${PR_NUMBER}; elif [ -n \"${PR_BRANCH}\" ]; then prn=$(echo \"${PR_BRANCH}\" | sed 's/[^0-9]//g'); fi");
             writer.println("if [ -n \"$prn\" ]; then");
             writer.println("  echo \"Fetching PR #$prn from upstream\"");
-            writer.println("  git fetch upstream pull/$prn/head:$tmp_branch || git fetch origin pull/$prn/head:$tmp_branch || true");
+            writer.println("  git fetch upstream +pull/$prn/head:$tmp_branch || git fetch origin +pull/$prn/head:$tmp_branch || true");
             writer.println("fi");
             writer.println("# Checkout PR head by commit hash as authoritative fallback");
             writer.println("git checkout -B \"$tmp_branch\" \"${COMMIT_HASH}\" || git checkout \"$tmp_branch\" || true");
