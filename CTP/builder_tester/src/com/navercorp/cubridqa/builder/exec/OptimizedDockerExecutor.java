@@ -513,16 +513,8 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             request.getTestScript().substring(0, request.getTestScript().length() - 3) : request.getTestScript();
         Path namedResult = dockerWorkDir.resolve(resultBase + ".result");
         
-        if (!Files.exists(namedResult)) {
-            Path repoResult = shellRepoRoot;
-            if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
-                repoResult = repoResult.resolve(relativeTestDir);
-            }
-            repoResult = repoResult.resolve(resultBase + ".result").normalize();
-            if (Files.exists(repoResult)) {
-                namedResult = repoResult;
-            }
-        }
+        // Only the result this run wrote counts. The repo copy of <case>.result is often committed
+        // to the testcase repo and would turn a run that never produced a result into its verdict.
 
         if (Files.exists(namedResult)) {
             String resultContent = new String(Files.readAllBytes(namedResult));
@@ -567,6 +559,9 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
                 resultBuilder.status(TestStatus.PASS);
             } else if (isFailed) {
                 resultBuilder.status(TestStatus.FAIL);
+            } else if (resultContent.trim().isEmpty()) {
+                // CTP: a blank result is a failure
+                resultBuilder.status(TestStatus.FAIL).message("Case produced a blank result");
             } else {
                 resultBuilder.status(TestStatus.EXECUTION_ERROR)
                     .message("Could not determine test result");
@@ -586,10 +581,14 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             resultBuilder.addAttemptLogFile(dockerOptLogFilePath);
         }
         
+        // No result file. Like CTP, a case that ran to completion without writing a result is a
+        // FAIL (blank result); a non-zero exit before that (docker run failure, cubrid_rel or setup
+        // aborting under set -e) is an infrastructure error, not a verdict on the commit.
         if (exitCode == 0) {
-            resultBuilder.status(TestStatus.PASS);
+            resultBuilder.status(TestStatus.FAIL).message("Case produced no result (blank result)");
         } else {
-            resultBuilder.status(TestStatus.FAIL).exitCode(exitCode);
+            resultBuilder.status(TestStatus.EXECUTION_ERROR).exitCode(exitCode)
+                .message("Case produced no result; container exited with code " + exitCode);
         }
 
         return finalizeResult(resultBuilder, metricsBuilder, startNs, dockerImage, dockerImageCached, statsSummary);

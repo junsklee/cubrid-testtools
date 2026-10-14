@@ -452,16 +452,8 @@ public class StandardDockerExecutor implements ExecutorStrategy {
              ? request.getTestScript().substring(0, request.getTestScript().length() - 3)
              : (request.getTestScript().contains(".") ? request.getTestScript().substring(0, request.getTestScript().lastIndexOf('.')) : request.getTestScript());
         Path namedResult = dockerWorkDir.resolve(resultBaseFromScript + ".result");
-        if (!Files.exists(namedResult)) {
-            Path repoResult = shellRepoRoot;
-            if (relativeTestDir != null && !relativeTestDir.isEmpty()) {
-                repoResult = repoResult.resolve(relativeTestDir);
-            }
-            repoResult = repoResult.resolve(resultBaseFromScript + ".result").normalize();
-            if (Files.exists(repoResult)) {
-                namedResult = repoResult;
-            }
-        }
+        // Only the result this run wrote counts. The repo copy of <case>.result is often committed
+        // to the testcase repo and would turn a run that never produced a result into its verdict.
 
         if (Files.exists(namedResult)) {
             String resultContent = new String(Files.readAllBytes(namedResult));
@@ -513,6 +505,9 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 resultBuilder.status(TestStatus.PASS);
             } else if (isFailed) {
                 resultBuilder.status(TestStatus.FAIL);
+            } else if (resultContent.trim().isEmpty()) {
+                // CTP: a blank result is a failure
+                resultBuilder.status(TestStatus.FAIL).message("Case produced a blank result");
             } else {
                 resultBuilder.status(TestStatus.EXECUTION_ERROR)
                        .message("Could not determine test result");
@@ -584,8 +579,9 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             .commitShort(request.getCommitShort())
             .executionMode("docker")
             .timestamp(System.currentTimeMillis())
-            .status(TestStatus.EXECUTION_ERROR)
-            .message("No result file produced by test script");
+            .status(exitCode == 0 ? TestStatus.FAIL : TestStatus.EXECUTION_ERROR)
+            .message(exitCode == 0 ? "Case produced no result (blank result)"
+                : "Case produced no result; container exited with code " + exitCode);
 
         if (logFilePath != null) {
             missingResultBuilder.addAttemptLogFile(logFilePath);

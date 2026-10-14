@@ -533,6 +533,14 @@ public class EnvScriptFactory {
             script.append("chmod +x \"").append(testScript).append("\"\n\n");
         }
 
+        String resultBase = testScript.endsWith(".sh") ?
+            testScript.substring(0, testScript.length() - 3) :
+            (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
+        // A <case>.result committed to the testcase repo (or left by an earlier attempt) must never
+        // be read back as this run's verdict. CTP truncates it at "init test"; remove it up front so
+        // a case that stops before that (or a broken build) leaves no result at all.
+        script.append("rm -f \"").append(resultBase).append(".result\" \"/workspace/").append(resultBase).append(".result\"\n\n");
+
         // Execute test script normally (whether original or custom)
         script.append("set +e\n");
         script.append("set -x\n\n");
@@ -540,9 +548,6 @@ public class EnvScriptFactory {
         script.append("TEST_EXIT=$?\n");
         script.append("set -e\n\n");
 
-        String resultBase = testScript.endsWith(".sh") ?
-            testScript.substring(0, testScript.length() - 3) :
-            (testScript.contains(".") ? testScript.substring(0, testScript.lastIndexOf('.')) : testScript);
         script.append("# Copy result file if generated (persist across overlay/fallback)\n");
         script.append("RESULT_SRC=\"").append(resultBase).append(".result\"\n");
         script.append("if [ -f \"$RESULT_SRC\" ]; then\n");
