@@ -138,8 +138,31 @@ public class VmShellExecutor implements ExecutorStrategy {
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
         Process process = pb.start();
-        boolean completed = process.waitFor(timeoutSecs, TimeUnit.SECONDS);
-        boolean timedOut = !completed;
+        // Wait in short steps so a cancelled request stops its case (and releases the VM) at once
+        // instead of holding VM_LOCK until the case finishes or times out.
+        String requestId = RequestContext.getRequestId();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSecs);
+        boolean completed = false;
+        boolean cancelled = false;
+        while (!completed) {
+            long leftNanos = deadline - System.nanoTime();
+            if (leftNanos <= 0) {
+                break;
+            }
+            completed = process.waitFor(Math.min(TimeUnit.NANOSECONDS.toMillis(leftNanos), 2000L), TimeUnit.MILLISECONDS);
+            if (!completed && CancelledRequests.isCancelled(requestId)) {
+                cancelled = true;
+                break;
+            }
+        }
+        if (cancelled) {
+            testLogger.warning("Request cancelled while the VM case was running; killing its process group");
+            killProcessGroup(pgidFile, testLogger);
+            process.destroyForcibly();
+            process.waitFor(30, TimeUnit.SECONDS);
+            appendLine(logFile, VmScriptFactory.PHASE_PREFIX + "CANCELLED");
+        }
+        boolean timedOut = !completed && !cancelled;
         if (timedOut) {
             testLogger.warning("VM case timed out after " + timeoutSecs + "s; killing its process group");
             killProcessGroup(pgidFile, testLogger);
@@ -304,11 +327,7 @@ public class VmShellExecutor implements ExecutorStrategy {
         try {
             Path script = writeScript(workDir.resolve("vm_artifacts.sh"), VmScriptFactory.createArtifactScript(
                 cubridHome.toString(), caseDir.toString(), text.toString(), tar.toString()));
-            ProcessBuilder pb = new ProcessBuilder("bash", script.toString());
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            ProcessIO.drain(p.getInputStream());
-            p.waitFor(5, TimeUnit.MINUTES);
+            runBounded(new ProcessBuilder("bash", script.toString()), workDir, 5, TimeUnit.MINUTES, testLogger);
             if (Files.isRegularFile(text)) {
                 result.addArtifactFile(text, "case_files", Math.max(1, request.getAttemptNumber()), "vm");
             }
@@ -321,11 +340,7 @@ public class VmShellExecutor implements ExecutorStrategy {
         try {
             Path script = writeScript(workDir.resolve("vm_reset.sh"),
                 VmScriptFactory.createResetScript(cubridHome.toString(), ctpHome.toString()));
-            ProcessBuilder pb = new ProcessBuilder("bash", script.toString());
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            ProcessIO.drain(p.getInputStream());
-            p.waitFor(2, TimeUnit.MINUTES);
+            runBounded(new ProcessBuilder("bash", script.toString()), workDir, 2, TimeUnit.MINUTES, testLogger);
         } catch (Exception e) {
             testLogger.warning("Process reset failed: " + e.getMessage());
         }
@@ -338,12 +353,27 @@ public class VmShellExecutor implements ExecutorStrategy {
             }
             String pgid = new String(Files.readAllBytes(pgidFile), StandardCharsets.UTF_8).trim();
             if (pgid.matches("\\d+") && !"0".equals(pgid) && !"1".equals(pgid)) {
-                Process p = new ProcessBuilder("kill", "-9", "--", "-" + pgid).redirectErrorStream(true).start();
-                ProcessIO.drain(p.getInputStream());
-                p.waitFor(30, TimeUnit.SECONDS);
+                runBounded(new ProcessBuilder("kill", "-9", "--", "-" + pgid), pgidFile.getParent(), 30, TimeUnit.SECONDS, testLogger);
             }
         } catch (Exception e) {
             testLogger.warning("Failed to kill case process group: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Runs a helper with its output appended to vm_helper.log instead of a pipe: reading a pipe to
+     * EOF first (as before) made the timeout unreachable, so a hung `cubrid service stop` held
+     * VM_LOCK forever.
+     */
+    private static void runBounded(ProcessBuilder pb, Path logDir, long timeout, TimeUnit unit, Logger testLogger)
+            throws IOException, InterruptedException {
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(ProcessBuilder.Redirect.appendTo(logDir.resolve("vm_helper.log").toFile()));
+        Process p = pb.start();
+        if (!p.waitFor(timeout, unit)) {
+            testLogger.warning("Helper " + pb.command() + " still running after " + timeout + " " + unit + "; killing it");
+            p.destroyForcibly();
+            p.waitFor(10, TimeUnit.SECONDS);
         }
     }
 
