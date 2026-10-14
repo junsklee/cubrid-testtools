@@ -35,6 +35,24 @@ public class NodeDirectory {
     private final BuilderConfig config;  // Optional config for margins/weights (null for tests)
 
     private final ConcurrentHashMap<String, NodeSnapshot> nodeMap;
+    // When each snapshot arrived, by the Builder's clock (testers' clocks may be skewed)
+    private final ConcurrentHashMap<String, Long> receivedAtMillis = new ConcurrentHashMap<>();
+    // Tests assigned to each node, newest last; those newer than the node's last snapshot (minus a
+    // grace period for the tester to admit them) are not in its usage figures yet.
+    private final ConcurrentHashMap<String, Deque<Dispatch>> recentDispatches = new ConcurrentHashMap<>();
+    private static final long DISPATCH_GRACE_MS = 10_000L;
+
+    private static final class Dispatch {
+        final long atMillis;
+        final double cpuPct;
+        final double memMb;
+
+        Dispatch(long atMillis, double cpuPct, double memMb) {
+            this.atMillis = atMillis;
+            this.cpuPct = cpuPct;
+            this.memMb = memMb;
+        }
+    }
     private final ScheduledExecutorService pollScheduler;
 
     public NodeDirectory(List<String> testerNodes) {
@@ -99,6 +117,37 @@ public class NodeDirectory {
      */
     public void updateSnapshot(String nodeId, NodeSnapshot snapshot) {
         nodeMap.put(nodeId, snapshot);
+        // Injected snapshots (tests, pull mode) are aged by their own timestamp
+        receivedAtMillis.put(nodeId, snapshot.getTimestamp().toEpochMilli());
+    }
+
+    /**
+     * Records that a test was just assigned to a node. Until a snapshot taken after the tester
+     * admitted it arrives, its demand is subtracted from the node's free capacity, so one /health
+     * snapshot cannot be filled many times over between polls.
+     */
+    public void recordDispatch(String nodeId, TestInstance test) {
+        recentDispatches.computeIfAbsent(nodeId, k -> new ConcurrentLinkedDeque<>())
+            .addLast(new Dispatch(System.currentTimeMillis(), test.getPredictedCpuPct(), test.getPredictedMemMb()));
+    }
+
+    /** Dispatches not yet reflected in the node's latest snapshot: {count, cpuPct, memMb}. */
+    private double[] pendingDispatches(String nodeId) {
+        Deque<Dispatch> dispatches = recentDispatches.get(nodeId);
+        if (dispatches == null) {
+            return new double[] {0, 0, 0};
+        }
+        long reflectedBefore = receivedAtMillis.getOrDefault(nodeId, 0L) - DISPATCH_GRACE_MS;
+        while (!dispatches.isEmpty() && dispatches.peekFirst().atMillis < reflectedBefore) {
+            dispatches.pollFirst();
+        }
+        double count = 0, cpu = 0, mem = 0;
+        for (Dispatch d : dispatches) {
+            count++;
+            cpu += Math.max(0, d.cpuPct);
+            mem += Math.max(0, d.memMb);
+        }
+        return new double[] {count, cpu, mem};
     }
 
     /**
@@ -132,10 +181,14 @@ public class NodeDirectory {
      * Returns nodes eligible to run a test (has concurrency AND resource headroom).
      */
     public List<NodeSnapshot> getEligibleNodes(TestInstance test) {
-        return getHealthyNodes().stream()
-                .filter(s -> s.getAvailableConcurrency() > 0)
-                .filter(s -> hasResourceHeadroom(s, test))
-                .collect(Collectors.toList());
+        List<NodeSnapshot> eligible = new ArrayList<>();
+        for (NodeSnapshot s : getHealthyNodes()) {
+            double[] pending = pendingDispatches(s.getNodeId());
+            if (s.getAvailableConcurrency() - pending[0] > 0 && hasResourceHeadroom(s, test, pending[1], pending[2])) {
+                eligible.add(s);
+            }
+        }
+        return eligible;
     }
 
     /**
@@ -150,6 +203,11 @@ public class NodeDirectory {
      * @return true if node has enough free resources
      */
     boolean hasResourceHeadroom(NodeSnapshot node, TestInstance test) {
+        return hasResourceHeadroom(node, test, 0.0, 0.0);
+    }
+
+    /** @param pendingCpuPct, pendingMemMb demand dispatched to the node but not yet in its snapshot */
+    boolean hasResourceHeadroom(NodeSnapshot node, TestInstance test, double pendingCpuPct, double pendingMemMb) {
         // Use config if available, otherwise fall back to hardcoded production-safe defaults
         final double baseCpu = config != null ? config.getSchedulingMarginCpuBase() : 0.10;
         final double baseMem = config != null ? config.getSchedulingMarginMemBase() : 0.20;
@@ -199,8 +257,8 @@ public class NodeDirectory {
         // I/O-first: Enforce per-direction headroom; also honor global IO keep-free
         // TEMPORARY: Skip IOPS check entirely until predictions are calibrated (node capacity too low)
         // Skip network checks if node reports 0 capacity (not yet implemented/measured)
-        boolean hasHeadroom = node.getFreeCpuPct() >= requiredCpu
-                && node.getFreeMemMb() >= requiredMem
+        boolean hasHeadroom = node.getFreeCpuPct() - pendingCpuPct >= requiredCpu
+                && node.getFreeMemMb() - pendingMemMb >= requiredMem
                 && (requiredIoRead <= 0 || (freeIoRead - keepFreeRead >= requiredIoRead))
                 && (requiredIoWrite <= 0 || (freeIoWrite - keepFreeWrite >= requiredIoWrite))
                 && (!enforceIops || node.getFreeIops() >= requiredIops)
@@ -239,7 +297,11 @@ public class NodeDirectory {
             try {
                 NodeSnapshot snapshot = pollNode(nodeAddr);
                 if (snapshot != null) {
-                    nodeMap.put(snapshot.getNodeId(), snapshot);
+                    // Keyed by the polled address (what the Builder reaches the tester on), not the
+                    // tester's self-reported nodeId, which may be a container address, 127.0.1.1,
+                    // or the same for several testers.
+                    nodeMap.put(nodeAddr, snapshot);
+                    receivedAtMillis.put(nodeAddr, System.currentTimeMillis());
                 }
             } catch (Exception e) {
                 logger.warning("Failed to poll node " + nodeAddr + ": " + e.getMessage());
@@ -277,6 +339,11 @@ public class NodeDirectory {
             reader.close();
 
             JSONObject json = new JSONObject(response.toString());
+            String reported = json.optString("nodeId", "");
+            if (!nodeAddr.equals(reported)) {
+                logger.fine("Tester " + nodeAddr + " reports nodeId '" + reported + "'; using the polled address");
+            }
+            json.put("nodeId", nodeAddr);
             return NodeSnapshot.fromJSON(json);
 
         } catch (Exception e) {
@@ -293,7 +360,13 @@ public class NodeDirectory {
      * Checks if a snapshot is stale (timestamp too old).
      */
     private boolean isStale(NodeSnapshot snapshot) {
-        Duration age = Duration.between(snapshot.getTimestamp(), Instant.now());
-        return age.getSeconds() > staleThresholdSeconds;
+        // Age by the Builder's clock: comparing the tester's own timestamp with ours made a tester
+        // whose clock lags look dead, and kept a dead one whose clock runs ahead looking alive.
+        Long received = receivedAtMillis.get(snapshot.getNodeId());
+        if (received == null) {
+            Duration age = Duration.between(snapshot.getTimestamp(), Instant.now());
+            return age.getSeconds() > staleThresholdSeconds;
+        }
+        return System.currentTimeMillis() - received > staleThresholdSeconds * 1000L;
     }
 }

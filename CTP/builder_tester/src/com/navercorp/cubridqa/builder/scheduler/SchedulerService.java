@@ -194,6 +194,7 @@ public class SchedulerService {
             if (!assignment.isPresent()) {
                 assignment = assignTest(candidate);
                 if (assignment.isPresent()) {
+                    nodeDirectory.recordDispatch(assignment.get().getTargetNodeId(), candidate);
                     logger.info(String.format("Assigned %s (%s): %s", kind, reason, assignment.get()));
                     continue;
                 }

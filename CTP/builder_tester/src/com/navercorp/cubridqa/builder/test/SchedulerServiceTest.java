@@ -26,6 +26,7 @@ public class SchedulerServiceTest {
         testMouseRequeuedWhenNoEligibleNodes();
         testElephantsChooseBestNode();
         testUnplaceableHeadDoesNotBlockQueue();
+        testDispatchesCountAgainstSnapshot();
 
         System.out.println("\n=== All SchedulerServiceTest tests passed! ===");
     }
@@ -161,6 +162,39 @@ public class SchedulerServiceTest {
         System.out.println();
     }
 
+    private static void testDispatchesCountAgainstSnapshot() {
+        System.out.println("Test 5: Tests assigned since the last snapshot count against the node");
+
+        NodeDirectory directory = new NodeDirectory(Collections.emptyList(), 5, 60);
+        directory.updateSnapshot("node-16g", healthySnapshotBuilder("node-16g")
+            .maxConcurrentTests(28)
+            .runningTests(0)
+            .memMb(16_384.0)
+            .usedMemMb(0.0)
+            .build());
+
+        SchedulerService scheduler = new SchedulerService(directory, new ScoreFunction(), new ReadyQueue(20_000), 1.0);
+        List<TestInstance> tests = new java.util.ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            tests.add(baseTest("shell/sql/mem_" + i + ".sh")
+                .predictedDurationMs(60_000)
+                .predictedCpuPct(10.0)
+                .predictedMemMb(6_000.0)
+                .confidence(0.95)
+                .build());
+        }
+        scheduler.offer(tests);
+
+        int assigned = 0;
+        while (scheduler.assignNext().isPresent()) {
+            assigned++;
+        }
+        assert assigned == 2 : "Only two 6GB tests fit a 16GB node per snapshot, got " + assigned;
+
+        System.out.println("  \u2713 " + assigned + " of 6 assigned before the next snapshot");
+        System.out.println();
+    }
+
     private static TestInstance.Builder baseTest(String testKey) {
         return TestInstance.builder()
             .testKey(testKey)
@@ -188,7 +222,7 @@ public class SchedulerServiceTest {
             .runningTests(1)
             .queuedTests(0)
             .cpuPct(600.0)
-            .usedCpuPct(200.0)
+            .usedCpuPct(100.0)
             .memMb(32_768.0)
             .usedMemMb(8_000.0)
             .ioMbPerSec(600.0)

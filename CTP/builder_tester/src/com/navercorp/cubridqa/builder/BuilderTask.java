@@ -2060,7 +2060,10 @@ public class BuilderTask {
             }
 
             // Add predicted demands if available (smart scheduling)
-            if (testInstance != null && testInstance.getConfidence() > 0.0) {
+            // Also send a memory estimate above the tester's 512MB default when it comes from the
+            // test's profile rather than a confident prediction (confidence 0 makes the tester
+            // add its full safety margin).
+            if (testInstance != null && (testInstance.getConfidence() > 0.0 || testInstance.getPredictedMemMb() > 512.0)) {
                 JSONObject predicted = new JSONObject()
                     .put("durationMs", testInstance.getPredictedDurationMs())
                     .put("cpuPct", testInstance.getPredictedCpuPct())
@@ -3572,13 +3575,28 @@ public class BuilderTask {
                 continue;
             }
 
-            Map<String, ScorePrediction> scorePredictions = Collections.emptyMap();
-            if (!schedulerNodes.isEmpty()) {
-                String scorerNode = schedulerNodes.get(0);
-                String baselineToken = (this.baselineKey != null && !this.baselineKey.trim().isEmpty())
-                    ? this.baselineKey
-                    : "unknown";
-                scorePredictions = fetchScorePredictions(scorerNode, commit, baselineToken, normalizedTests);
+            // Each tester keeps its own run history, and any one of them may be down or new: ask
+            // every reachable tester and keep the most confident prediction per test.
+            Map<String, ScorePrediction> scorePredictions = new HashMap<>();
+            String baselineToken = (this.baselineKey != null && !this.baselineKey.trim().isEmpty())
+                ? this.baselineKey
+                : "unknown";
+            List<String> scorers = new ArrayList<>();
+            for (String node : schedulerNodes) {
+                if (nodeDirectory.getSnapshot(node) != null) {
+                    scorers.add(node);
+                }
+            }
+            if (scorers.isEmpty()) {
+                scorers.addAll(schedulerNodes);
+            }
+            for (String scorerNode : scorers) {
+                for (Map.Entry<String, ScorePrediction> e : fetchScorePredictions(scorerNode, commit, baselineToken, normalizedTests).entrySet()) {
+                    ScorePrediction known = scorePredictions.get(e.getKey());
+                    if (known == null || e.getValue().confidence > known.confidence) {
+                        scorePredictions.put(e.getKey(), e.getValue());
+                    }
+                }
             }
 
             for (String testPath : normalizedTests) {
@@ -3636,6 +3654,12 @@ public class BuilderTask {
                 // 2. Soft scoring: small nudge to spread heavy tests across nodes when possible
                 TestProfile profile = TestProfileLoader.getOrDefault(testProfiles, testPath);
                 tib.fromProfile(profile);
+                // Without a confident prediction the test would be sized at the 512MB default here and
+                // on the tester; a test whose profile shows it uses more must be sized by that instead.
+                if ((pred == null || pred.confidence <= 0.0) && profile != null
+                        && profile.getAvgMemMb() > (pred != null && pred.memMb > 0 ? pred.memMb : 512.0)) {
+                    tib.predictedMemMb(profile.getAvgMemMb());
+                }
 
                 TestInstance instance = tib.build();
                 testInstances.add(instance);
@@ -3967,7 +3991,7 @@ public class BuilderTask {
 
             int code = conn.getResponseCode();
             if (code != 200) {
-                taskLogger.fine("[Smart Scheduling] /score returned non-200 (" + code + ") from " + scorerNode);
+                taskLogger.warning("[Smart Scheduling] /score returned non-200 (" + code + ") from " + scorerNode);
                 return out;
             }
 
@@ -4011,7 +4035,7 @@ public class BuilderTask {
                 out.put(key, sp);
             }
         } catch (Exception e) {
-            taskLogger.fine("[Smart Scheduling] Failed to fetch /score predictions from " + scorerNode + ": " + e.getMessage());
+            taskLogger.warning("[Smart Scheduling] Failed to fetch /score predictions from " + scorerNode + ": " + e.getMessage());
         }
         return out;
     }

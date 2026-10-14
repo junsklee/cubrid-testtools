@@ -173,10 +173,10 @@ public class PredictedDemand {
             cpuMc = (int) Math.round((pct / 100.0) * (hw != null ? hw.getCpuPct() : 100.0) * 10.0);
         }
         if (memBytes < 0 && p.has("memMb")) {
-            memBytes = (long) Math.max(0, p.optDouble("memMb", 0.0)) * 1024L * 1024L;
+            memBytes = (long) (Math.max(0.0, p.optDouble("memMb", 0.0)) * 1024.0 * 1024.0);
         }
         if (ioBps < 0 && p.has("ioMbPerSec")) {
-            ioBps = (long) Math.max(0, p.optDouble("ioMbPerSec", 0.0)) * 1024L * 1024L;
+            ioBps = (long) (Math.max(0.0, p.optDouble("ioMbPerSec", 0.0)) * 1024.0 * 1024.0);
             // Legacy single IO value → split evenly if read/write not provided
             if (ioReadBps < 0 && ioWriteBps < 0) {
                 ioReadBps = ioBps / 2;
@@ -185,15 +185,15 @@ public class PredictedDemand {
         }
         // Legacy per-direction MB/s keys (builder may send these)
         if (ioReadBps < 0 && p.has("ioReadMbPerSec")) {
-            ioReadBps = (long) Math.max(0, p.optDouble("ioReadMbPerSec", 0.0)) * 1024L * 1024L;
+            ioReadBps = (long) (Math.max(0.0, p.optDouble("ioReadMbPerSec", 0.0)) * 1024.0 * 1024.0);
         }
         if (ioWriteBps < 0 && p.has("ioWriteMbPerSec")) {
-            ioWriteBps = (long) Math.max(0, p.optDouble("ioWriteMbPerSec", 0.0)) * 1024L * 1024L;
+            ioWriteBps = (long) (Math.max(0.0, p.optDouble("ioWriteMbPerSec", 0.0)) * 1024.0 * 1024.0);
         }
         if (ioReadBps < 0) ioReadBps = Math.max(0, p.optLong("ioReadBytesPerSec", -1));
         if (ioWriteBps < 0) ioWriteBps = Math.max(0, p.optLong("ioWriteBytesPerSec", -1));
         if (netBps < 0 && p.has("netMbPerSec")) {
-            netBps = (long) Math.max(0, p.optDouble("netMbPerSec", 0.0)) * 1024L * 1024L;
+            netBps = (long) (Math.max(0.0, p.optDouble("netMbPerSec", 0.0)) * 1024.0 * 1024.0);
         }
 
         double confidence = p.optDouble("confidence", 0.0);
