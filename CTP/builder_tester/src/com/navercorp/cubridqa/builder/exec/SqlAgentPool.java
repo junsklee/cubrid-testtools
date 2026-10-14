@@ -47,6 +47,8 @@ public class SqlAgentPool {
 
     private final BuilderConfig config;
     private final Map<String, List<Agent>> pools = new HashMap<>();
+    // Requests whose agents were torn down (cancel/finalize); their pools are never recreated
+    private final java.util.Set<String> tornDownRequests = new java.util.HashSet<>();
     private final Object lock = new Object();
     private int agentSeq = 0;
 
@@ -71,6 +73,10 @@ public class SqlAgentPool {
             Agent acquired = null;
             List<Agent> idleVictims;
             synchronized (lock) {
+                if (isTornDownLocked(poolKey)) {
+                    // Cancelled or finalized: never recreate the request's pool after teardown
+                    return null;
+                }
                 idleVictims = collectIdleVictimsLocked();
                 List<Agent> pool = pools.computeIfAbsent(poolKey, k -> new ArrayList<>());
                 for (Agent agent : pool) {
@@ -118,6 +124,12 @@ public class SqlAgentPool {
                             if (agent != null && removed) {
                                 pool.add(agent);
                             }
+                        }
+                        if (agent != null && (pool == null || isTornDownLocked(poolKey))) {
+                            // The request was torn down while this agent was provisioning
+                            Agent orphan = agent;
+                            agent = null;
+                            destroyAgentLater(orphan, log);
                         }
                     }
                 }
@@ -173,6 +185,7 @@ public class SqlAgentPool {
         String safeReq = requestId.replaceAll("[^a-zA-Z0-9_.-]", "_");
         List<Agent> victims = new ArrayList<>();
         synchronized (lock) {
+            tornDownRequests.add(safeReq);
             Iterator<Map.Entry<String, List<Agent>>> it = pools.entrySet().iterator();
             while (it.hasNext()) {
                 Map.Entry<String, List<Agent>> entry = it.next();
@@ -189,6 +202,17 @@ public class SqlAgentPool {
         if (!victims.isEmpty()) {
             log.info("Tore down " + victims.size() + " SQL agent(s) for request " + requestId);
         }
+    }
+
+    private boolean isTornDownLocked(String poolKey) {
+        int bar = poolKey.indexOf('|');
+        return bar > 0 && tornDownRequests.contains(poolKey.substring(0, bar));
+    }
+
+    private void destroyAgentLater(Agent agent, Logger log) {
+        Thread t = new Thread(() -> destroyAgent(agent, log), "sqlagent-teardown");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** Removes idle-expired agents from all pools; caller destroys them outside the lock. */

@@ -191,7 +191,9 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         CaseRun finalRun;
         if (usePool) {
             warmRun = runOnAgentPool(request, workDir, dockerImage, repoRoot, ctpPayload, attemptNumber, testLogger);
-            if (warmRun == null) {
+            if (warmRun == null && CancelledRequests.isCancelled(request.getRequestId())) {
+                finalRun = null;
+            } else if (warmRun == null) {
                 testLogger.info("SQL agent pool saturated/unavailable; falling back to per-case container");
                 finalRun = runPerCaseContainer(request, workDir, dockerImage, repoRoot, ctpPayload,
                     attemptNumber, false, testLogger);
@@ -351,6 +353,10 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         Path ready = agentWorkDir.resolve(SqlScriptFactory.READY_MARKER);
         Path failed = agentWorkDir.resolve("SETUP_FAILED");
         while (System.currentTimeMillis() < deadline) {
+            if (CancelledRequests.isCancelled(request.getRequestId())) {
+                DockerCtl.safeKillAndRemove(containerName, testLogger);
+                throw new IllegalStateException("Request cancelled while the SQL agent was provisioning");
+            }
             if (Files.exists(ready)) {
                 testLogger.info("SQL agent ready: " + containerName);
                 return new SqlAgentPool.Agent(
