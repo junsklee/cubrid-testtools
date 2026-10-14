@@ -430,8 +430,24 @@ public class TestStatsStore {
      */
     private void replayWAL() {
         List<String> segments = manifest.getSegmentsToReplay();
-        
-        if (segments == null || segments.isEmpty()) {
+        // Segments with content are authoritative. The legacy single file holds the same recent
+        // observations, so it is replayed only when no segment has any (first start after the
+        // segment format was introduced).
+        boolean segmentsHaveData = false;
+        if (segments != null) {
+            for (String segmentName : segments) {
+                try {
+                    Path segmentPath = walDir.resolve(segmentName);
+                    if (Files.exists(segmentPath) && Files.size(segmentPath) > 0) {
+                        segmentsHaveData = true;
+                        break;
+                    }
+                } catch (IOException ignore) {
+                }
+            }
+        }
+
+        if (!segmentsHaveData) {
             // Check for legacy single WAL file (backward compatibility)
             if (Files.exists(walPath)) {
                 logger.warning("[TestStatsStore] Found legacy WAL file, replaying once: " + walPath);
@@ -475,6 +491,29 @@ public class TestStatsStore {
                 totalReplayed, totalSkipped, totalPartial));
     }
 
+    private enum ReplayLine { REPLAYED, SKIPPED, PARTIAL, ERROR }
+
+    private ReplayLine replayLine(String line, boolean isLastLine, Path segmentPath) {
+        try {
+            TestObservation obs = TestObservation.fromJSON(new JSONObject(line));
+            // Skip observations older than last snapshot
+            if (obs.getTimestamp().isBefore(lastSnapshotTime)) {
+                return ReplayLine.SKIPPED;
+            }
+            applyInMemory(obs); // Replay: in-memory only, no WAL/journal write
+            return ReplayLine.REPLAYED;
+        } catch (Exception e) {
+            // Only a parse failure on the final line is expected (truncated by a crash)
+            if (isLastLine) {
+                logger.fine("[TestStatsStore] Ignoring partial final line (likely truncated): " +
+                        (line.length() > 100 ? line.substring(0, 100) + "..." : line));
+                return ReplayLine.PARTIAL;
+            }
+            logger.log(Level.WARNING, "[Replay] Non-final parse error in " + segmentPath.getFileName(), e);
+            return ReplayLine.ERROR;
+        }
+    }
+
     /**
      * Replays a single WAL segment with partial-line-safe parsing.
      *
@@ -500,46 +539,33 @@ public class TestStatsStore {
         try (InputStream in = Files.newInputStream(segmentPath);
              InputStream wrapped = isGzipped ? new java.util.zip.GZIPInputStream(in) : in;
              BufferedReader reader = new BufferedReader(new InputStreamReader(wrapped, java.nio.charset.StandardCharsets.UTF_8))) {
-            List<String> lines = new ArrayList<>();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                lines.add(line);
-            }
-
-            for (int i = 0; i < lines.size(); i++) {
-                line = lines.get(i).trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
-
-                boolean isLastLine = (i == lines.size() - 1);
-
+            // Apply lines as they are read (one line behind, to know which line is last). Reading the
+            // whole file first lost every observation when a truncated gzip tail (a tester killed
+            // mid-append) made the read throw.
+            String pending = null;
+            boolean truncated = false;
+            while (true) {
+                String line;
                 try {
-                    JSONObject obj = new JSONObject(line);
-                    TestObservation obs = TestObservation.fromJSON(obj);
-
-                    // Skip observations older than last snapshot
-                    if (obs.getTimestamp().isBefore(lastSnapshotTime)) {
-                        skipped++;
-                        continue;
-                    }
-
-                    applyInMemory(obs); // Replay: in-memory only, no WAL/journal write
-                    replayed++;
-
-                } catch (Exception e) {
-                    // CRITICAL: Only ignore parse failures on the final line (assume truncated)
-                    if (isLastLine) {
-                        partial++;
-                        logger.fine("[TestStatsStore] Ignoring partial final line (likely truncated): " +
-                                (line.length() > 100 ? line.substring(0, 100) + "..." : line));
-                        break; // Stop at partial line
-                    } else {
-                        // For non-final lines, log but continue (shouldn't happen with valid data)
-                        logger.log(Level.WARNING, "[Replay] Non-final parse error in " + segmentPath.getFileName(), e);
-                        // Continue processing remaining entries
-                    }
+                    line = reader.readLine();
+                } catch (java.io.EOFException | java.util.zip.ZipException torn) {
+                    truncated = true;
+                    logger.warning("[Replay] " + segmentPath.getFileName() + " ends in a truncated record: " + torn.getMessage());
+                    line = null;
                 }
+                if (pending != null) {
+                    ReplayLine outcome = replayLine(pending, line == null, segmentPath);
+                    if (outcome == ReplayLine.REPLAYED) replayed++;
+                    else if (outcome == ReplayLine.SKIPPED) skipped++;
+                    else if (outcome == ReplayLine.PARTIAL) partial++;
+                }
+                if (line == null) {
+                    break;
+                }
+                pending = line.trim().isEmpty() ? null : line.trim();
+            }
+            if (truncated) {
+                partial++;
             }
         } catch (Exception e) {
             logger.log(Level.SEVERE, "[Replay] Failed to replay segment: " + segmentPath, e);
@@ -575,6 +601,37 @@ public class TestStatsStore {
      *
      * <p>IMPORTANT: Each I/O operation has timeout protection to prevent indefinite hangs.
      */
+    /**
+     * Deletes WAL segment files the snapshot now covers (named up to and including the segment just
+     * closed), except the open one. The manifest's retained list drops a closed segment as soon as
+     * a snapshot is written, so cleanup based on that list alone never deleted anything (16,887
+     * segment files had piled up).
+     */
+    private int deleteSegmentsCoveredBySnapshot(String closedSegment, String openSegment) {
+        if (closedSegment == null || closedSegment.isEmpty()) {
+            return 0;
+        }
+        int deleted = 0;
+        try (java.util.stream.Stream<Path> files = Files.list(walDir)) {
+            for (Path file : (Iterable<Path>) files::iterator) {
+                String name = file.getFileName().toString();
+                if (!name.endsWith(".jl") || name.equals(openSegment) || name.compareTo(closedSegment) > 0) {
+                    continue;
+                }
+                try {
+                    if (Files.deleteIfExists(file)) {
+                        deleted++;
+                    }
+                } catch (IOException e) {
+                    logger.log(Level.WARNING, "[Coordinator] Failed to delete segment: " + name, e);
+                }
+            }
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "[Coordinator] Failed to list WAL segments", e);
+        }
+        return deleted;
+    }
+
     private void coordinatedSnapshot() {
         Path snapshotPath = null;
         long startTime = System.currentTimeMillis();
@@ -621,7 +678,7 @@ public class TestStatsStore {
 
             // 4) Cleanup old segments (post-manifest)
             List<String> toCleanup = manifest.getSegmentsToCleanup();
-            int deletedCount = 0;
+            int deletedCount = deleteSegmentsCoveredBySnapshot(closedSegment, newOpenWal);
             int failedCount = 0;
 
             for (String segmentName : toCleanup) {

@@ -248,7 +248,9 @@ public class WALSegmentWriter {
      * <p>CRITICAL: Each observation must be newline-terminated before flush.
      * On replay, treat a non-JSON trailing fragment as "partial line → ignore and stop at EOF".
      */
-    private void writeObservation(TestObservation obs) throws IOException {
+    // Synchronized with rotateSegment: the coordinator rotates from another thread, and writing
+    // while it closed the segment lost the observation ("No open WAL segment" / NPE).
+    private synchronized void writeObservation(TestObservation obs) throws IOException {
         if (currentWriter == null) {
             throw new IOException("No open WAL segment");
         }

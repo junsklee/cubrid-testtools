@@ -180,16 +180,22 @@ public class WALManifest {
      * <p>These are segments created AFTER the snapshot's includesUpToWal.
      */
     public synchronized List<String> getSegmentsToReplay() {
+        List<String> candidates = new ArrayList<>(data.retainedSegments);
+        // The open segment is only added to the retained list when it is closed; after a crash it
+        // holds the newest observations
+        if (data.openWalSegment != null && !data.openWalSegment.isEmpty() && !candidates.contains(data.openWalSegment)) {
+            candidates.add(data.openWalSegment);
+        }
         if (data.includesUpToWal == null || data.includesUpToWal.isEmpty()) {
             // No snapshot yet, replay all retained segments
-            return new ArrayList<>(data.retainedSegments);
+            return candidates;
         }
 
         // Return segments newer than includesUpToWal
         List<String> toReplay = new ArrayList<>();
         boolean foundCutoff = false;
 
-        for (String segment : data.retainedSegments) {
+        for (String segment : candidates) {
             if (segment.equals(data.includesUpToWal)) {
                 foundCutoff = true;
                 continue; // Skip the cutoff segment itself (already in snapshot)

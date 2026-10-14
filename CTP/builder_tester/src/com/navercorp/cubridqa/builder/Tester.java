@@ -165,7 +165,10 @@ public class Tester {
         this.walWriter = new WALSegmentWriter(profilesDir, manifest);
         
         // Initialize TestStatsStore for prediction and scheduling
-        long snapshotIntervalSeconds = config.getLongOrDefault("stats.snapshot_interval_seconds", 300L);
+        // stats_snapshot_interval_seconds is the documented key; stats.snapshot_interval_seconds was
+        // the only one read before
+        long snapshotIntervalSeconds = config.getLongOrDefault("stats_snapshot_interval_seconds",
+            config.getLongOrDefault("stats.snapshot_interval_seconds", 300L));
         this.testStatsStore = new TestStatsStore(profilesDir, snapshotIntervalSeconds, walWriter, manifest, walDir, config);
 
         // Measure node capacity for health endpoint (with config for customizable IOPS)
@@ -245,8 +248,14 @@ public class Tester {
     
     public void start() {
         if (config.isStatsEnabled()) {
+            // Start TestStatsStore first: it loads MANIFEST and the snapshot and replays the WAL
+            // segments. Starting the writer first made it persist an empty manifest over the real
+            // one, so the observations after the last snapshot were never replayed.
+            testStatsStore.start();
+            logger.info("TestStatsStore started");
+
             if (config.isWalCollectionEnabled()) {
-                // Start WAL writer first (acquires lock, opens segment)
+                // Then the WAL writer (acquires lock, appends to the manifest's open segment)
                 try {
                     walWriter.start();
                     logger.info("WALSegmentWriter started");
@@ -257,10 +266,6 @@ public class Tester {
             } else {
                 logger.info("WAL collection disabled (wal_collection_enabled=false); skipping WALSegmentWriter");
             }
-
-            // Start TestStatsStore (loads snapshot, replays WAL, starts coordinator)
-            testStatsStore.start();
-            logger.info("TestStatsStore started");
         } else {
             logger.info("Stats disabled (stats_enabled=false); skipping WAL/TestStatsStore startup");
         }
@@ -314,6 +319,8 @@ public class Tester {
             Config config = new Config(configFile);
             Tester tester = new Tester(config);
             tester.start();
+            // stop_tester.sh sends SIGTERM: write the final stats snapshot and drain the WAL
+            Runtime.getRuntime().addShutdownHook(new Thread(tester::stop, "tester-shutdown"));
         } catch (Exception e) {
             Logger.getLogger(Tester.class.getName()).severe("Failed to start tester: " + e.getMessage());
             e.printStackTrace();
