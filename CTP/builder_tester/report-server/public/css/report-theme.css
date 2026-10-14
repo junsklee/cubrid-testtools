@@ -1,0 +1,103 @@
+/**
+ * Report theme overrides.
+ *
+ * Generated reports embed their whole stylesheet inline at creation time, so
+ * already-saved reports cannot pick up a change to the template. This file is
+ * linked after that inline <style> - both by the template (new reports) and by
+ * the server when it serves a stored report (existing ones) - so one file
+ * themes the entire report history without rewriting any saved HTML.
+ *
+ * Colours come from QAHome's tokens.css so a verdict reads the same here, on
+ * the dashboard, and on the QA result site.
+ */
+
+:root {
+    --surface: #FFFFFF;
+    --panel: #FBF8F1;
+    --field: #FFFFFF;
+    --ink: #1C2430;
+    --muted: #5B6675;
+    --line: #E8DFCE;
+    --cubrid-teal: #3C5A78;
+
+    /* Legacy names used by the baked-in report stylesheet. */
+    --success-color: #1F8A50;
+    --error-color: #C7362B;
+    --warning-color: #C98A15;
+    --info-color: #3C5A78;
+}
+
+/* The page backdrop was a purple gradient; make it the shared flat canvas. */
+body {
+    background: var(--surface) !important;
+    color: var(--ink);
+}
+
+/* These panels were translucent white floating on the gradient. On a light
+   canvas they need a real edge, and ivory rather than a flat white. */
+.header,
+.summary-card,
+.stat-card,
+.results-section,
+.session-card,
+.filters-bar {
+    background: var(--panel) !important;
+    border: 1px solid var(--line);
+}
+
+/* Text that was white-on-gradient. */
+.container > h1 { color: var(--ink); }
+.container > p { color: var(--muted); }
+
+/* ---------------------------------------------------------------------------
+   The report's baked-in stylesheet layers translucent white panels and
+   indigo-tinted chips, which were designed for the old purple gradient page.
+   On the warm canvas they read cool and washed out, so the panels take the
+   ivory surface and the chips take the one CUBRID accent.
+   --------------------------------------------------------------------------- */
+
+.header,
+.metadata,
+.test-execution-modern,
+.execution-card,
+.expandable-content,
+.commit-card,
+.commit-card:hover,
+.baseline-rail .base,
+.baseline-rail .base:hover,
+.baseline-rail .commit-card,
+.baseline-rail .commit-card:hover,
+.stat-card,
+.stat-card:hover,
+.results-table {
+    background: var(--field) !important;
+    border-color: var(--line);
+}
+
+/* Indigo/blue chips -> the muted CUBRID accent. */
+.request-id,
+.card-icon,
+.attempt-value,
+.commit-sha,
+.metadata-value.commit-hash,
+.metadata-value.commit-hash:hover {
+    background: rgba(60, 90, 120, 0.10) !important;
+    color: var(--cubrid-teal) !important;
+}
+
+.card-icon svg,
+.card-icon i { color: var(--cubrid-teal); }
+
+/* Decorative tint bars inherited from the gradient era. */
+.commit-card::before,
+.baseline-rail .commit-card::before,
+.expandable-content::before,
+.attempt-divider {
+    background: var(--line) !important;
+}
+
+.btn-secondary {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--ink);
+}

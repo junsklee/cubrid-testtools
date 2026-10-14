@@ -7,6 +7,7 @@ const router = express.Router();
 const path = require('path');
 const config = require('../config');
 const fileService = require('../services/fileService');
+const reportController = require('../controllers/reportController');
 
 // Main dashboard
 router.get('/', async (req, res) => {
@@ -31,8 +32,10 @@ router.get('/dashboard/report', async (req, res) => {
         // This loads the same report functionality as /report but from dashboard context
         const reportPath = fileService.getReportPath(id);
         const reportHtml = await fileService.readFile(reportPath);
-        
-        res.send(reportHtml);
+
+        // Same theme injection the /report route does, so a report looks the
+        // same whichever route served it.
+        res.send(reportController.applyReportTheme(reportHtml));
     } catch (err) {
         console.error('Error viewing dashboard report:', err);
         res.status(404).send('<h1>Report not found</h1>');

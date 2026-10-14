@@ -423,24 +423,24 @@
         badge.style.cssText = 'display: inline-block; margin-left: 0.5rem; padding: 0.05rem 0.4rem; ' +
             'border-radius: 0.25rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; ' +
             (type === 'sql'
-                ? 'background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35);'
-                : 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);');
+                ? 'background: var(--accent-soft); color: var(--teal-ink); border: 1px solid rgba(60, 90, 120, 0.3);'
+                : 'background: var(--row-hover); color: var(--muted); border: 1px solid var(--line);');
         return badge;
     }
 
-    // Create a DOCKER/VM badge showing where a report's tests ran (null when no test ran)
+    // Create a DOCKER/VM badge for a report row (null when no test ran)
     function createExecutionModeBadge(mode) {
         const m = (mode || '').toString().toLowerCase();
         const styles = {
-            docker: 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);',
-            direct: 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);',
-            vm: 'background: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px solid rgba(20, 184, 166, 0.45);',
-            mixed: 'background: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px dashed rgba(20, 184, 166, 0.45);'
+            docker: 'background: var(--row-hover); color: var(--muted); border: 1px solid var(--line);',
+            vm: 'background: transparent; color: var(--primary); border: 1px solid var(--primary);',
+            direct: 'background: var(--row-hover); color: var(--muted); border: 1px solid var(--line);',
+            mixed: 'background: transparent; color: var(--primary); border: 1px dashed var(--primary);'
         };
         const titles = {
             docker: 'Tests ran in Docker containers',
-            direct: 'Tests ran directly on the tester host',
             vm: 'Tests ran on QA VMs (regression-equivalent, one case at a time)',
+            direct: 'Tests ran directly on the tester host',
             mixed: 'Tests ran on both Docker and VM testers'
         };
         if (!styles[m]) return null;

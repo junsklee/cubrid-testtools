@@ -13,6 +13,28 @@
         let customScriptAttachments = []; // { name, size, targetPath, contentBase64 }
         let customScriptAttachmentsLoading = 0;
 
+        // Testcase repository per test type. Shell and SQL cases live in different
+        // repos, so the "Test Cases Branch" field means a different branch for each
+        // and the builder takes it under a different payload key.
+        const DEFAULT_TEST_TYPE = 'shell';
+        const DEFAULT_TC_BRANCH = 'develop';
+        const TC_REPOS = {
+            shell: {
+                repo: 'cubrid-testcases-private-ex',
+                url: 'https://github.com/CUBRID/cubrid-testcases-private-ex',
+                payloadKey: 'shellTcBranch'
+            },
+            sql: {
+                repo: 'cubrid-testcases',
+                url: 'https://github.com/CUBRID/cubrid-testcases',
+                payloadKey: 'sqlTcBranch'
+            }
+        };
+        // One remembered branch per test type: a branch of the shell repo usually does
+        // not exist in the SQL repo, so switching test type must not carry it over.
+        const tcBranchByTestType = { shell: DEFAULT_TC_BRANCH, sql: DEFAULT_TC_BRANCH };
+        let tcBranchInputTestType = DEFAULT_TEST_TYPE; // test type whose branch the input currently holds
+
         function onBuildModeRadioChange(event) {
             const target = event && event.target;
             if (!target || target.name !== 'buildMode') return;
@@ -50,8 +72,24 @@
             refreshBuildQueue();
             updateBaselineDisplay();
             refreshBuilderCommitMode();
+            resetTestTypeToDefault();
             applyBuildOnlyState();
         });
+
+        // Browsers restore <select> and <input> values across reloads and back
+        // navigation, so a page reload could silently resume the previous session's
+        // SQL selection. Pin the test type (and its testcases branch) back to the
+        // Shell default on every load.
+        function resetTestTypeToDefault() {
+            const select = document.getElementById('testTypeSelect');
+            if (select) select.value = DEFAULT_TEST_TYPE;
+            const tcBranchInput = document.getElementById('tcBranchInput');
+            if (tcBranchInput) tcBranchInput.value = DEFAULT_TC_BRANCH;
+            tcBranchByTestType.shell = DEFAULT_TC_BRANCH;
+            tcBranchByTestType.sql = DEFAULT_TC_BRANCH;
+            tcBranchInputTestType = DEFAULT_TEST_TYPE;
+            applyCustomFieldsForTestType();
+        }
 
         // Latest queue snapshot (load-first: refreshed on page load, manual refresh, and background polling)
         // Builder runs at most one request at a time; the rest are queued.
@@ -123,7 +161,11 @@
 
                 const runningCount = lastQueueSnapshot.running ? 1 : 0;
                 const queuedCount = Array.isArray(lastQueueSnapshot.queued) ? lastQueueSnapshot.queued.length : 0;
-                summaryEl.textContent = `Running: ${runningCount} | Queued: ${queuedCount}`;
+                const busy = (runningCount + queuedCount) > 0;
+                summaryEl.innerHTML = '<span class="pipeline-state ' + (busy ? 'busy' : 'idle') + '">' +
+                    '<span class="live-dot"></span>' +
+                    (busy ? runningCount + ' running, ' + queuedCount + ' queued' : 'Idle') +
+                    '</span>';
 
                 const items = [];
                 const shouldShowFinished = !!transientFinishedTaskId &&
@@ -131,7 +173,9 @@
                     !(Array.isArray(lastQueueSnapshot.queued) && lastQueueSnapshot.queued.includes(transientFinishedTaskId));
 
                 if (!lastQueueSnapshot.running && queuedCount === 0 && !shouldShowFinished) {
-                    itemsEl.innerHTML = '<div style="color: var(--text-secondary);">No active or queued builds.</div>';
+                    // The static placeholder inside #statusMonitor already says this
+                    // when nothing is running; a second copy here just repeats it.
+                    itemsEl.innerHTML = '';
                     return lastQueueSnapshot;
                 }
 
@@ -330,6 +374,16 @@
                     applyBuildOnlyState();
                 });
             }
+
+            const reuseArtifactsToggle = document.getElementById('reuseArtifactsToggle');
+            if (reuseArtifactsToggle) {
+                reuseArtifactsToggle.addEventListener('change', () => {
+                    const warning = document.getElementById('reuseArtifactsWarning');
+                    if (warning) {
+                        warning.style.display = reuseArtifactsToggle.checked ? 'block' : 'none';
+                    }
+                });
+            }
         }
 
         function validateGitRefName(branch) {
@@ -366,19 +420,19 @@
             return getValidatedGitRefInput('cubridBranchInput', DEFAULT_CUBRID_BRANCH, 'CUBRID branch', options);
         }
 
-        function getSelectedShellTcBranch(options = {}) {
-            return getValidatedGitRefInput('shellTcBranchInput', 'develop', 'testcases branch', options);
+        function getSelectedTcBranch(options = {}) {
+            return getValidatedGitRefInput('tcBranchInput', DEFAULT_TC_BRANCH, 'testcases branch', options);
         }
 
         function getSelectedTestType() {
             const select = document.getElementById('testTypeSelect');
-            return (select && select.value === 'sql') ? 'sql' : 'shell';
+            return (select && select.value === 'sql') ? 'sql' : DEFAULT_TEST_TYPE;
         }
 
         // Test type selector changed (called from HTML onchange)
         function onTestTypeChange() {
             applyTestCasesDisabledState();
-            applyShellTcBranchSectionState();
+            applyTcBranchSectionState();
             applyCustomFieldsForTestType();
         }
 
@@ -450,11 +504,27 @@
             }
         }
 
-        function applyShellTcBranchSectionState() {
-            const section = document.getElementById('shellTcBranchSection');
+        function applyTcBranchSectionState() {
+            const section = document.getElementById('tcBranchSection');
             if (!section) return;
-            const visible = commitMode === 'manual' && !isBuildOnlyActive() && getSelectedTestType() !== 'sql';
+            const visible = commitMode === 'manual' && !isBuildOnlyActive();
             section.style.display = visible ? 'block' : 'none';
+
+            // Swap the remembered branch when the test type (and therefore the repo) changes.
+            const testType = getSelectedTestType();
+            const input = document.getElementById('tcBranchInput');
+            if (input && testType !== tcBranchInputTestType) {
+                tcBranchByTestType[tcBranchInputTestType] = (input.value || '').trim() || DEFAULT_TC_BRANCH;
+                input.value = tcBranchByTestType[testType] || DEFAULT_TC_BRANCH;
+                tcBranchInputTestType = testType;
+            }
+
+            const icon = document.getElementById('tcBranchInfoIcon');
+            if (icon) {
+                const meta = TC_REPOS[testType];
+                icon.setAttribute('title',
+                    `Selects the branch in the TC repository ${meta.repo}. Default: ${DEFAULT_TC_BRANCH}.\n\nRepo: ${meta.url}`);
+            }
         }
 
         function applyBuildOnlyState() {
@@ -504,7 +574,7 @@
             });
 
             applyTestCasesDisabledState();
-            applyShellTcBranchSectionState();
+            applyTcBranchSectionState();
         }
 
         function arrayBufferToBase64(buffer) {
@@ -554,7 +624,7 @@
                                 </div>
                                 <div style="margin-top: 0.35rem;">
                                     <label style="display:block; color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.25rem;">Target path (relative)</label>
-                                    <input type="text" class="form-input" data-attach-idx="${idx}" value="${escapeHtml(a.targetPath)}" style="width: 100%;">
+                                    <input type="text" class="form-input" data-attach-idx="${idx}" value="${escapeAttr(a.targetPath)}" style="width: 100%;">
                                     ${errHtml}
                                 </div>
                             </div>
@@ -971,7 +1041,7 @@
             }
 
             applyTestCasesDisabledState();
-            applyShellTcBranchSectionState();
+            applyTcBranchSectionState();
             applyCustomFieldsForTestType();
 
             updateCommitCount();
@@ -987,16 +1057,24 @@
         // Toggle advanced configuration panel
         function toggleAdvanced() {
             const panel = document.getElementById('advancedPanel');
-            const icon = document.querySelector('.toggle-icon');
+            const collapsed = !panel || panel.style.display === 'none' || !panel.style.display;
+            setAdvancedExpanded(collapsed, true);
+        }
 
-            if (panel.style.display === 'none' || !panel.style.display) {
+        // Callback URL now lives in the advanced panel, so validation failures need
+        // to be able to open it; `notify` keeps the toast for explicit user toggles.
+        function setAdvancedExpanded(expanded, notify = false) {
+            const panel = document.getElementById('advancedPanel');
+            const icon = document.querySelector('.toggle-icon');
+            if (!panel) return;
+            if (expanded) {
                 panel.style.display = 'block';
-                icon.textContent = '▲';
-                showToast('Advanced configuration expanded', 'info');
+                if (icon) icon.textContent = '▲';
+                if (notify) showToast('Advanced configuration expanded', 'info');
             } else {
                 panel.style.display = 'none';
-                icon.textContent = '▼';
-                showToast('Advanced configuration collapsed', 'info');
+                if (icon) icon.textContent = '▼';
+                if (notify) showToast('Advanced configuration collapsed', 'info');
             }
         }
 
@@ -1087,6 +1165,20 @@
                 showToast('Invalid callback URL format', 'warning');
                 return false;
             }
+        }
+
+        // Resolve a branch (or any ref) to its head commit SHA via the GitHub proxy.
+        async function resolveBranchHeadCommit(branch) {
+            const response = await fetch(`/api/github/commit/${encodeURIComponent(branch)}`);
+            if (!response.ok) {
+                throw new Error(`Failed to resolve the latest commit on branch '${branch}'`);
+            }
+            const commit = await response.json();
+            if (!commit || !commit.sha) {
+                const detail = (commit && commit.message) ? ` (${commit.message})` : '';
+                throw new Error(`Could not resolve the latest commit on branch '${branch}'${detail}`);
+            }
+            return commit.sha;
         }
 
         // Validate commits exist
@@ -1220,8 +1312,8 @@
                 const manualCubridBranch = commitMode === 'manual'
                     ? getSelectedCubridBranch({ syncInput: true })
                     : null;
-                const manualShellTcBranch = (commitMode === 'manual' && !buildOnly && getSelectedTestType() !== 'sql')
-                    ? getSelectedShellTcBranch({ syncInput: true })
+                const manualTcBranch = (commitMode === 'manual' && !buildOnly)
+                    ? getSelectedTcBranch({ syncInput: true })
                     : null;
 
                 if (!isBuildOnlyAvailable() && isBuildOnlyEnabled()) {
@@ -1239,13 +1331,23 @@
                     payloadCommits = manualInput.split(/[\,\n]/)
                         .map(s => s.trim())
                         .filter(s => s.length > 0);
-                    // Validate manual commits
-                    showToast('Validating commits...', 'info');
-                    const valid = await validateCommits(payloadCommits);
-                    if (!valid) {
-                        throw new Error('Invalid commits detected');
+                    if (payloadCommits.length === 0) {
+                        // No commit given: fall back to the head of the selected CUBRID branch.
+                        const branch = manualCubridBranch || DEFAULT_CUBRID_BRANCH;
+                        showToast(`Resolving the latest commit on ${branch}...`, 'info');
+                        const headSha = await resolveBranchHeadCommit(branch);
+                        payloadCommits = [headSha];
+                        document.getElementById('manualCommitInput').value = headSha;
+                        updateCommitCount();
+                        showToast(`Using latest commit on ${branch}: ${headSha.substring(0, 12)}`, 'info');
+                    } else {
+                        // Validate manual commits
+                        showToast('Validating commits...', 'info');
+                        const valid = await validateCommits(payloadCommits);
+                        if (!valid) {
+                            throw new Error('Invalid commits detected');
+                        }
                     }
-                    if (payloadCommits.length === 0) throw new Error('Please enter at least one commit');
                 } else if (commitMode === 'pr') {
                     const prVal = (document.getElementById('prNumberInput').value || '').trim();
                     if (!prVal || !/^\d+$/.test(prVal)) throw new Error('Please enter a valid PR number');
@@ -1338,6 +1440,7 @@
                 
                 // Validate callback URL
                 if (!validateCallbackUrl()) {
+                    setAdvancedExpanded(true);
                     throw new Error('Invalid callback URL');
                 }
                 
@@ -1359,8 +1462,8 @@
                 if (manualCubridBranch) {
                     payload.cubridBranch = manualCubridBranch;
                 }
-                if (manualShellTcBranch) {
-                    payload.shellTcBranch = manualShellTcBranch;
+                if (manualTcBranch) {
+                    payload[TC_REPOS[getSelectedTestType()].payloadKey] = manualTcBranch;
                 }
                 if (!buildOnly) {
                     payload.workerIps = workers;
@@ -1369,6 +1472,12 @@
                     payload.prNumber = prNumberPayload;
                 } else {
                     payload.commits = payloadCommits;
+                }
+
+                // Advanced: opt this request into workspace reuse. Sent only when the
+                // user asked for it, so leaving it alone keeps the builder's default.
+                if ((document.getElementById('reuseArtifactsToggle') || {}).checked) {
+                    payload.reuseArtifacts = true;
                 }
 
                 // Prefer commitBuildMode everywhere; builder also supports use_baseline_cherrypick for backward compatibility.
@@ -2238,6 +2347,12 @@
         }
 
         // Load recent reports
+        //
+        // The list API already returns a verdict and per-status test counts for
+        // every request; the old row rendered only the id and a timestamp, so a
+        // reader had to open each report to learn whether it passed. Each row now
+        // carries its outcome, with an icon and text label beside the color so the
+        // verdict never depends on hue alone.
         async function loadRecentReports() {
             const container = document.getElementById('recentReports');
             if (!container) return;
@@ -2245,7 +2360,7 @@
             container.innerHTML = '<div class="spinner"></div>';
 
             try {
-                const res = await fetch('/api/reports?page=1&pageSize=5');
+                const res = await fetch('/api/reports?page=1&pageSize=6');
                 const data = await res.json();
 
                 if (!data.items || data.items.length === 0) {
@@ -2253,58 +2368,43 @@
                     return;
                 }
 
-                // Show first 5 reports with better formatting
-                const reportsList = document.createElement('div');
-                reportsList.className = 'reports-list';
+                container.innerHTML = data.items.map(report => {
+                    const type = (report.testType || '').toLowerCase();
+                    const typeLabel = (type === 'sql' || type === 'shell') ? type.toUpperCase() : '';
+                    const when = formatDate(report.modified);
+                    const time = new Date(report.modified).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    // Build-only requests ran no tests; their "pass" count is the
+                    // build row itself, which reads as a contradiction beside a
+                    // failed-build verdict. The verdict pill already says the outcome.
+                    const counts = report.buildOnly ? null : report.testCounts;
+                    const commit = report.firstCommit
+                        ? '<code style="color: var(--text-secondary);">' + escapeHtml(report.firstCommit) + '</code>'
+                        : '';
+                    const modeLabels = { docker: 'Docker', vm: 'VM', direct: 'Direct', mixed: 'Docker + VM' };
+                    const modeLabel = modeLabels[(report.executionMode || '').toLowerCase()] || '';
+                    const bits = [when + ' ' + time];
+                    if (typeLabel) bits.push(typeLabel);
+                    if (modeLabel) bits.push(modeLabel);
+                    if (report.buildOnly) bits.push('build-only');
 
-                for (const report of data.items) {
-                    const reportItem = document.createElement('div');
-                    reportItem.className = 'report-item';
-
-                    const reportLink = document.createElement('a');
-                    reportLink.href = `/report?id=${report.id}`;
-                    reportLink.textContent = report.id;
-                    reportLink.target = '_blank';
-                    reportLink.style.color = 'var(--primary)';
-                    reportLink.style.textDecoration = 'none';
-                    reportLink.addEventListener('mouseenter', function() {
-                        this.style.color = 'var(--primary-hover)';
-                    });
-                    reportLink.addEventListener('mouseleave', function() {
-                        this.style.color = 'var(--primary)';
-                    });
-
-                    // Add date info
-                    const dateSpan = document.createElement('span');
-                    dateSpan.style.color = 'var(--text-secondary)';
-                    dateSpan.style.fontSize = '0.875rem';
-                    dateSpan.style.marginLeft = '0.5rem';
-                    dateSpan.textContent = new Date(report.modified).toLocaleString();
-
-                    reportItem.appendChild(reportLink);
-
-                    // Test type badge (SQL/SHELL) when known; legacy reports have no badge
-                    const typeBadge = createTestTypeBadge(report.testType);
-                    if (typeBadge) {
-                        reportItem.appendChild(typeBadge);
-                    }
-                    // Where the tests ran (DOCKER/VM); reports with no test run have no badge
-                    const modeBadge = createExecutionModeBadge(report.executionMode);
-                    if (modeBadge) {
-                        reportItem.appendChild(modeBadge);
-                    }
-
-                    reportItem.appendChild(dateSpan);
-                    reportsList.appendChild(reportItem);
-                }
-
-                container.innerHTML = '';
-                container.appendChild(reportsList);
-
-                showToast('Reports loaded successfully', 'success');
+                    return '' +
+                        '<div class="report-row">' +
+                            '<div class="report-row-main">' +
+                                '<a class="report-row-id" href="/report?id=' + encodeURIComponent(report.id) + '" target="_blank" rel="noopener">' +
+                                    escapeHtml(report.id) +
+                                '</a>' +
+                                '<div class="report-row-sub">' +
+                                    '<span>' + bits.map(escapeHtml).join(' \u00b7 ') + '</span>' +
+                                    (commit ? '<span>' + commit + '</span>' : '') +
+                                    countChips(counts) +
+                                '</div>' +
+                            '</div>' +
+                            verdictPill(report.verdict) +
+                        '</div>';
+                }).join('');
             } catch (e) {
                 console.error('Error loading reports:', e);
-                container.innerHTML = '<p style="color: var(--error); text-align: center;">Failed to load reports</p>';
+                container.innerHTML = '<p style="color: var(--st-bad-ink); text-align: center;">Failed to load reports</p>';
                 showToast('Failed to load reports', 'error');
             }
         }
@@ -2408,6 +2508,15 @@
             return div.innerHTML;
         }
 
+        // escapeHtml() goes through textContent/innerHTML, which escapes < > &
+        // but leaves quotes intact - so its output breaks out of a quoted
+        // attribute. Anything interpolated into an attribute needs this instead.
+        function escapeAttr(text) {
+            return escapeHtml(text == null ? '' : String(text))
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         // Create a small SQL/SHELL badge for a report row (null when type is unknown)
         function createTestTypeBadge(testType) {
             const type = (testType || '').toString().toLowerCase();
@@ -2418,32 +2527,8 @@
             badge.style.cssText = 'display: inline-block; margin-left: 0.5rem; padding: 0.05rem 0.4rem; ' +
                 'border-radius: 0.25rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; ' +
                 (type === 'sql'
-                    ? 'background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35);'
-                    : 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);');
-            return badge;
-        }
-
-        // Create a DOCKER/VM badge showing where a report's tests ran (null when no test ran)
-        function createExecutionModeBadge(mode) {
-            const m = (mode || '').toString().toLowerCase();
-            const styles = {
-                docker: 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);',
-                direct: 'background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.35);',
-                vm: 'background: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px solid rgba(20, 184, 166, 0.45);',
-                mixed: 'background: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px dashed rgba(20, 184, 166, 0.45);'
-            };
-            const titles = {
-                docker: 'Tests ran in Docker containers',
-                direct: 'Tests ran directly on the tester host',
-                vm: 'Tests ran on QA VMs (regression-equivalent, one case at a time)',
-                mixed: 'Tests ran on both Docker and VM testers'
-            };
-            if (!styles[m]) return null;
-            const badge = document.createElement('span');
-            badge.textContent = m.toUpperCase();
-            badge.title = titles[m];
-            badge.style.cssText = 'display: inline-block; margin-left: 0.35rem; padding: 0.05rem 0.4rem; ' +
-                'border-radius: 0.25rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; ' + styles[m];
+                    ? 'background: var(--accent-soft); color: var(--teal-ink); border: 1px solid rgba(60, 90, 120, 0.3);'
+                    : 'background: var(--row-hover); color: var(--muted); border: 1px solid var(--line);');
             return badge;
         }
 
@@ -2469,3 +2554,142 @@
             }
         `;
         document.head.appendChild(style);
+
+        /* ---- Outcome-bearing report rows ---------------------------------- */
+
+        const VERDICT_ICON = {
+            'verdict-success': '✓',
+            'verdict-bug': '✕',
+            'verdict-error': '✕',
+            'verdict-flaky': '⚠',
+            'verdict-unstable': '⚠',
+            'verdict-preexisting': '○'
+        };
+
+        /**
+         * Compact verdict label. The full sentence ("Failure no longer observed
+         * after: 8dbc2dc (fixed-runs)") is far too long for a list row - it
+         * squeezed the request id down to an ellipsis - so the row shows a short
+         * label and keeps the full wording in the tooltip.
+         */
+        function shortVerdict(verdict) {
+            const text = (verdict.text || '').toLowerCase();
+            // Checked before the build cases: the text reads "Build successful
+            // ... - artifact upload failed", and the upload is what needs acting on.
+            if (text.includes('upload failed')) return 'Upload failed';
+            if (text.includes('build failed')) return 'Build failed';
+            if (text.includes('build successful') || text.includes('builds successful')) return 'Build OK';
+            if (text.includes('no longer observed')) return 'Fixed';
+            if (text.includes('pre-existing') || verdict.class === 'verdict-preexisting') return 'Pre-existing';
+            if (text.includes('failure') || text.includes('failures')) return 'Failure';
+            if (text.includes('all runs passed')) return 'Pass (all runs)';
+            if (text.includes('pass')) return 'Pass';
+            if (verdict.class === 'verdict-flaky' || verdict.class === 'verdict-unstable') return 'Flaky';
+            return verdict.text;
+        }
+
+        function verdictPill(verdict) {
+            if (!verdict || !verdict.text) {
+                return '<span class="verdict-pill v-neutral"><span class="vp-icon">○</span>No verdict</span>';
+            }
+            const cls = (verdict.class || 'verdict-preexisting').replace('verdict-', 'v-');
+            const icon = VERDICT_ICON[verdict.class] || '○';
+            return '<span class="verdict-pill ' + cls + '" title="' + escapeAttr(verdict.text) + '">' +
+                   '<span class="vp-icon">' + icon + '</span>' + escapeHtml(shortVerdict(verdict)) + '</span>';
+        }
+
+        function countChips(counts) {
+            if (!counts) return '';
+            const parts = [];
+            if (counts.pass) parts.push('<span class="rc pass">✓ ' + counts.pass + '</span>');
+            if (counts.fail || counts.error) {
+                parts.push('<span class="rc fail">✕ ' + ((counts.fail || 0) + (counts.error || 0)) + '</span>');
+            }
+            if (counts.flaky || counts.unstable) {
+                parts.push('<span class="rc shaky">⚠ ' + ((counts.flaky || 0) + (counts.unstable || 0)) + '</span>');
+            }
+            return parts.length ? '<span class="report-row-counts">' + parts.join('') + '</span>' : '';
+        }
+
+        /* ====================================================================
+           BUILDER LOG LIGHTBOX
+           --------------------------------------------------------------------
+           The live <pre> is MOVED into the lightbox rather than copied. The
+           tail writer targets #builderLogArea by id and appends to it on every
+           poll, so moving the element keeps the log streaming while expanded
+           and avoids keeping two copies in sync. On close it goes back to its
+           original slot.
+           ================================================================== */
+
+        let logLightboxOpen = false;
+
+        /** True when the element is scrolled to (or near) the bottom. */
+        function isScrolledToBottom(el) {
+            return el.scrollHeight - el.scrollTop <= el.clientHeight + 50;
+        }
+
+        function openLogLightbox() {
+            if (logLightboxOpen) return;
+            const area = document.getElementById('builderLogArea');
+            const body = document.getElementById('logLightboxBody');
+            const box = document.getElementById('logLightbox');
+            if (!area || !body || !box) return;
+
+            // Carry the tailed file name across so the panel says what it shows.
+            const srcTitle = document.getElementById('builderLogTitle');
+            const dstTitle = document.getElementById('logLightboxTitle');
+            if (srcTitle && dstTitle) dstTitle.textContent = srcTitle.textContent || 'Builder Log';
+
+            const wasAtBottom = isScrolledToBottom(area);
+            const prevTop = area.scrollTop;
+
+            body.appendChild(area);
+            box.hidden = false;
+            logLightboxOpen = true;
+            // The page behind must not scroll under the overlay.
+            document.body.style.overflow = 'hidden';
+
+            // Following the tail is the common case, so keep the view pinned to
+            // the end if it was already there.
+            area.scrollTop = wasAtBottom ? area.scrollHeight : prevTop;
+
+            const closeBtn = box.querySelector('.log-lightbox-close');
+            if (closeBtn) closeBtn.focus();
+        }
+
+        function closeLogLightbox() {
+            if (!logLightboxOpen) return;
+            const area = document.getElementById('builderLogArea');
+            const shell = document.getElementById('builderLogShell');
+            const box = document.getElementById('logLightbox');
+            if (!box) return;
+
+            const wasAtBottom = area ? isScrolledToBottom(area) : true;
+
+            if (area && shell) shell.appendChild(area);
+            box.hidden = true;
+            logLightboxOpen = false;
+            document.body.style.overflow = '';
+
+            if (area && wasAtBottom) area.scrollTop = area.scrollHeight;
+
+            const btn = document.getElementById('builderLogExpandBtn');
+            if (btn) btn.focus();
+        }
+
+        // Clicking the scrim closes; clicks inside the panel must not bubble out
+        // and close it, which is why this tests the event target itself.
+        document.addEventListener('click', (e) => {
+            if (!logLightboxOpen) return;
+            if (e.target && e.target.id === 'logLightbox') closeLogLightbox();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (logLightboxOpen && e.key === 'Escape') {
+                e.preventDefault();
+                closeLogLightbox();
+            }
+        });
+
+        window.openLogLightbox = openLogLightbox;
+        window.closeLogLightbox = closeLogLightbox;

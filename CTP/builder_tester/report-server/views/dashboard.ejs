@@ -17,11 +17,8 @@
     </script>
 </head>
 <body>
-    <div class="bg-animation"></div>
-    
     <header class="header">
         <div class="logo">
-            <div class="logo-icon">BT</div>
             <h1>CUBRID Builder-Tester</h1>
         </div>
         <button class="info-button" onclick="showSystemInfo()">
@@ -35,10 +32,13 @@
     </header>
 
     <div class="container">
+
+        <div class="dash-grid">
+            <div class="dash-col">
         <!-- Request Builder Card -->
         <div class="card">
             <h2 class="card-title">
-                <div class="card-title-icon">📤</div>
+                <div class="card-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></div>
                 Build Test Request
             </h2>
 
@@ -78,14 +78,18 @@
                     <div class="form-group branch-config-group">
                         <label class="form-label" for="cubridBranchInput">
                             CUBRID Branch
-                            <span class="info-icon" title="Selects the branch in the CUBRID engine repository. Default: develop.&#10;&#10;Repo: https://github.com/cubrid/cubrid">ⓘ</span>
+                            <span class="info-icon" title="Selects the branch in the CUBRID engine repository. Default: develop.&#10;&#10;Repo: https://github.com/cubrid/cubrid"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                         </label>
                         <input type="text" class="form-input" id="cubridBranchInput"
                             value="<%= config.github.defaultBranch %>"
                             placeholder="develop">
                     </div>
+                    <label class="form-label" for="manualCommitInput" style="margin-top: 1rem;">
+                        Commit SHAs <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
+                        <span class="info-icon" title="If empty, builds the latest commit on the selected CUBRID branch.&#10;&#10;Otherwise enter commit SHAs, one per line or comma-separated."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                    </label>
                     <textarea class="form-textarea" id="manualCommitInput"
-                        placeholder="Enter commit SHAs (one per line or comma-separated)&#10;Example:&#10;568fbb5370f4f1b6149218221d7fe4f9daa59168&#10;b534d0a4f28921c8e590f68f606049e1b643e252"></textarea>
+                        placeholder="Enter commit SHAs (one per line or comma-separated)&#10;Leave empty to build the latest commit on the selected CUBRID branch&#10;Example:&#10;568fbb5370f4f1b6149218221d7fe4f9daa59168&#10;b534d0a4f28921c8e590f68f606049e1b643e252"></textarea>
                 </div>
 
                 <div id="prCommits" class="commit-section" style="display: none;">
@@ -97,7 +101,7 @@
                     <div style="margin-bottom: 1rem;">
                         <label class="form-label">
                             Commit SHA or PR Number <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
-                            <span class="info-icon" title="If empty, uses the latest commit from the 'develop' branch.">ⓘ</span>
+                            <span class="info-icon" title="If empty, uses the latest commit from the 'develop' branch."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                         </label>
                         <input type="text" class="form-input" id="customScriptCommitInput"
                             placeholder="Enter commit SHA or PR number (e.g., 6ea587e or pr:6402)">
@@ -108,7 +112,7 @@
                         <div style="margin-bottom: 1rem;">
                             <label class="form-label">
                                     Test Case Path <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
-                                    <span class="info-icon" title="If provided: Changes to the directory containing the test script, then replaces the script’s contents with your custom script before execution.&#10;&#10; Complete this section if your custom script depends on additional files (e.g., .answer, .sql) located in the test case directory.">ⓘ</span>
+                                    <span class="info-icon" title="If provided: Changes to the directory containing the test script, then replaces the script’s contents with your custom script before execution.&#10;&#10; Complete this section if your custom script depends on additional files (e.g., .answer, .sql) located in the test case directory."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <input type="text" class="form-input" id="customScriptTestPath"
                                 placeholder="Enter test case path (e.g., shell/_36_damson/cbrd_22637/cases/cbrd_22637.sh)">
@@ -117,7 +121,7 @@
                         <div style="margin-bottom: 1rem;">
                             <label class="form-label">
                                 Attach Files <span style="color: var(--text-secondary); font-weight: normal;">(Optional)</span>
-                                <span class="info-icon" title="Files will be created/overwritten next to the executed custom script.&#10;&#10;If Test Case Path is provided, files go into that directory. Otherwise, files go into the default custom script working directory.&#10;&#10;Max 20 files, 5MB total. Paths are relative (no leading '/', no '..').">ⓘ</span>
+                                <span class="info-icon" title="Files will be created/overwritten next to the executed custom script.&#10;&#10;If Test Case Path is provided, files go into that directory. Otherwise, files go into the default custom script working directory.&#10;&#10;Max 20 files, 5MB total. Paths are relative (no leading '/', no '..')."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <input type="file" id="customScriptAttachments" class="file-input-hidden" multiple>
                             <div class="file-upload-row">
@@ -129,12 +133,12 @@
 
                         <div>
                             <label class="form-label">
-                                Custom Shell Script Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
-                                <span class="info-icon" title="This script will be executed instead of a standard test. Environment variables (CUBRID, CTP_HOME, PATH, LD_LIBRARY_PATH) will be set up automatically.">ⓘ</span>
+                                Custom Shell Script Contents <span style="color: #7a1230; font-weight: normal;">(Required)</span>
+                                <span class="info-icon" title="This script will be executed instead of a standard test. Environment variables (CUBRID, CTP_HOME, PATH, LD_LIBRARY_PATH) will be set up automatically."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <textarea class="form-textarea" id="customScriptContent"
                                 rows="20"
-                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
+                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #f6f8fa; color: #1f2937;"
                                 placeholder="# Paste your script here (example below):&#10;&#10;#!/bin/sh&#10;. $init_path/init.sh&#10;init test&#10;&#10;dbname=cbrd_XXXXX&#10;cubrid_createdb $dbname&#10;cubrid server start $dbname&#10;&#10;# Test contents...&#10;&#10;cubrid server stop $dbname&#10;cubrid deletedb $dbname&#10;&#10;finish"></textarea>
                         </div>
                     </div>
@@ -143,23 +147,23 @@
                     <div id="customSqlFields" style="display: none;">
                         <div style="margin-bottom: 1rem;">
                             <label class="form-label">
-                                SQL Script Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
-                                <span class="info-icon" title="An ad-hoc SQL test case, run by CTP's ConsoleAgent against a freshly provisioned 'basic' database in a Docker container. Same format as a cubrid-testcases .sql case (statements separated by ';', CTP directives like --+ holdcas on / --@queryplan supported).">ⓘ</span>
+                                SQL Script Contents <span style="color: #7a1230; font-weight: normal;">(Required)</span>
+                                <span class="info-icon" title="An ad-hoc SQL test case, run by CTP's ConsoleAgent against a freshly provisioned 'basic' database in a Docker container. Same format as a cubrid-testcases .sql case (statements separated by ';', CTP directives like --+ holdcas on / --@queryplan supported)."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <textarea class="form-textarea" id="customSqlScriptContent"
                                 rows="14"
-                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
+                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #f6f8fa; color: #1f2937;"
                                 placeholder="-- Paste your SQL case here (example below):&#10;&#10;create table t1(a int, b varchar(10));&#10;insert into t1 values (1, 'a'), (2, 'b');&#10;select * from t1 order by a;&#10;drop table t1;"></textarea>
                         </div>
 
                         <div>
                             <label class="form-label">
-                                Expected Answer Contents <span style="color: #ff6b6b; font-weight: normal;">(Required)</span>
-                                <span class="info-icon" title="The expected output (the .answer file CTP compares against). Copy it from a known-good run, or from the matching answers/&lt;name&gt;.answer in cubrid-testcases. Each statement's output is delimited by a line of '=' characters; comparison ignores newline differences.">ⓘ</span>
+                                Expected Answer Contents <span style="color: #7a1230; font-weight: normal;">(Required)</span>
+                                <span class="info-icon" title="The expected output (the .answer file CTP compares against). Copy it from a known-good run, or from the matching answers/&lt;name&gt;.answer in cubrid-testcases. Each statement's output is delimited by a line of '=' characters; comparison ignores newline differences."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <textarea class="form-textarea" id="customSqlAnswerContent"
                                 rows="14"
-                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #1e1e1e; color: #d4d4d4;"
+                                style="font-family: 'Courier New', monospace; font-size: 0.875rem; background: #f6f8fa; color: #1f2937;"
                                 placeholder="===================================================&#10;0&#10;===================================================&#10;2&#10;===================================================&#10;a                   b&#10;1  a&#10;2  b"></textarea>
                         </div>
                     </div>
@@ -172,7 +176,7 @@
                 <div class="build-only-header">
                     <label class="form-label">
                         Build-only Upload
-                        <span class="info-icon" title="Builds selected commit(s) locally and uploads cubrid_<sha>.tar.gz via SFTP.">ⓘ</span>
+                        <span class="info-icon" title="Builds selected commit(s) locally and uploads cubrid_<sha>.tar.gz via SFTP."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                     </label>
                 </div>
                 <label class="toggle-switch" for="buildOnlyToggle">
@@ -185,14 +189,14 @@
                         <div class="form-group">
                             <label class="form-label" for="buildUploadHost">
                                 Destination Host <span class="required">*</span>
-                                <span class="info-icon" title="SFTP server hostname or IP (Required)">ⓘ</span>
+                                <span class="info-icon" title="SFTP server hostname or IP (Required)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <input type="text" class="form-input" id="buildUploadHost" placeholder="e.g., 192.168.1.50">
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="buildUploadPort">
                                 Destination Port
-                                <span class="info-icon" title="SFTP port (Optional)&#10;Default: 22">ⓘ</span>
+                                <span class="info-icon" title="SFTP port (Optional)&#10;Default: 22"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <input type="number" class="form-input" id="buildUploadPort" placeholder="22" min="1" max="65535">
                         </div>
@@ -201,14 +205,14 @@
                         <div class="form-group">
                             <label class="form-label" for="buildUploadUser">
                                 Username <span class="required">*</span>
-                                <span class="info-icon" title="SFTP username (Required)">ⓘ</span>
+                                <span class="info-icon" title="SFTP username (Required)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <input type="text" class="form-input" id="buildUploadUser" placeholder="e.g., username">
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="buildUploadPassword">
                                 Password <span class="required">*</span>
-                                <span class="info-icon" title="SFTP password (Required)&#10;Not stored or shown in logs">ⓘ</span>
+                                <span class="info-icon" title="SFTP password (Required)&#10;Not stored or shown in logs"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                             </label>
                             <input type="password" class="form-input" id="buildUploadPassword" placeholder="e.g., password">
                         </div>
@@ -216,33 +220,34 @@
                     <div class="form-group">
                         <label class="form-label" for="buildUploadRemoteDir">
                             Destination Directory
-                            <span class="info-icon" title="Remote directory to upload into (Optional)&#10;Default: ~ ($HOME)">ⓘ</span>
+                            <span class="info-icon" title="Remote directory to upload into (Optional)&#10;Default: ~ ($HOME)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                         </label>
                         <input type="text" class="form-input" id="buildUploadRemoteDir" placeholder="~">
                     </div>
                 </div>
             </div>
 
-            <div class="form-group" id="shellTcBranchSection" style="display: none;">
-                <label class="form-label" for="shellTcBranchInput">
-                    TEST CASES BRANCH
-                    <span class="info-icon" title="Selects the branch in the TC repository cubrid-testcases-private-ex. Default: develop.&#10;&#10;Repo: https://github.com/CUBRID/cubrid-testcases-private-ex">ⓘ</span>
-                </label>
-                <input type="text" class="form-input" id="shellTcBranchInput"
-                    value="develop"
-                    placeholder="develop">
-            </div>
-
             <!-- Test Type Section -->
             <div class="form-group" id="testTypeSection">
                 <label class="form-label" for="testTypeSelect">
                     Test Type
-                    <span class="info-icon" title="Shell: shell test cases (.sh), e.g. shell/.../cases/<name>.sh.&#10;SQL: SQL test cases (.sql) executed by CTP, e.g. sql/.../cases/<name>.sql.">ⓘ</span>
+                    <span class="info-icon" title="Shell: shell test cases (.sh), e.g. shell/.../cases/<name>.sh.&#10;SQL: SQL test cases (.sql) executed by CTP, e.g. sql/.../cases/<name>.sql."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                 </label>
-                <select class="form-select" id="testTypeSelect" onchange="onTestTypeChange()">
+                <select class="form-select" id="testTypeSelect" autocomplete="off" onchange="onTestTypeChange()">
                     <option value="shell" selected>Shell</option>
                     <option value="sql">SQL</option>
                 </select>
+            </div>
+
+            <div class="form-group" id="tcBranchSection" style="display: none;">
+                <label class="form-label" for="tcBranchInput">
+                    TEST CASES BRANCH
+                    <span class="info-icon" id="tcBranchInfoIcon" title="Selects the branch in the TC repository cubrid-testcases-private-ex. Default: develop.&#10;&#10;Repo: https://github.com/CUBRID/cubrid-testcases-private-ex"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                </label>
+                <input type="text" class="form-input" id="tcBranchInput"
+                    value="develop"
+                    autocomplete="off"
+                    placeholder="develop">
             </div>
 
             <!-- Test Cases Section -->
@@ -252,37 +257,13 @@
                     placeholder="Enter test case paths (one per line)&#10;Example:&#10;shell/_05_addition/cubridsus1961/cases/cubridsus1961.sh"></textarea>
             </div>
 
-            <!-- Worker Configuration -->
-            <div class="form-group" id="workerSection">
-                <label class="form-label">Worker Nodes</label>
-                <div class="worker-list" id="workerList">
-                    <div class="worker-item">
-                        <span class="worker-ip">localhost</span>
-                        <button class="remove-worker-btn" onclick="removeWorker(this)" style="display: none;">×</button>
-                    </div>
-                </div>
-                <div class="worker-input-group">
-                    <input type="text" class="form-input add-worker-input" id="newWorkerInput" 
-                        placeholder="Enter worker IP or hostname">
-                    <button class="control-btn" onclick="addWorker()">Add Worker</button>
-                </div>
-            </div>
-
             <!-- Build Configuration -->
-            <div class="form-row">
-                <div class="form-group">
-                    <label class="form-label" for="buildType">Build Type</label>
-                    <select class="form-select" id="buildType">
-                        <option value="release" selected>Release</option>
-                        <option value="debug">Debug</option>
-                    </select>
-                </div>
-                
-                <div class="form-group" id="callbackUrlGroup">
-                    <label class="form-label" for="callbackUrl">Callback URL</label>
-                    <input type="text" class="form-input" id="callbackUrl" 
-                        value="http://localhost:<%= config.server.port %>/callback">
-                </div>
+            <div class="form-group">
+                <label class="form-label" for="buildType">Build Type</label>
+                <select class="form-select" id="buildType">
+                    <option value="release" selected>Release</option>
+                    <option value="debug">Debug</option>
+                </select>
             </div>
 
             <!-- Advanced Configuration -->
@@ -317,6 +298,22 @@
                         </select>
                     </div>
 
+                    <!-- Worker Configuration -->
+                    <div class="form-group" id="workerSection">
+                        <label class="form-label">Worker Nodes</label>
+                        <div class="worker-list" id="workerList">
+                            <div class="worker-item">
+                                <span class="worker-ip">localhost</span>
+                                <button class="remove-worker-btn" onclick="removeWorker(this)" style="display: none;">×</button>
+                            </div>
+                        </div>
+                        <div class="worker-input-group">
+                            <input type="text" class="form-input add-worker-input" id="newWorkerInput" 
+                                placeholder="Enter worker IP or hostname">
+                            <button class="control-btn" onclick="addWorker()">Add Worker</button>
+                        </div>
+                    </div>
+
                     <div class="form-group">
                         <label class="form-label">Build Mode</label>
                         <div class="baseline-info" id="baselineInfo">
@@ -325,14 +322,14 @@
                                 <span class="baseline-choice">
                                     <input type="radio" id="buildModeCheckout" name="buildMode" class="baseline-radio" value="checkout" checked>
                                     <span class="baseline-label">Checkout (default)</span>
-                                    <span class="info-icon" title="Build each commit by direct checkout (no baseline cherry-pick).">ⓘ</span>
+                                    <span class="info-icon" title="Build each commit by direct checkout (no baseline cherry-pick)."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                                 </span>
                             </label>
                             <label class="baseline-option" for="buildModeBaseline">
                                 <span class="baseline-choice">
                                     <input type="radio" id="buildModeBaseline" name="buildMode" class="baseline-radio" value="baseline_cherrypick">
                                     <span class="baseline-label">Baseline cherry-pick</span>
-                                    <span class="info-icon" title="Builds each commit by cherry-picking on top of the baseline, which is the earliest commit's parent.&#10;Warning: Commits are not independent variables; later commits depend on earlier changes, so results can be unstable or non-linear.">ⓘ</span>
+                                    <span class="info-icon" title="Builds each commit by cherry-picking on top of the baseline, which is the earliest commit's parent.&#10;Warning: Commits are not independent variables; later commits depend on earlier changes, so results can be unstable or non-linear."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                                 </span>
                             </label>
                             </div>
@@ -341,9 +338,36 @@
                     </div>
                     
                     <div class="form-group">
+                        <label class="form-label">
+                            Re-use Artifacts
+                            <span class="info-icon" title="Reuse the previous build's workspace instead of cloning fresh, which skips rebuilding the 3rdparty libraries and recompiles only what changed.&#10;Off by default: it trades per-build isolation for speed."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                        </label>
+                        <label class="toggle-switch" for="reuseArtifactsToggle">
+                            <input type="checkbox" id="reuseArtifactsToggle">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-text" style="font-weight: normal;">Reuse the previous build workspace (faster)</span>
+                        </label>
+                        <div id="reuseArtifactsWarning" style="display: none; margin-top: 0.5rem; padding: 0.6rem 0.75rem; border-left: 3px solid var(--warning); background: rgba(191, 132, 0, 0.08); font-size: 0.85rem; line-height: 1.45;">
+                            <strong>This build will not start from a clean checkout.</strong>
+                            It reuses artifacts from the previous build, so a result can in principle be
+                            affected by what was built before it. Prefer a clean build when a result is
+                            surprising, or when comparing commits against each other.
+                        </div>
+                    </div>
+
+                    <div class="form-group">
                         <label class="form-label" for="envVars">Environment Variables (JSON)</label>
                         <textarea class="form-textarea" id="envVars" 
                             placeholder='{"VARIABLE_NAME": "value", "ANOTHER_VAR": "value2"}'></textarea>
+                    </div>
+
+                    <div class="form-group" id="callbackUrlGroup">
+                        <label class="form-label" for="callbackUrl">
+                            Callback URL
+                            <span class="info-icon" title="Where the test report is POSTed when the run finishes. Default: this report server's /callback endpoint."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                        </label>
+                        <input type="text" class="form-input" id="callbackUrl" 
+                            value="http://localhost:<%= config.server.port %>/callback">
                     </div>
                 </div>
             </div>
@@ -358,42 +382,40 @@
             </div>
         </div>
 
-        <!-- Build Request Queue Card -->
-        <div class="card">
-            <h2 class="card-title">
-                <div class="card-title-icon">🧾</div>
-                Build Request Queue
-            </h2>
-            <div style="color: var(--text-secondary);" id="build-queue-summary">Loading...</div>
-            <div id="build-queue-items" class="queue-list"></div>
-        </div>
-
-        <!-- Build Status Monitor Card -->
-        <div class="card">
-            <h2 class="card-title">
-                <div class="card-title-icon">📊</div>
-                Build Status Monitor
-            </h2>
-            
-            <div class="status-controls" style="margin-bottom: 1rem;">
-                <button class="control-btn" onclick="window.refreshBuildStatus && window.refreshBuildStatus()" 
-                        id="refreshStatusBtn" style="display: none;">
-                    🔄 Refresh Status
-                </button>
-                <button class="control-btn" onclick="window.toggleBuilderLog && window.toggleBuilderLog()" 
-                        id="tailBuilderLogBtn" style="display: none; margin-left: 0.5rem;">
-                    📋 View Builder Log
-                </button>
             </div>
 
+            <div class="dash-col">
+        <!-- Live Pipeline Card (queue + active build status) -->
+        <div class="card">
+            <h2 class="card-title">
+                <div class="card-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
+                Live Pipeline
+            </h2>
+
+            <div class="pipeline-head">
+                <div style="color: var(--text-secondary);" id="build-queue-summary">Loading...</div>
+                <div class="status-controls">
+                    <button class="control-btn" onclick="window.refreshBuildStatus && window.refreshBuildStatus()"
+                            id="refreshStatusBtn" style="display: none;">
+                        Refresh Status
+                    </button>
+                    <button class="control-btn" onclick="window.toggleBuilderLog && window.toggleBuilderLog()"
+                            id="tailBuilderLogBtn" style="display: none;">
+                        View Builder Log
+                    </button>
+                </div>
+            </div>
+
+            <div id="build-queue-items" class="queue-list"></div>
+
             <div id="statusMonitorHint" style="display: none; margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.9rem;"></div>
-            
+
             <div id="statusMonitor">
                 <p style="color: var(--text-secondary);">No active builds. Submit a request to start monitoring.</p>
             </div>
 
             <!-- Log tail container (initially hidden) -->
-            <div id="logTailContainer" style="display: none; margin-top: 1rem; border-top: 1px solid #444; padding-top: 1rem;">
+            <div id="logTailContainer" style="display: none; margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                     <h3 style="margin: 0; font-size: 1rem; color: var(--text-secondary);" id="builderLogTitle">Builder Log</h3>
                     <div style="display: flex; gap: 0.5rem;">
@@ -401,14 +423,20 @@
                         <button class="control-btn" onclick="window.toggleBuilderLog()" style="padding: 2px 8px; font-size: 0.8rem;">Close</button>
                     </div>
                 </div>
-                <pre id="builderLogArea" style="background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 4px; max-height: 400px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap; border: 1px solid #333;"></pre>
+                <div class="log-shell" id="builderLogShell">
+                    <button type="button" class="log-expand-btn" id="builderLogExpandBtn"
+                            onclick="openLogLightbox()" title="Expand log" aria-label="Expand log to full screen">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                    </button>
+                    <pre id="builderLogArea" class="log-area"></pre>
+                </div>
             </div>
         </div>
 
         <!-- Recent Reports Card -->
         <div class="card">
             <h2 class="card-title">
-                <div class="card-title-icon">📋</div>
+                <div class="card-title-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="3.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="3.5" cy="18" r="1.4" fill="currentColor" stroke="none"/></svg></div>
                 Recent Test Reports
             </h2>
             
@@ -421,6 +449,8 @@
                 <div id="recentReports">
                     <div class="spinner"></div>
                 </div>
+            </div>
+        </div>
             </div>
         </div>
     </div>
@@ -453,6 +483,18 @@
                     <p style="color: var(--text-secondary);">Enter tester IP to view configuration</p>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Builder log lightbox: the live <pre> is moved in here while open, so the
+         tail keeps writing to the same element and no content has to be mirrored. -->
+    <div class="log-lightbox" id="logLightbox" hidden role="dialog" aria-modal="true" aria-labelledby="logLightboxTitle">
+        <div class="log-lightbox-panel" id="logLightboxPanel">
+            <div class="log-lightbox-head">
+                <h3 class="log-lightbox-title" id="logLightboxTitle">Builder Log</h3>
+                <button type="button" class="log-lightbox-close" onclick="closeLogLightbox()" aria-label="Close">&times;</button>
+            </div>
+            <div class="log-lightbox-body" id="logLightboxBody"></div>
         </div>
     </div>
 

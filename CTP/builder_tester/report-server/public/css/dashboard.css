@@ -4,24 +4,95 @@
             box-sizing: border-box;
         }
 
+        /* ------------------------------------------------------------------
+           Design tokens adopted from QAHome's tokens.css
+           (qahome.cubrid.org/qaresult/common/css/tokens.css) so this console
+           and the QA result site read as one family.
+
+           Its stated intent, kept here: a calm, professional data console - a
+           quiet graphite top bar, ONE muted CUBRID accent used only for thin
+           accents (links, active tab, selected item), and all strong
+           saturation reserved for pass/fail status.
+
+           Deviation: the neutral frame is inverted and warmed. QAHome pairs a
+           cool grey canvas with pure-white panels, 1.07:1 apart, so the cards
+           barely register. Here the page is white and the section cards are
+           light ivory (1.06:1), which gives three honest levels:
+
+               white page  ->  ivory card  ->  white field
+
+           Controls read because a white input sits ON ivory rather than white
+           on white, and nested tracks drop to --sunken. The accent, status and
+           header tokens are QAHome's, unchanged.
+           ------------------------------------------------------------------ */
         :root {
-            --primary: #2563eb;
-            --primary-dark: #1e40af;
-            --secondary: #64748b;
-            --success: #22c55e;
-            --error: #ef4444;
-            --warning: #f59e0b;
-            --bg-primary: #0f172a;
-            --bg-secondary: #1e293b;
-            --bg-tertiary: #334155;
-            --text-primary: #f1f5f9;
-            --text-secondary: #cbd5e1;
-            --border: #475569;
-            --gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            /* Neutral frame */
+            --surface: #FFFFFF;        /* page canvas - white */
+            --panel: #FBF8F1;          /* section cards - light ivory on the white page */
+            --field: #FFFFFF;          /* inputs & buttons sitting ON a card */
+            --sunken: #F5EFE3;         /* tracks and nested panels, a step below the card */
+            --ink: #1C2430;            /* primary text */
+            --muted: #5B6675;          /* secondary text */
+            --line: #E8DFCE;           /* the one hairline / divider */
+
+            /* Header - graphite */
+            --header-bg: #1E2733;
+            --header-ink: #E9ECF1;
+            --header-muted: rgba(233, 236, 241, .62);
+            --header-border: #2C3542;
+
+            /* Accent - muted slate-blue, thin accents only */
+            --cubrid-teal: #3C5A78;
+            --teal-ink: #2C4560;
+            --accent-soft: #E7EBF1;
+
+            /* Table / list fills */
+            --header-row-bg: #F2EADA;
+            --row-hover: #F5EFE3;
+
+            /* Status - saturation lives here and nowhere else */
+            --pass: #1F8A50;
+            --fail: #C7362B;
+            --warn-amber: #C98A15;
+
+            /* Type */
+            --font-ui: 'Pretendard','Inter',-apple-system,'Malgun Gothic','Noto Sans KR',Dotum,sans-serif;
+            --font-data: 'JetBrains Mono','D2Coding','Consolas','Menlo',monospace;
+
+            /* ---- Local aliases so existing rules keep working ---- */
+            --primary: var(--cubrid-teal);
+            --primary-dark: var(--teal-ink);
+            --primary-soft: var(--accent-soft);
+            --secondary: var(--muted);
+            --success: var(--pass);
+            --error: var(--fail);
+            --warning: var(--warn-amber);
+            --bg-primary: var(--surface);
+            --bg-secondary: var(--field);
+            --bg-tertiary: var(--sunken);
+            --text-primary: var(--ink);
+            --text-secondary: var(--muted);
+            --text-muted: #94A3B8;
+            /* One hairline, as the token file intends - separation comes from
+               white panels floating on the canvas, not from heavy outlines. */
+            --border: var(--line);
+            --border-control: var(--line);
+            --border-hover: #BDB2A1;
+
+            /* Elevation */
+            --shadow-xs: 0 1px 2px rgba(74, 60, 40, 0.06);
+            --shadow-sm: 0 1px 2px rgba(74, 60, 40, 0.08);
+            --shadow-md: 0 4px 12px rgba(74, 60, 40, 0.10);
+            --ring: 0 0 0 3px rgba(60, 90, 120, 0.18);
+
+            /* Radii */
+            --r-sm: 4px;
+            --r-md: 6px;
+            --r-lg: 8px;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: var(--font-ui);
             background: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;
@@ -29,40 +100,11 @@
             overflow-x: hidden;
         }
 
-        /* Animated Background */
-        .bg-animation {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            background: linear-gradient(45deg, #0f172a, #1e293b);
-            overflow: hidden;
-        }
-
-        .bg-animation::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 70%);
-            animation: rotate 30s linear infinite;
-        }
-
-        @keyframes rotate {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
         /* Header */
         .header {
-            background: rgba(30, 41, 59, 0.8);
-            backdrop-filter: blur(10px);
-            border-bottom: 1px solid var(--border);
-            padding: 1.5rem 2rem;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--header-border);
+            padding: 0.875rem 1.75rem;
             position: sticky;
             top: 0;
             z-index: 100;
@@ -89,49 +131,31 @@
             gap: 1rem;
         }
 
-        .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: var(--gradient);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 20px;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-
         .logo h1 {
-            font-size: 1.5rem;
-            background: var(--gradient);
-            background-clip: text;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            font-size: 1.0625rem;
+            color: var(--header-ink);
+            font-weight: 600;
+            letter-spacing: 0.01em;
         }
 
         .info-button {
-            background: rgba(99, 102, 241, 0.2);
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            color: #a5b4fc;
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
+            background: transparent;
+            border: 1px solid var(--header-border);
+            color: var(--header-ink);
+            padding: 0.375rem 0.75rem;
+            border-radius: var(--r-md);
             cursor: pointer;
-            transition: all 0.3s ease;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            transition: background 0.15s ease, border-color 0.15s ease;
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 0.4rem;
         }
 
         .info-button:hover {
-            background: rgba(99, 102, 241, 0.3);
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(99, 102, 241, 0.2);
+            background: rgba(233, 236, 241, 0.08);
+            border-color: var(--header-muted);
         }
 
         /* Container */
@@ -155,41 +179,19 @@
 
         /* Card */
         .card {
-            background: rgba(30, 41, 59, 0.5);
-            backdrop-filter: blur(10px);
+            background: var(--panel);
             border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            transition: all 0.3s ease;
+            border-radius: var(--r-lg);
+            padding: 1.5rem;
+            margin-bottom: 1.25rem;
+            box-shadow: var(--shadow-sm);
             position: relative;
-            overflow: hidden;
-        }
-
-        .card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: var(--gradient);
-            transform: scaleX(0);
-            transition: transform 0.3s ease;
-        }
-
-        .card:hover::before {
-            transform: scaleX(1);
-        }
-
-        .card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-            border-color: rgba(99, 102, 241, 0.3);
         }
 
         .card-title {
-            font-size: 1.25rem;
+            font-size: 1.0625rem;
+            font-weight: 650;
+            color: var(--text-primary);
             margin-bottom: 1.5rem;
             display: flex;
             align-items: center;
@@ -199,8 +201,10 @@
         .card-title-icon {
             width: 24px;
             height: 24px;
-            background: var(--gradient);
-            border-radius: 6px;
+            background: var(--cubrid-teal);
+            color: #fff;
+            border-radius: var(--r-sm);
+            flex-shrink: 0;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -248,16 +252,16 @@
             align-items: center;
             gap: 0.75rem;
             padding: 0.5rem 0.9rem;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid var(--border);
+            background: var(--surface-control);
+            border: 1px solid var(--border-strong);
             border-radius: 999px;
             cursor: pointer;
             transition: all 0.2s ease;
         }
 
         .toggle-switch:hover {
-            border-color: rgba(99, 102, 241, 0.4);
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            border-color: rgba(60, 90, 120, 0.4);
+            box-shadow: 0 4px 10px rgba(15, 23, 42, 0.07);
         }
 
         .toggle-switch input {
@@ -269,7 +273,7 @@
         .toggle-slider {
             width: 46px;
             height: 24px;
-            background: rgba(51, 65, 85, 0.7);
+            background: var(--header-row-bg);
             border-radius: 999px;
             position: relative;
             transition: background 0.2s ease;
@@ -282,13 +286,14 @@
             left: 2px;
             width: 20px;
             height: 20px;
-            background: var(--text-primary);
+            background: #ffffff;
             border-radius: 50%;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
             transition: transform 0.2s ease;
         }
 
         .toggle-switch input:checked + .toggle-slider {
-            background: rgba(99, 102, 241, 0.9);
+            background: rgba(60, 90, 120, 0.9);
         }
 
         .toggle-switch input:checked + .toggle-slider::after {
@@ -304,31 +309,36 @@
         .build-only-fields {
             margin-top: 1rem;
             padding: 1rem;
-            background: rgba(15, 23, 42, 0.35);
+            background: var(--sunken);
             border: 1px solid var(--border);
             border-radius: 12px;
         }
 
+        /* Uppercase micro-labels with wide tracking made every field shout and
+           dated the whole form. Sentence case at a steady weight reads calmer. */
         .form-label {
             display: block;
-            margin-bottom: 0.5rem;
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
+            margin-bottom: 0.375rem;
+            color: var(--text-primary);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            letter-spacing: 0;
+            text-transform: none;
         }
 
         .form-input,
         .form-select,
         .form-textarea {
             width: 100%;
-            padding: 0.75rem 1rem;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            padding: 0.5rem 0.75rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-control);
+            border-radius: var(--r-md);
             color: var(--text-primary);
-            font-size: 1rem;
-            transition: all 0.3s ease;
+            font-size: 0.875rem;
+            font-family: inherit;
+            box-shadow: var(--shadow-xs);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
         }
 
         .form-input:focus,
@@ -336,14 +346,13 @@
         .form-textarea:focus {
             outline: none;
             border-color: var(--primary);
-            background: rgba(15, 23, 42, 0.8);
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+            box-shadow: var(--ring);
         }
 
         .form-textarea {
             min-height: 120px;
             resize: vertical;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-data);
         }
 
         .help-text {
@@ -354,7 +363,7 @@
         }
 
         .help-text a {
-            color: #a5b4fc;
+            color: var(--teal-ink);
             text-decoration: none;
         }
 
@@ -399,14 +408,17 @@
         /* Commit Selector */
         .commit-selector {
             display: flex;
-            gap: 1rem;
-            margin-bottom: 1rem;
+            gap: 2px;
+            margin-bottom: 0.875rem;
+            padding: 3px;
+            background: var(--sunken);
+            border-radius: var(--r-md);
         }
 
         .selector-tab {
             flex: 1;
             padding: 0.75rem;
-            background: rgba(51, 65, 85, 0.3);
+            background: var(--row-hover);
             border: 1px solid var(--border);
             border-radius: 8px;
             cursor: pointer;
@@ -415,42 +427,41 @@
         }
 
         .selector-tab.active {
-            background: var(--gradient);
+            background: var(--cubrid-teal);
+            color: #fff;
             border-color: transparent;
-            transform: scale(1.02);
         }
 
         .selector-tab:hover:not(.active) {
-            background: rgba(51, 65, 85, 0.5);
+            background: var(--surface-control-hover);
         }
 
         /* Mode Button Styles */
         .mode-btn {
             flex: 1;
-            padding: 0.75rem 1rem;
-            background: rgba(51, 65, 85, 0.3);
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            padding: 0.4375rem 0.75rem;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: var(--r-sm);
             color: var(--text-secondary);
             cursor: pointer;
-            transition: all 0.3s ease;
             text-align: center;
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
             font-weight: 500;
             outline: none;
+            transition: background 0.15s ease, color 0.15s ease;
         }
 
         .mode-btn:hover {
-            background: rgba(51, 65, 85, 0.5);
-            border-color: rgba(99, 102, 241, 0.3);
-            transform: translateY(-1px);
+            color: var(--text-primary);
+            background: rgba(15, 23, 42, 0.04);
         }
 
         .mode-btn.active {
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(59, 130, 246, 0.2));
-            border-color: var(--primary);
-            color: var(--primary);
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+            background: var(--field);
+            border-color: var(--line);
+            color: var(--cubrid-teal);
+            box-shadow: var(--shadow-xs);
             font-weight: 600;
         }
 
@@ -461,26 +472,23 @@
 
         .toggle-advanced-btn {
             width: 100%;
-            padding: 1rem;
-            background: rgba(51, 65, 85, 0.3);
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            padding: 0.6875rem 0.875rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-control);
+            border-radius: var(--r-md);
             color: var(--text-primary);
             cursor: pointer;
-            transition: all 0.3s ease;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 0.9rem;
+            font-size: 0.875rem;
             font-weight: 500;
-            outline: none;
+            box-shadow: var(--shadow-xs);
+            transition: background 0.15s ease;
         }
 
         .toggle-advanced-btn:hover {
-            background: rgba(51, 65, 85, 0.5);
-            border-color: rgba(99, 102, 241, 0.3);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            background: var(--bg-primary);
         }
 
         .toggle-icon {
@@ -491,7 +499,7 @@
         .advanced-panel {
             margin-top: 1rem;
             padding: 1.5rem;
-            background: rgba(15, 23, 42, 0.3);
+            background: var(--sunken);
             border: 1px solid var(--border);
             border-radius: 8px;
         }
@@ -501,10 +509,10 @@
             max-height: 300px;
             overflow-y: auto;
             overflow-x: hidden;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            background: rgba(15, 23, 42, 0.6);
-            padding: 0.5rem;
+            border: 1px solid var(--line);
+            border-radius: var(--r-md);
+            background: var(--sunken);
+            padding: 0.375rem;
         }
 
         .commit-list::-webkit-scrollbar {
@@ -512,7 +520,7 @@
         }
 
         .commit-list::-webkit-scrollbar-track {
-            background: rgba(51, 65, 85, 0.3);
+            background: var(--row-hover);
             border-radius: 4px;
         }
 
@@ -522,9 +530,10 @@
         }
 
         .commit-item {
-            padding: 0.75rem;
-            margin-bottom: 0.5rem;
-            background: rgba(51, 65, 85, 0.3);
+            padding: 0.625rem 0.75rem;
+            margin-bottom: 0.375rem;
+            background: var(--field);
+            border: 1px solid var(--line);
             border-radius: 8px;
             cursor: pointer;
             transition: all 0.3s ease;
@@ -534,33 +543,37 @@
         }
 
         .commit-item:hover {
-            background: rgba(51, 65, 85, 0.5);
+            background: var(--sunken);
             transform: translateX(4px);
         }
 
         .commit-item.selected {
-            background: rgba(99, 102, 241, 0.2);
-            border: 1px solid rgba(99, 102, 241, 0.4);
+            background: rgba(60, 90, 120, 0.2);
+            border: 1px solid rgba(60, 90, 120, 0.4);
         }
 
         .commit-checkbox {
             width: 20px;
             height: 20px;
-            accent-color: var(--primary);
+            accent-color: var(--cubrid-teal);
         }
 
         .commit-info {
             flex: 1;
+            /* Without this a flex child refuses to shrink below its content
+               width, so the commit message's ellipsis never triggers and the
+               text just overflows the card. */
+            min-width: 0;
         }
 
         .commit-sha {
-            font-family: 'Courier New', monospace;
-            color: #60a5fa;
+            font-family: var(--font-data);
+            color: var(--teal-ink);
             font-size: 0.875rem;
         }
 
         .commit-item .commit-sha {
-            color: #facc15;
+            color: var(--cubrid-teal);
             font-weight: 600;
         }
 
@@ -570,14 +583,14 @@
         }
 
         .commit-item .commit-sha a:hover {
-            color: #fde047;
+            color: var(--teal-ink);
         }
 
         .baseline-info {
             margin-top: 1rem;
             padding: 0.75rem 1rem;
-            background: rgba(30, 41, 59, 0.6);
-            border: 1px solid rgba(148, 163, 184, 0.25);
+            background: var(--sunken);
+            border: 1px solid var(--border);
             border-radius: 8px;
             font-size: 0.875rem;
             color: var(--text-secondary);
@@ -614,7 +627,7 @@
         }
 
         .baseline-radio {
-            accent-color: #facc15;
+            accent-color: var(--cubrid-teal);
         }
 
         .baseline-info .baseline-label {
@@ -637,13 +650,13 @@
         }
 
         .baseline-info .baseline-value a {
-            color: #facc15;
+            color: var(--cubrid-teal);
             font-weight: 600;
             text-decoration: underline;
         }
 
         .baseline-info .baseline-value a:hover {
-            color: #fde047;
+            color: var(--teal-ink);
         }
 
         .baseline-info .baseline-note {
@@ -652,8 +665,8 @@
         }
 
         .baseline-info.has-baseline {
-            border-color: rgba(250, 204, 21, 0.4);
-            background: rgba(30, 41, 59, 0.75);
+            border-color: rgba(138, 96, 0, 0.45);
+            background: #fffaf0;
         }
 
         .baseline-info.has-baseline .baseline-label {
@@ -697,20 +710,21 @@
         }
 
         .control-btn {
-            padding: 0.5rem 1rem;
-            background: rgba(51, 65, 85, 0.5);
-            border: 1px solid var(--border);
-            border-radius: 6px;
+            padding: 0.4375rem 0.75rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-control);
+            border-radius: var(--r-md);
             color: var(--text-primary);
             cursor: pointer;
-            transition: all 0.3s ease;
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            box-shadow: var(--shadow-xs);
+            transition: background 0.15s ease, border-color 0.15s ease;
         }
 
         .control-btn:hover {
-            background: var(--primary);
-            border-color: var(--primary);
-            transform: translateY(-2px);
+            background: var(--bg-primary);
+            border-color: var(--border-hover);
         }
 
         .commit-counter {
@@ -721,24 +735,22 @@
 
         .load-more-btn {
             width: 100%;
-            padding: 0.75rem;
-            margin-top: 1rem;
-            background: rgba(51, 65, 85, 0.3);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-primary);
+            padding: 0.5rem;
+            margin-top: 0.625rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-control);
+            border-radius: var(--r-md);
+            color: var(--text-secondary);
             cursor: pointer;
-            transition: all 0.3s ease;
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
             font-weight: 500;
-            outline: none;
+            box-shadow: var(--shadow-xs);
+            transition: background 0.15s ease, color 0.15s ease;
         }
 
         .load-more-btn:hover {
-            background: rgba(51, 65, 85, 0.5);
-            border-color: rgba(99, 102, 241, 0.3);
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            background: var(--bg-primary);
+            color: var(--text-primary);
         }
 
         /* Worker IPs */
@@ -753,8 +765,8 @@
             align-items: center;
             gap: 0.5rem;
             padding: 0.5rem 1rem;
-            background: rgba(99, 102, 241, 0.2);
-            border: 1px solid rgba(99, 102, 241, 0.3);
+            background: rgba(60, 90, 120, 0.2);
+            border: 1px solid rgba(60, 90, 120, 0.3);
             border-radius: 20px;
             font-size: 0.875rem;
             animation: slideIn 0.3s ease-out;
@@ -795,17 +807,16 @@
         /* Submit Button */
         .submit-button {
             width: 100%;
-            padding: 1rem;
-            background: var(--gradient);
+            padding: 0.6875rem 1rem;
+            background: var(--primary);
             border: none;
-            border-radius: 8px;
-            color: white;
-            font-size: 1.125rem;
+            border-radius: var(--r-md);
+            color: #fff;
+            font-size: 0.9375rem;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
+            box-shadow: var(--shadow-xs);
+            transition: background 0.15s ease;
         }
 
         .submit-button::before {
@@ -828,7 +839,7 @@
 
         .submit-button:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.4);
+            box-shadow: 0 10px 30px rgba(60, 90, 120, 0.4);
         }
 
         .submit-button:active {
@@ -861,7 +872,7 @@
         }
 
         .modal-content {
-            background: var(--bg-secondary);
+            background: var(--field);
             border: 1px solid var(--border);
             border-radius: 16px;
             padding: 2rem;
@@ -893,11 +904,9 @@
         }
 
         .modal-title {
-            font-size: 1.5rem;
-            background: var(--gradient);
-            background-clip: text;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            font-size: 1.0625rem;
+            font-weight: 650;
+            color: var(--ink);
         }
 
         .modal-close {
@@ -938,7 +947,7 @@
 
         .info-item {
             padding: 1rem;
-            background: rgba(51, 65, 85, 0.3);
+            background: var(--field);
             border-radius: 8px;
             border: 1px solid var(--border);
         }
@@ -966,7 +975,7 @@
 
         .queue-item {
             padding: 0.9rem 1rem;
-            background: rgba(51, 65, 85, 0.25);
+            background: var(--field);
             border-radius: 12px;
             border: 1px solid var(--border);
             display: flex;
@@ -978,7 +987,7 @@
         }
 
         .queue-item:hover {
-            background: rgba(51, 65, 85, 0.40);
+            background: var(--sunken);
             transform: translateY(-1px);
         }
 
@@ -1068,9 +1077,9 @@
         }
 
         .queue-badge.viewing {
-            background: rgba(37, 99, 235, 0.15);
+            background: rgba(60, 90, 120, 0.15);
             color: #93c5fd;
-            border-color: rgba(37, 99, 235, 0.25);
+            border-color: rgba(60, 90, 120, 0.25);
         }
 
         .queue-badge.pinned {
@@ -1125,7 +1134,7 @@
         .spinner {
             width: 40px;
             height: 40px;
-            border: 3px solid rgba(99, 102, 241, 0.2);
+            border: 3px solid rgba(60, 90, 120, 0.2);
             border-top-color: var(--primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
@@ -1198,10 +1207,10 @@
         .response-display {
             margin-top: 2rem;
             padding: 1.5rem;
-            background: rgba(15, 23, 42, 0.8);
+            background: rgba(15, 23, 42, 0.45);
             border: 1px solid var(--border);
             border-radius: 8px;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-data);
             font-size: 0.875rem;
             white-space: pre-wrap;
             word-break: break-all;
@@ -1230,14 +1239,14 @@
 
         .report-item {
             padding: 0.75rem;
-            background: rgba(15, 23, 42, 0.5);
+            background: var(--bg-tertiary);
             border: 1px solid var(--border);
             border-radius: 8px;
             transition: all 0.3s ease;
         }
 
         .report-item:hover {
-            background: rgba(15, 23, 42, 0.8);
+            background: rgba(15, 23, 42, 0.45);
             border-color: var(--primary);
             transform: translateX(4px);
         }
@@ -1317,7 +1326,7 @@
             white-space: pre-wrap;
             max-width: 300px;
             width: max-content;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.10), 0 2px 4px -1px rgba(15, 23, 42, 0.07);
             border: 1px solid var(--border);
             opacity: 0;
             visibility: hidden;
@@ -1386,7 +1395,7 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.75rem 1.5rem;
-    background: rgba(51, 65, 85, 0.3);
+    background: var(--row-hover);
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--text-primary);
@@ -1396,14 +1405,14 @@
 }
 
 .back-button:hover {
-    background: rgba(51, 65, 85, 0.5);
+    background: var(--row-hover);
     border-color: var(--primary);
     transform: translateY(-1px);
 }
 
 /* Filters Toolbar */
 .filters-toolbar {
-    background: rgba(30, 41, 59, 0.5);
+    background: var(--panel);
     backdrop-filter: blur(10px);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -1433,8 +1442,8 @@
 .filter-group input,
 .filter-group select {
     padding: 0.625rem;
-    background: rgba(15, 23, 42, 0.5);
-    border: 1px solid var(--border);
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
     border-radius: 6px;
     color: var(--text-primary);
     font-size: 0.875rem;
@@ -1445,7 +1454,7 @@
 .filter-group select:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    box-shadow: 0 0 0 3px rgba(60, 90, 120, 0.1);
 }
 
 .filters-actions {
@@ -1455,7 +1464,7 @@
 
 /* Bulk Actions Toolbar */
 .bulk-toolbar {
-    background: rgba(30, 41, 59, 0.3);
+    background: var(--bg-tertiary);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem 1.5rem;
@@ -1507,7 +1516,7 @@
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 8px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.10);
     min-width: 220px;
     z-index: 100;
     opacity: 0;
@@ -1535,7 +1544,7 @@
 }
 
 .bulk-menu button:hover {
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(60, 90, 120, 0.1);
 }
 
 .bulk-menu button:first-child {
@@ -1559,7 +1568,7 @@
 .spinner {
     width: 40px;
     height: 40px;
-    border: 4px solid rgba(99, 102, 241, 0.2);
+    border: 4px solid rgba(60, 90, 120, 0.2);
     border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 1s linear infinite;
@@ -1571,7 +1580,7 @@
 
 /* Reports Table */
 .reports-table-wrapper {
-    background: rgba(30, 41, 59, 0.5);
+    background: var(--panel);
     backdrop-filter: blur(10px);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -1585,7 +1594,7 @@
 }
 
 .reports-table thead {
-    background: rgba(51, 65, 85, 0.5);
+    background: var(--sunken);
 }
 
 .reports-table th {
@@ -1600,12 +1609,13 @@
 }
 
 .reports-table tbody tr {
-    border-bottom: 1px solid rgba(71, 85, 105, 0.3);
+    background: var(--field);
+    border-bottom: 1px solid var(--line);
     transition: background 0.2s ease;
 }
 
 .reports-table tbody tr:hover {
-    background: rgba(99, 102, 241, 0.05);
+    background: var(--row-hover);
 }
 
 .reports-table tbody tr:last-child {
@@ -1626,7 +1636,7 @@
 .report-link {
     color: var(--primary);
     text-decoration: none;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-weight: 600;
     transition: color 0.2s ease;
 }
@@ -1645,7 +1655,7 @@
 }
 
 .commits-info {
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-size: 0.8125rem;
     color: var(--text-secondary);
 }
@@ -1662,20 +1672,20 @@
     border-radius: 4px;
     font-size: 0.75rem;
     font-weight: 600;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     display: inline-block;
     white-space: nowrap;
 }
 
 .count-pass {
     background: rgba(34, 197, 94, 0.2);
-    color: #22c55e;
+    color: #0d7a3e;
     border: 1px solid rgba(34, 197, 94, 0.3);
 }
 
 .count-fail {
     background: rgba(239, 68, 68, 0.2);
-    color: #ef4444;
+    color: #7a1230;
     border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
@@ -1687,13 +1697,13 @@
 
 .count-flaky {
     background: rgba(245, 158, 11, 0.2);
-    color: #f59e0b;
+    color: #bf8400;
     border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .count-unstable {
     background: rgba(168, 85, 247, 0.2);
-    color: #a855f7;
+    color: #6b21a8;
     border: 1px solid rgba(168, 85, 247, 0.3);
 }
 
@@ -1707,24 +1717,24 @@
 
 .verdict-success {
     background: rgba(34, 197, 94, 0.2);
-    color: #22c55e;
+    color: #0d7a3e;
 }
 
 .verdict-bug,
 .verdict-error {
     background: rgba(239, 68, 68, 0.2);
-    color: #ef4444;
+    color: #7a1230;
 }
 
 .verdict-flaky,
 .verdict-unstable {
     background: rgba(245, 158, 11, 0.2);
-    color: #f59e0b;
+    color: #bf8400;
 }
 
 .verdict-preexisting {
     background: rgba(148, 163, 184, 0.2);
-    color: #94a3b8;
+    color: var(--muted);
 }
 
 .actions-cell {
@@ -1738,7 +1748,7 @@
     height: 32px;
     border-radius: 6px;
     border: 1px solid var(--border);
-    background: rgba(51, 65, 85, 0.3);
+    background: var(--row-hover);
     color: var(--text-primary);
     cursor: pointer;
     display: flex;
@@ -1800,8 +1810,8 @@
 
 .pagination-btn {
     padding: 0.5rem 1rem;
-    background: rgba(51, 65, 85, 0.3);
-    border: 1px solid var(--border);
+    background: var(--surface-control);
+    border: 1px solid var(--border-strong);
     border-radius: 6px;
     color: var(--text-primary);
     cursor: pointer;
@@ -1810,7 +1820,7 @@
 }
 
 .pagination-btn:hover:not(:disabled) {
-    background: rgba(99, 102, 241, 0.2);
+    background: rgba(60, 90, 120, 0.2);
     border-color: var(--primary);
 }
 
@@ -1855,12 +1865,12 @@
 }
 
 .btn-secondary {
-    background: rgba(51, 65, 85, 0.5);
+    background: var(--row-hover);
     color: var(--text-primary);
 }
 
 .btn-secondary:hover {
-    background: rgba(51, 65, 85, 0.7);
+    background: var(--header-row-bg);
 }
 
 .btn-danger {
@@ -1880,14 +1890,14 @@
 
 /* Reports Page Modal Extensions */
 .modal-preview {
-    background: rgba(15, 23, 42, 0.5);
+    background: var(--row-hover);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 1rem;
     margin-bottom: 1.5rem;
     max-height: 200px;
     overflow-y: auto;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-size: 0.8125rem;
     color: var(--text-secondary);
 }
@@ -1906,7 +1916,7 @@
 .modal-input-group input {
     width: 100%;
     padding: 0.625rem;
-    background: rgba(15, 23, 42, 0.5);
+    background: var(--field);
     border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text-primary);
@@ -1990,4 +2000,424 @@
         flex-direction: column;
         text-align: center;
     }
+}
+
+/* ============================================================================
+   DASHBOARD LAYOUT & REPORT ROWS
+   ----------------------------------------------------------------------------
+   Status hues are validated for CVD separation against the light surface
+   (#ffffff) with the data-viz validator:
+     good #0d7a3e / warn #bf8400 / bad #7a1230
+     worst all-pairs CVD dE 9.8 (protan), normal-vision dE 21.9, all >= 3:1.
+   The ladder is deliberately stepped by lightness: on a light surface the weak
+   pair is amber-vs-red (both dark warm hues), and only a lightness gap survives
+   CVD simulation. Hue never carries state alone - every status also ships an
+   icon and a text label.
+   ========================================================================== */
+
+:root {
+    /* Status aliases point at the shared QAHome tokens, so a verdict here is
+       the same colour as the same verdict on the QA result site. The pass/fail
+       pair is weak under deuteranopia (CVD dE 5.4), which is why every status
+       in this UI also carries an icon and a text label - never colour alone. */
+    --st-good: var(--pass);
+    --st-warn: var(--warn-amber);
+    --st-bad: var(--fail);
+    --st-neutral: var(--muted);
+}
+
+/* ---- Two-column layout ------------------------------------------------- */
+
+.dash-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: 1.5rem;
+    align-items: start;
+}
+
+.dash-col { min-width: 0; }
+
+.dash-col > .card:last-child { margin-bottom: 0; }
+
+/* ---- Merged Live Pipeline card ---------------------------------------- */
+
+.pipeline-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.pipeline-head .status-controls {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.pipeline-head .status-controls:empty { display: none; }
+
+#statusMonitor p { margin: 0; }
+
+.pipeline-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 0.3rem 0.65rem;
+    border-radius: 999px;
+}
+
+.pipeline-state.idle {
+    background: var(--row-hover);
+    color: var(--st-neutral);
+}
+
+.pipeline-state.busy {
+    background: rgba(31, 138, 80, 0.12);
+    color: var(--st-good);
+}
+
+.live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+}
+
+.pipeline-state.busy .live-dot { animation: livePulse 1.8s ease-in-out infinite; }
+
+@keyframes livePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* ---- Outcome-bearing report rows --------------------------------------- */
+
+.report-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.5rem 0.75rem;
+    align-items: center;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    margin-bottom: 0.375rem;
+    background: var(--field);
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.report-row:hover {
+    border-color: var(--cubrid-teal);
+    background: var(--row-hover);
+}
+
+.report-row-main { min-width: 0; }
+
+.report-row-id {
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 600;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.report-row-id:hover { color: var(--primary); text-decoration: underline; }
+
+.report-row-sub {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.report-row-counts {
+    display: inline-flex;
+    gap: 0.4rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.rc {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    font-weight: 600;
+}
+
+.rc.pass  { color: var(--st-good); }
+.rc.fail  { color: var(--st-bad); }
+.rc.shaky { color: var(--st-warn); }
+
+.verdict-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 650;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    justify-self: end;
+}
+
+.verdict-pill .vp-icon { font-size: 0.72rem; line-height: 1; }
+
+.verdict-pill.v-success {
+    background: rgba(31, 138, 80, 0.10);
+    color: var(--st-good);
+    border-color: rgba(31, 138, 80, 0.32);
+}
+
+.verdict-pill.v-bug,
+.verdict-pill.v-error {
+    background: rgba(199, 54, 43, 0.09);
+    color: var(--st-bad);
+    border-color: rgba(199, 54, 43, 0.30);
+}
+
+.verdict-pill.v-flaky,
+.verdict-pill.v-unstable {
+    background: rgba(201, 138, 21, 0.14);
+    color: var(--st-warn);
+    border-color: rgba(201, 138, 21, 0.32);
+}
+
+.verdict-pill.v-preexisting,
+.verdict-pill.v-neutral {
+    background: var(--row-hover);
+    color: var(--st-neutral);
+    border-color: var(--border);
+}
+
+/* ---- Icons ------------------------------------------------------------- */
+
+/* Card title icons and the form's info markers are inline SVG rather than
+   emoji / the circled-i codepoint, both of which fall back to tofu boxes on
+   hosts without the matching font. Note .info-icon::before/::after are already
+   taken by the hover tooltip and its arrow, so the mark cannot live in a
+   pseudo-element. */
+.card-title-icon svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+    color: #fff;
+}
+
+.info-icon > svg {
+    width: 11px;
+    height: 11px;
+    display: block;
+    margin: auto;
+    position: relative;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+/* Toasts are transient and purely informational, but the container is fixed at
+   top-right directly over the "System Info" button at z-index 2000, so every
+   toast swallowed clicks on that button for its 3s lifetime. */
+.toast-container {
+    pointer-events: none;
+}
+
+/* ---- Responsive -------------------------------------------------------- */
+
+@media (max-width: 1200px) {
+    .dash-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pipeline-state.busy .live-dot { animation: none; }
+}
+
+/* Card-title icons are inline SVG; size them and let them inherit the chip ink. */
+.card-title-icon svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+    color: inherit;
+}
+
+/* ============================================================================
+   BUILDER LOG — expand control + lightbox
+   ========================================================================== */
+
+/* The shell positions the expand control over the log's top-right corner. */
+.log-shell {
+    position: relative;
+}
+
+.log-area {
+    margin: 0;
+    background: var(--sunken);
+    color: var(--ink);
+    padding: 0.75rem;
+    padding-right: 2.5rem;              /* keep text clear of the expand control */
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: var(--font-data);
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-expand-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0.45;                      /* unobtrusive until wanted */
+    transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.log-expand-btn svg { width: 15px; height: 15px; display: block; }
+
+.log-shell:hover .log-expand-btn { opacity: 0.75; }
+
+/* Scoped to .log-shell so this outranks the rule above - a bare
+   .log-expand-btn:hover (0,2,0) loses to .log-shell:hover .log-expand-btn
+   (0,3,0) and the icon would never reach full opacity. */
+.log-shell .log-expand-btn:hover,
+.log-shell .log-expand-btn:focus-visible {
+    opacity: 1;
+    color: var(--cubrid-teal);
+    border-color: var(--cubrid-teal);
+    background: var(--panel);
+}
+
+.log-expand-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* ---- Lightbox ---------------------------------------------------------- */
+
+/* Translucent scrim: the page stays visible behind, the way an attachment
+   preview does, so it reads as a temporary overlay rather than a new page. */
+.log-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3vh 3vw;
+    background: rgba(28, 36, 48, 0.55);
+    backdrop-filter: blur(2px);
+    animation: logLightboxIn 0.14s ease-out;
+}
+
+.log-lightbox[hidden] { display: none; }
+
+@keyframes logLightboxIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.log-lightbox-panel {
+    width: min(1200px, 94vw);
+    height: min(860px, 90vh);
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: 0 16px 48px rgba(28, 36, 48, 0.28);
+    overflow: hidden;
+    animation: logPanelIn 0.16s ease-out;
+}
+
+@keyframes logPanelIn {
+    from { opacity: 0; transform: scale(0.985); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.log-lightbox-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.625rem 0.75rem 0.625rem 1rem;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.log-lightbox-title {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--ink);
+    font-family: var(--font-data);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.log-lightbox-close {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    line-height: 1;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    color: var(--muted);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.log-lightbox-close:hover { background: var(--sunken); color: var(--ink); }
+
+.log-lightbox-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    padding: 0.75rem;
+}
+
+/* The same <pre> element, now filling the panel instead of a 400px box. */
+.log-lightbox-body .log-area {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    padding-right: 0.75rem;             /* no expand control to avoid in here */
+    font-size: 0.8125rem;
+}
+
+@media (max-width: 760px) {
+    .log-lightbox { padding: 0; }
+    .log-lightbox-panel { width: 100vw; height: 100vh; border-radius: 0; border: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .log-lightbox,
+    .log-lightbox-panel { animation: none; }
 }

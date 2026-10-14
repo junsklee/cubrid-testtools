@@ -23,6 +23,7 @@ class ReportController {
             });
 
             const result = await reportService.processTestResults(requestId, normalizedData);
+
             
             res.json({
                 success: true,
@@ -34,6 +35,23 @@ class ReportController {
             console.error('Error handling callback:', err);
             res.status(500).json({ error: err.message });
         }
+    }
+
+    /**
+     * Link the shared report theme into a stored report.
+     *
+     * Reports embed their stylesheet inline when they are generated, so the
+     * hundreds already on disk cannot pick up a template change. Injecting the
+     * stylesheet last in <head> lets it override those baked-in rules without
+     * rewriting any saved file. No-op if the link is already present.
+     */
+    applyReportTheme(html) {
+        if (typeof html !== 'string') return html;
+        if (html.includes('/css/report-theme.css')) return html;
+        const link = '    <link rel="stylesheet" href="/css/report-theme.css">\n';
+        const headEnd = html.lastIndexOf('</head>');
+        if (headEnd === -1) return html;
+        return html.slice(0, headEnd) + link + html.slice(headEnd);
     }
 
     /**
@@ -69,8 +87,8 @@ class ReportController {
             
             const reportPath = fileService.getReportPath(id);
             const reportHtml = await fileService.readFile(reportPath);
-            
-            res.send(reportHtml);
+
+            res.send(this.applyReportTheme(reportHtml));
         } catch (err) {
             console.error('Error viewing report:', err);
             res.status(404).send('<h1>Report not found</h1>');
