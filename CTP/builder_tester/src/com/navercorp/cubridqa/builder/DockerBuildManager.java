@@ -872,6 +872,8 @@ public class DockerBuildManager {
         try (PrintWriter writer = new PrintWriter(new FileWriter(script))) {
             writer.println("#!/bin/bash");
             writer.println("set -e");
+            // A failing `tar | pigz` must fail the build, not ship a truncated package as success
+            writer.println("set -o pipefail");
             writer.println();
             writeBuildAccelHelpers(writer);
             
@@ -987,14 +989,11 @@ public class DockerBuildManager {
             writer.println("    echo 'Format-patch fallback succeeded'");
             writer.println("    return 0");
             writer.println("  else");
-            writer.println("    echo 'Format-patch fallback failed; trying direct checkout'");
             writer.println("    rm -f /tmp/commit.patch 2>/dev/null || true");
             writer.println("    git reset --hard HEAD 2>/dev/null || true");
-            writer.println("    if git checkout -f --detach \"$commit_hash\" 2>/dev/null; then");
-            writer.println("      echo 'Direct checkout of commit succeeded'");
-            writer.println("      return 0");
-            writer.println("    fi");
-            writer.println("    echo 'Both cherry-pick and format-patch failed'");
+            // No checkout fallback: checking out the commit builds its whole ancestry, which is not
+            // "baseline + this commit" yet would be labelled, cached and reported as such.
+            writer.println("    echo 'Both cherry-pick and format-patch failed: the commit does not apply on the baseline'");
             writer.println("    return 1");
             writer.println("  fi");
             writer.println("}");
@@ -1174,6 +1173,8 @@ public class DockerBuildManager {
         try (PrintWriter writer = new PrintWriter(new FileWriter(script))) {
             writer.println("#!/bin/bash");
             writer.println("set -e");
+            // A failing `tar | pigz` must fail the build, not ship a truncated package as success
+            writer.println("set -o pipefail");
             writer.println();
             writeBuildAccelHelpers(writer);
 
