@@ -18,8 +18,25 @@ cd "$SCRIPT_DIR" || exit 1
 
 # Configuration
 PORT=${REPORT_PORT:-8091}
+
+# Bind address for the server. Take it from the environment, else from .env,
+# else fall back to localhost. Previously this defaulted to "localhost" and was
+# forced into the server's environment, which overrode HOST=0.0.0.0 in .env
+# (dotenv does not overwrite variables that are already set). Every restart
+# through this script therefore bound ::1 and silently cut off every client
+# except this machine.
+if [ -z "$HOST" ] && [ -f "${SCRIPT_DIR}/.env" ]; then
+    HOST=$(grep -E '^[[:space:]]*HOST=' "${SCRIPT_DIR}/.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"' \r')
+fi
 HOST=${HOST:-localhost}
-HEALTH_CHECK_URL="http://${HOST}:${PORT}/health"
+
+# 0.0.0.0 is a bind address, not a routable target - health checks still go to
+# localhost.
+HEALTH_HOST="$HOST"
+if [ "$HOST" = "0.0.0.0" ] || [ "$HOST" = "::" ]; then
+    HEALTH_HOST="localhost"
+fi
+HEALTH_CHECK_URL="http://${HEALTH_HOST}:${PORT}/health"
 TIMEOUT=5
 PID_FILE="${SCRIPT_DIR}/.server.pid"
 LOG_FILE="${SCRIPT_DIR}/monitor.log"
