@@ -2150,9 +2150,12 @@ public class BuilderTask {
             //
             // Note: getTestReadTimeoutMinutes() is used by tester-side executors as a per-attempt wall clock
             // cap (e.g., Docker process wait), so for the Builder -> Tester HTTP call we multiply by max_runs.
+            // The tester runs up to the request's maxRuns (validated without an upper bound), not
+            // builder.conf's max_runs; one extra attempt's worth covers admission queueing and
+            // package download/install before the first attempt.
             int perAttemptTimeoutMin = config.getTestReadTimeoutMinutes();
-            int maxRuns = Math.max(1, config.getMaxRuns());
-            long readTimeoutMsLong = (long) perAttemptTimeoutMin * 60_000L * (long) maxRuns;
+            int maxRuns = Math.max(1, Math.max(maxRunsOverride, config.getMaxRuns()));
+            long readTimeoutMsLong = (long) perAttemptTimeoutMin * 60_000L * (long) (maxRuns + 1);
             int readTimeoutMs = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, readTimeoutMsLong));
             conn.setReadTimeout(readTimeoutMs);
             taskLogger.info("Sending test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length())) + ") to tester " + host + ":" + port);
@@ -2809,24 +2812,89 @@ public class BuilderTask {
                 }
                 response.put("commitTimestamps", timestamps);
             }
-            
-            taskLogger.info("Sending results to " + callbackUrl);
-            
-            URL url = new URL(callbackUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setDoOutput(true);
-            
-            try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream())) {
-                writer.write(response.toString());
+            // Run settings, so a report generated from the callback alone (the Builder's own
+            // /callback, which has no request.json) shows them instead of defaults
+            for (String key : new String[] {"buildType", "runMode", "minRuns", "maxRuns", "timeBudgetMs", "workerIps"}) {
+                if (request.has(key)) {
+                    response.put(key, request.get(key));
+                }
             }
-            
-            int responseCode = conn.getResponseCode();
-            taskLogger.info("Callback response: " + responseCode);
-            
+
+            postCallback(callbackUrl, response, "results");
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Failed to send callback", e);
+        }
+    }
+
+    /**
+     * Posts a callback payload. The payload is first saved as callback.json in the request's log
+     * directory, so a run's results survive a report server that is down or rejects them. Transient
+     * failures (connection errors, timeouts, 408/429/5xx) are retried with backoff; every attempt
+     * has connect and read timeouts, so a stalled report server cannot hold the build slot.
+     */
+    private void postCallback(String callbackUrl, JSONObject payload, String what) throws InterruptedException {
+        byte[] body = payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String requestId = payload.optString("requestId", taskId);
+        try {
+            if (RequestIds.isValid(requestId)) {
+                Path saved = RequestLogManager.getInstance().getRequestLogDirectory(requestId).resolve("callback.json");
+                Files.createDirectories(saved.getParent());
+                Files.write(saved, body);
+                taskLogger.info("Saved " + what + " callback payload to " + saved);
+            }
+        } catch (Exception e) {
+            taskLogger.warning("Could not save callback payload: " + e.getMessage());
+        }
+
+        long[] backoffSeconds = {0, 5, 15, 30, 60};
+        for (int attempt = 1; attempt <= backoffSeconds.length; attempt++) {
+            if (backoffSeconds[attempt - 1] > 0) {
+                Thread.sleep(backoffSeconds[attempt - 1] * 1000L);
+            }
+            taskLogger.info("Sending " + what + " to " + callbackUrl + " (attempt " + attempt + ", " + body.length + " bytes)");
+            HttpURLConnection conn = null;
+            try {
+                conn = (HttpURLConnection) new URL(callbackUrl).openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                conn.setConnectTimeout(10_000);
+                conn.setReadTimeout(300_000);
+                conn.setDoOutput(true);
+                conn.setFixedLengthStreamingMode(body.length);
+                try (OutputStream out = conn.getOutputStream()) {
+                    out.write(body);
+                }
+                int code = conn.getResponseCode();
+                if (code >= 200 && code < 300) {
+                    taskLogger.info("Callback response: " + code);
+                    return;
+                }
+                taskLogger.warning("Callback " + what + " rejected with HTTP " + code + ": " + readErrorBody(conn));
+                if (code < 500 && code != 408 && code != 429) {
+                    break;  // the report server will reject a resend too
+                }
+            } catch (IOException e) {
+                taskLogger.warning("Callback " + what + " attempt " + attempt + " failed: " + e.getMessage());
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
+        }
+        taskLogger.severe("Callback " + what + " was not delivered to " + callbackUrl
+            + "; the payload is kept as callback.json in the request's log directory");
+    }
+
+    private static String readErrorBody(HttpURLConnection conn) {
+        try (InputStream err = conn.getErrorStream()) {
+            if (err == null) {
+                return "";
+            }
+            byte[] buf = new byte[2048];
+            int n = err.read(buf);
+            return n > 0 ? new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8) : "";
+        } catch (IOException e) {
+            return "";
         }
     }
     
@@ -2844,18 +2912,8 @@ public class BuilderTask {
                 .put("status", "error")
                 .put("message", errorMessage)
                 .put("timestamp", System.currentTimeMillis());
-            
-            URL url = new URL(callbackUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setDoOutput(true);
-            
-            try (OutputStreamWriter writer = new OutputStreamWriter(conn.getOutputStream())) {
-                writer.write(response.toString());
-            }
-            
-            conn.getResponseCode();
+
+            postCallback(callbackUrl, response, "error");
         } catch (Exception e) {
             taskLogger.log(Level.SEVERE, "Failed to send error callback", e);
         }
