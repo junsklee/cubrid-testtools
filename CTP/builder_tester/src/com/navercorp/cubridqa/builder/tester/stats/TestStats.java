@@ -39,6 +39,9 @@ public class TestStats {
     private double avgIoMbPerSecMean;
     private double avgIopsMean;
     private double avgNetMbPerSecMean;
+    // Observations that carried a value for each average (runs without docker samples report -1).
+    // Dividing by observationCount instead pulled averages toward 0.
+    private int cpuMeanSamples, cpuPeakSamples, memMeanSamples, memPeakSamples, ioSamples, iopsSamples, netSamples;
 
     // Resource peaks (max observed across runs)
     private double maxCpuPctPeak;
@@ -104,13 +107,13 @@ public class TestStats {
         addToWindow(durationWindow, durMs);
 
         // Update resource averages (incremental mean)
-        avgCpuPctMean = updateAverage(avgCpuPctMean, obs.getCpuPctMean());
-        avgCpuPctPeak = updateAverage(avgCpuPctPeak, obs.getCpuPctPeak());
-        avgMemMbMean = updateAverage(avgMemMbMean, obs.getMemMbMean());
-        avgMemMbPeak = updateAverage(avgMemMbPeak, obs.getMemMbPeak());
-        avgIoMbPerSecMean = updateAverage(avgIoMbPerSecMean, obs.getIoMbPerSecMean());
-        avgIopsMean = updateAverage(avgIopsMean, obs.getIopsMean());
-        avgNetMbPerSecMean = updateAverage(avgNetMbPerSecMean, obs.getNetMbPerSecMean());
+        if (obs.getCpuPctMean() >= 0.0) avgCpuPctMean = updateAverage(avgCpuPctMean, obs.getCpuPctMean(), ++cpuMeanSamples);
+        if (obs.getCpuPctPeak() >= 0.0) avgCpuPctPeak = updateAverage(avgCpuPctPeak, obs.getCpuPctPeak(), ++cpuPeakSamples);
+        if (obs.getMemMbMean() >= 0.0) avgMemMbMean = updateAverage(avgMemMbMean, obs.getMemMbMean(), ++memMeanSamples);
+        if (obs.getMemMbPeak() >= 0.0) avgMemMbPeak = updateAverage(avgMemMbPeak, obs.getMemMbPeak(), ++memPeakSamples);
+        if (obs.getIoMbPerSecMean() >= 0.0) avgIoMbPerSecMean = updateAverage(avgIoMbPerSecMean, obs.getIoMbPerSecMean(), ++ioSamples);
+        if (obs.getIopsMean() >= 0.0) avgIopsMean = updateAverage(avgIopsMean, obs.getIopsMean(), ++iopsSamples);
+        if (obs.getNetMbPerSecMean() >= 0.0) avgNetMbPerSecMean = updateAverage(avgNetMbPerSecMean, obs.getNetMbPerSecMean(), ++netSamples);
 
         // Update resource windows for percentiles
         addToWindow(cpuPeakWindow, obs.getCpuPctPeak());
@@ -140,14 +143,12 @@ public class TestStats {
         }
     }
 
-    private double updateAverage(double currentAvg, double newValue) {
-        if (newValue < 0.0) {
-            return currentAvg; // ignore unknown/sentinel values
-        }
-        if (observationCount == 1) {
+    /** Incremental mean over the {@code samples} known values (this one included). */
+    private static double updateAverage(double currentAvg, double newValue, int samples) {
+        if (samples <= 1) {
             return newValue;
         }
-        return ((observationCount - 1) * currentAvg + newValue) / observationCount;
+        return ((samples - 1) * currentAvg + newValue) / samples;
     }
 
     private double updatePeak(double currentPeak, double newValue) {
@@ -168,6 +169,11 @@ public class TestStats {
 
     public String getTestKey() {
         return testKey;
+    }
+
+    /** Observations that carried resource (memory) measurements. */
+    public int getResourceSampleCount() {
+        return memMeanSamples;
     }
 
     public int getObservationCount() {
@@ -312,6 +318,15 @@ public class TestStats {
         obj.put("totalAttempts", totalAttempts);
         obj.put("dockerImageCachedCount", dockerImageCachedCount);
         obj.put("packageCachedCount", packageCachedCount);
+        JSONObject samples = new JSONObject()
+            .put("cpuMean", cpuMeanSamples).put("cpuPeak", cpuPeakSamples)
+            .put("memMean", memMeanSamples).put("memPeak", memPeakSamples)
+            .put("io", ioSamples).put("iops", iopsSamples).put("net", netSamples);
+        obj.put("sampleCounts", samples);
+        // Percentile windows (p50/p95 were 0 after every restart without them)
+        obj.put("durationWindow", new org.json.JSONArray(durationWindow));
+        obj.put("cpuPeakWindow", new org.json.JSONArray(cpuPeakWindow));
+        obj.put("memPeakWindow", new org.json.JSONArray(memPeakWindow));
         return obj;
     }
 
@@ -341,6 +356,22 @@ public class TestStats {
         stats.totalAttempts = obj.getInt("totalAttempts");
         stats.dockerImageCachedCount = obj.getInt("dockerImageCachedCount");
         stats.packageCachedCount = obj.getInt("packageCachedCount");
+        // Snapshots before sample counts: assume every observation had measurements (old behaviour)
+        JSONObject samples = obj.optJSONObject("sampleCounts");
+        int legacy = stats.observationCount;
+        stats.cpuMeanSamples = samples != null ? samples.optInt("cpuMean", legacy) : legacy;
+        stats.cpuPeakSamples = samples != null ? samples.optInt("cpuPeak", legacy) : legacy;
+        stats.memMeanSamples = samples != null ? samples.optInt("memMean", legacy) : legacy;
+        stats.memPeakSamples = samples != null ? samples.optInt("memPeak", legacy) : legacy;
+        stats.ioSamples = samples != null ? samples.optInt("io", legacy) : legacy;
+        stats.iopsSamples = samples != null ? samples.optInt("iops", legacy) : legacy;
+        stats.netSamples = samples != null ? samples.optInt("net", legacy) : legacy;
+        org.json.JSONArray dw = obj.optJSONArray("durationWindow");
+        if (dw != null) for (int i = 0; i < dw.length(); i++) stats.durationWindow.add(dw.getLong(i));
+        org.json.JSONArray cw = obj.optJSONArray("cpuPeakWindow");
+        if (cw != null) for (int i = 0; i < cw.length(); i++) stats.cpuPeakWindow.add(cw.getDouble(i));
+        org.json.JSONArray mw = obj.optJSONArray("memPeakWindow");
+        if (mw != null) for (int i = 0; i < mw.length(); i++) stats.memPeakWindow.add(mw.getDouble(i));
         stats.backfillPeaksIfMissing();
         return stats;
     }

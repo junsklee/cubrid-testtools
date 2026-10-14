@@ -68,8 +68,9 @@ public class Predictor {
             return bootstrapPrediction(hw);
         }
 
-        // Compute confidence based on observation count
-        double confidence = computeConfidence(stats.getObservationCount());
+        // Confidence from the observations that carried resource measurements: runs without
+        // docker samples say nothing about CPU or memory
+        double confidence = computeConfidence(Math.min(stats.getObservationCount(), stats.getResourceSampleCount()));
 
         // Use EWMA for duration, with P50 as fallback
         long tpredMs;

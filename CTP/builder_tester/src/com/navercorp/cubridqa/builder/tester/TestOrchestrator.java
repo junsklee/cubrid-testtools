@@ -574,11 +574,18 @@ public class TestOrchestrator {
         if (observationWriter == null || request == null || result == null) {
             return;
         }
+        // Only runs that executed the case to a verdict describe how long and how heavy it is.
+        // Cancelled runs (killed early), environment/execution/install errors, keepAlive "started"
+        // and runs without a duration pulled the duration EWMA toward their truncated or timeout
+        // values (a 60s test's EWMA reached ~1.1M ms).
+        String status = result.getStatus() == null ? "" : result.getStatus().toLowerCase(java.util.Locale.ROOT);
+        TestExecutionMetrics measured = result.getExecutionMetrics();
+        if (!("pass".equals(status) || "fail".equals(status)) || measured == null || measured.getDurationMs() <= 0) {
+            logger.fine("Not recording stats for status '" + status + "' of " + request.getTestName());
+            return;
+        }
         try {
-            TestExecutionMetrics metrics = result.getExecutionMetrics();
-            if (metrics == null) {
-                metrics = TestExecutionMetrics.unknown();
-            }
+            TestExecutionMetrics metrics = measured;
             String testKey = firstNonEmpty(request.getTestPath(), request.getTestName());
             TestObservation.Builder builder = TestObservation.builder()
                 .testKey(testKey != null ? testKey : request.getTestName())

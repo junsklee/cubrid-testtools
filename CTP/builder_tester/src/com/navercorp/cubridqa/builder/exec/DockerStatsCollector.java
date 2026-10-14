@@ -151,25 +151,35 @@ final class DockerStatsCollector {
             case "B":
                 multiplier = 1d;
                 break;
-            case "KB":
+            // docker prints memory in binary units (MiB, GiB) but network and block I/O in decimal
+            // units (kB, MB, GB)
             case "KIB":
-            case "K":
                 multiplier = 1024d;
                 break;
-            case "MB":
+            case "KB":
+            case "K":
+                multiplier = 1000d;
+                break;
             case "MIB":
+                multiplier = 1024d * 1024d;
+                break;
+            case "MB":
             case "M":
-                multiplier = BYTES_PER_MB;
+                multiplier = 1000d * 1000d;
+                break;
+            case "GIB":
+                multiplier = 1024d * 1024d * 1024d;
                 break;
             case "GB":
-            case "GIB":
             case "G":
-                multiplier = BYTES_PER_MB * 1024d;
+                multiplier = 1000d * 1000d * 1000d;
+                break;
+            case "TIB":
+                multiplier = 1024d * 1024d * 1024d * 1024d;
                 break;
             case "TB":
-            case "TIB":
             case "T":
-                multiplier = BYTES_PER_MB * 1024d * 1024d;
+                multiplier = 1000d * 1000d * 1000d * 1000d;
                 break;
             default:
                 multiplier = BYTES_PER_MB;
@@ -446,13 +456,15 @@ final class DockerStatsCollector {
                 return;
             }
 
-            List<String> cmd = new ArrayList<>(5 + snapshot.size());
+            // All running containers, filtered below: naming them made docker print only "No such
+            // container" and exit 1 whenever one registered container did not exist yet (just
+            // launched) or any more (just removed), so the round had no sample for any of them.
+            List<String> cmd = new ArrayList<>(5);
             cmd.add("docker");
             cmd.add("stats");
             cmd.add("--no-stream");
             cmd.add("--format");
             cmd.add(FORMAT);
-            cmd.addAll(snapshot.keySet());
 
             Process process = null;
             try {
