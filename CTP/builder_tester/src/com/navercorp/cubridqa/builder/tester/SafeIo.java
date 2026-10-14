@@ -65,6 +65,18 @@ public class SafeIo {
     }
     
     /**
+     * Privileged deletion runs as root, so only accept absolute, already-normalized paths
+     * (no "." or ".." segments) at least three levels below the filesystem root.
+     */
+    public static boolean isSafeDeletionTarget(java.nio.file.Path dir) {
+        java.nio.file.Path abs = dir.toAbsolutePath();
+        if (!abs.equals(abs.normalize())) {
+            return false;
+        }
+        return abs.getNameCount() >= 3;
+    }
+
+    /**
      * Delete a directory using privileged deletion by default.
      *
      * @param dir Directory to delete
@@ -78,6 +90,10 @@ public class SafeIo {
         try {
             // Validate path to prevent command injection
             String path = dir.getAbsolutePath();
+            if (!isSafeDeletionTarget(dir.toPath())) {
+                logger.warning("Refusing privileged deletion of " + path);
+                return;
+            }
             if (path.contains(";") || path.contains("|") || path.contains("&") || path.contains("`")) {
                 logger.warning("Refusing to delete path with suspicious characters: " + path);
                 return;

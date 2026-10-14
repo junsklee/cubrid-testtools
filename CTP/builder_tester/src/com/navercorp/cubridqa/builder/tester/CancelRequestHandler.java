@@ -1,5 +1,6 @@
 package com.navercorp.cubridqa.builder.tester;
 
+import com.navercorp.cubridqa.builder.logging.RequestIds;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
 import com.navercorp.cubridqa.builder.exec.SqlAgentPool;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
@@ -52,6 +53,13 @@ public class CancelRequestHandler implements HttpHandler {
             JSONObject request = new JSONObject(requestBody);
             String requestId = request.optString("requestId", "").trim();
             boolean killAll = request.optBoolean("killAll", false);
+
+            if (!requestId.isEmpty() && !RequestIds.isValid(requestId)) {
+                responseWriter.sendJson(exchange, 400, new JSONObject()
+                    .put("status", "error")
+                    .put("message", "Invalid requestId"));
+                return;
+            }
 
             if (requestId.isEmpty() && !killAll) {
                 responseWriter.sendJson(exchange, 400, new JSONObject()
@@ -149,6 +157,7 @@ public class CancelRequestHandler implements HttpHandler {
 
     private void deleteRequestLogs(String requestId) {
         try {
+            RequestLogManager.getInstance().closeRequestLoggers(requestId);
             Path logDir = RequestLogManager.getInstance().getRequestLogDirectory(requestId);
             if (logDir != null) {
                 SafeIo.deleteDirectoryWithPrivileges(logDir.toFile(), logger);

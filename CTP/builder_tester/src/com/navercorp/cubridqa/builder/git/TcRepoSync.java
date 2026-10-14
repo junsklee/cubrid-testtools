@@ -296,7 +296,12 @@ public class TcRepoSync {
         if (value.isEmpty()) {
             value = "adhoc_" + System.currentTimeMillis();
         }
-        return value.replaceAll("[^a-zA-Z0-9_.-]", "_");
+        value = value.replaceAll("[^a-zA-Z0-9_.-]", "_").replace("..", "__");
+        // "." or a leading dot/dash would resolve to the requests root or a hidden/option-like name.
+        if (value.startsWith(".") || value.startsWith("-")) {
+            value = "_" + value;
+        }
+        return value;
     }
 
     private String normalizeRequestedBranch(String requestedBranch) {

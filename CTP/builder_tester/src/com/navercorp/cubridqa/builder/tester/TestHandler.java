@@ -1,5 +1,6 @@
 package com.navercorp.cubridqa.builder.tester;
 
+import com.navercorp.cubridqa.builder.logging.RequestIds;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
@@ -53,6 +54,12 @@ public class TestHandler implements HttpHandler {
 
             // Extract request ID if provided
             String requestId = request.optString("requestId", null);
+            if (requestId != null && requestId.isEmpty()) {
+                requestId = null;
+            }
+            if (requestId != null) {
+                RequestIds.require(requestId);
+            }
 
             if (CancelledRequests.isCancelled(requestId)) {
                 requestLogger.warning("Request cancelled before execution: " + requestId);

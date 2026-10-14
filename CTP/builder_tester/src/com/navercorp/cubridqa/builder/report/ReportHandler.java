@@ -3,8 +3,10 @@
  */
 package com.navercorp.cubridqa.builder.report;
 
+import com.navercorp.cubridqa.builder.logging.RequestIds;
 import java.io.*;
 import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -61,18 +63,23 @@ public class ReportHandler implements HttpHandler {
                 requestId = "req_" + System.currentTimeMillis() + "_" +
                             UUID.randomUUID().toString().substring(0, 8);
             }
-            Path requestDir = Paths.get(logBaseDir, "requests", requestId);
+            if (!RequestIds.isValid(requestId)) {
+                sendErrorResponse(exchange, 400, "Invalid requestId");
+                return;
+            }
+            Path requestDir = requestDir(requestId);
             Files.createDirectories(requestDir);
             
             // Save the raw JSON data
             Path jsonPath = requestDir.resolve("results.json");
-            Files.write(jsonPath, requestBody.getBytes());
+            Files.write(jsonPath, requestBody.getBytes(StandardCharsets.UTF_8));
             logger.info("Saved results to: " + jsonPath);
 
             // Check if this is a build-only request (no tests were run)
             boolean buildOnly = data.optBoolean("buildOnly", false);
 
-            if (buildOnly) {
+            JSONArray reportedResults = data.optJSONArray("results");
+            if (buildOnly && (reportedResults == null || reportedResults.length() == 0)) {
                 logger.info("Build-only mode detected, generating build-only report for: " + requestId);
                 // Inject a synthetic "Build" test result showing success for each commit
                 JSONArray results = new JSONArray();
@@ -82,7 +89,8 @@ public class ReportHandler implements HttpHandler {
                     commits.put("unknown");
                 }
 
-                // Create a "Build" test entry that passed for all commits
+                // No per-commit build results were sent: show a "Build" entry for each commit.
+                // Real build_success/build_failed/upload_failed results are kept as sent.
                 for (int i = 0; i < commits.length(); i++) {
                     String commit = commits.getString(i);
                     JSONObject buildResult = new JSONObject();
@@ -102,7 +110,7 @@ public class ReportHandler implements HttpHandler {
             // Generate the HTML report
             String reportHtml = generateReport(data, requestId);
             Path reportPath = requestDir.resolve("report.html");
-            Files.write(reportPath, reportHtml.getBytes());
+            Files.write(reportPath, reportHtml.getBytes(StandardCharsets.UTF_8));
             logger.info("Generated report at: " + reportPath);
 
             // Return the HTML report as response
@@ -137,10 +145,14 @@ public class ReportHandler implements HttpHandler {
             }
             
             String requestId = query.substring(3);
-            Path reportPath = Paths.get(logBaseDir, "requests", requestId, "report.html");
+            if (!RequestIds.isValid(requestId)) {
+                sendErrorResponse(exchange, 400, "Invalid requestId");
+                return;
+            }
+            Path reportPath = requestDir(requestId).resolve("report.html");
             
             if (Files.exists(reportPath)) {
-                String reportHtml = new String(Files.readAllBytes(reportPath));
+                String reportHtml = new String(Files.readAllBytes(reportPath), StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
                 sendResponse(exchange, 200, reportHtml);
             } else {
@@ -180,8 +192,10 @@ public class ReportHandler implements HttpHandler {
         // List all report directories
         Path requestsDir = Paths.get(logBaseDir, "requests");
         if (Files.exists(requestsDir)) {
-            Files.list(requestsDir)
+            try (java.util.stream.Stream<Path> dirs = Files.list(requestsDir)) {
+            dirs
                 .filter(Files::isDirectory)
+                .filter(dir -> RequestIds.isValid(dir.getFileName().toString()))
                 .sorted((a, b) -> b.getFileName().toString().compareTo(a.getFileName().toString()))
                 .limit(50)
                 .forEach(dir -> {
@@ -201,6 +215,7 @@ public class ReportHandler implements HttpHandler {
                         html.append("</div>");
                     }
                 });
+            }
         }
         
         html.append("</div></div></body></html>");
@@ -215,7 +230,8 @@ public class ReportHandler implements HttpHandler {
         // Replace placeholders in template
         template = template.replace("{{REQUEST_ID}}", requestId);
         template = template.replace("{{TIMESTAMP}}", dateFormat.format(new Date()));
-        template = template.replace("{{RESULTS_JSON}}", data.toString());
+        // The JSON lands inside a <script> block: "</" must not close it.
+        template = template.replace("{{RESULTS_JSON}}", data.toString().replace("</", "<\\/"));
         
         return template;
     }
@@ -229,7 +245,7 @@ public class ReportHandler implements HttpHandler {
             Path templatePath = Paths.get(System.getProperty("user.dir"),
                                           "resources", "report-template.html");
             if (Files.exists(templatePath)) {
-                return new String(Files.readAllBytes(templatePath));
+                return new String(Files.readAllBytes(templatePath), StandardCharsets.UTF_8);
             }
             throw new IOException("Report template not found in classpath or resources directory");
         }
@@ -237,7 +253,7 @@ public class ReportHandler implements HttpHandler {
     
     private String readRequestBody(HttpExchange exchange) throws IOException {
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(exchange.getRequestBody()))) {
+                new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
             StringBuilder body = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -287,8 +303,12 @@ public class ReportHandler implements HttpHandler {
                 sendErrorResponse(exchange, 400, "Invalid log type. Must be 'builds' or 'tests'");
                 return;
             }
+            if (!RequestIds.isValid(requestId) || !isPlainFileName(fileName)) {
+                sendErrorResponse(exchange, 400, "Invalid requestId or file name");
+                return;
+            }
             
-            Path logFile = Paths.get(logBaseDir, "requests", requestId, logType, fileName);
+            Path logFile = requestDir(requestId).resolve(logType).resolve(fileName);
             
             if (Files.exists(logFile)) {
                 String content = new String(Files.readAllBytes(logFile), "UTF-8");
@@ -326,8 +346,12 @@ public class ReportHandler implements HttpHandler {
                 sendErrorResponse(exchange, 400, "Invalid log type. Must be 'builds' or 'tests'");
                 return;
             }
+            if (!RequestIds.isValid(requestId)) {
+                sendErrorResponse(exchange, 400, "Invalid requestId");
+                return;
+            }
             
-            Path logDir = Paths.get(logBaseDir, "requests", requestId, logType);
+            Path logDir = requestDir(requestId).resolve(logType);
             
             JSONArray files = new JSONArray();
             if (Files.exists(logDir) && Files.isDirectory(logDir)) {
@@ -346,5 +370,14 @@ public class ReportHandler implements HttpHandler {
             logger.log(Level.SEVERE, "Error listing log files", e);
             sendErrorResponse(exchange, 500, "Internal server error: " + e.getMessage());
         }
+    }
+
+    private Path requestDir(String requestId) {
+        return RequestIds.resolveUnder(Paths.get(logBaseDir, "requests"), requestId);
+    }
+
+    private static boolean isPlainFileName(String name) {
+        return name != null && !name.isEmpty() && !name.startsWith(".")
+            && name.indexOf('/') < 0 && name.indexOf('\\') < 0;
     }
 }

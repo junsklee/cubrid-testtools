@@ -1,5 +1,7 @@
 package com.navercorp.cubridqa.builder.tester;
 
+import com.navercorp.cubridqa.builder.logging.RequestLogManager;
+import com.navercorp.cubridqa.builder.logging.RequestIds;
 import com.navercorp.cubridqa.builder.exec.SqlAgentPool;
 import com.navercorp.cubridqa.builder.http.HttpUtils;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
@@ -52,6 +54,12 @@ public class FinalizeRequestHandler implements HttpHandler {
             String requestBody = HttpUtils.readRequestBody(exchange);
             JSONObject request = new JSONObject(requestBody);
             String requestId = request.getString("requestId");
+            if (!RequestIds.isValid(requestId)) {
+                responseWriter.sendJson(exchange, 400, new JSONObject()
+                    .put("status", "error")
+                    .put("message", "Invalid requestId"));
+                return;
+            }
 
             logger.info("Received finalize request for: " + requestId);
 
@@ -65,6 +73,12 @@ public class FinalizeRequestHandler implements HttpHandler {
             }
             if (sqlTcSync != null) {
                 sqlTcSync.cleanupRequestWorkspace(logger, requestId);
+            }
+
+            try {
+                RequestLogManager.getInstance().closeRequestLoggers(requestId);
+            } catch (IllegalStateException notInitialized) {
+                // request grouping disabled
             }
 
             JSONObject response = new JSONObject()

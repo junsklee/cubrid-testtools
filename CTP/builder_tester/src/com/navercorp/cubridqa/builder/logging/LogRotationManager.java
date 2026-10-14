@@ -169,11 +169,11 @@ public class LogRotationManager {
      */
     public void recordRequest(String requestId, JSONObject requestData) {
         try {
-            String requestDir = config.getRequestDir(requestId);
-            Files.createDirectories(Paths.get(requestDir));
+            Path requestDir = RequestIds.resolveUnder(Paths.get(config.getRequestsDir()), requestId);
+            Files.createDirectories(requestDir);
             
             // Save request data
-            Path requestFile = Paths.get(requestDir, "request.json");
+            Path requestFile = requestDir.resolve("request.json");
             Files.write(requestFile, requestData.toString(2).getBytes());
             
             logger.info("Recorded new request: " + requestId);
@@ -186,11 +186,11 @@ public class LogRotationManager {
      * Delete a specific request log directory
      */
     public boolean deleteRequestLogDir(String requestId) {
-        if (requestId == null || requestId.trim().isEmpty()) {
+        if (!RequestIds.isValid(requestId)) {
             return false;
         }
         try {
-            File dir = new File(config.getRequestDir(requestId));
+            File dir = RequestIds.resolveUnder(Paths.get(config.getRequestsDir()), requestId).toFile();
             if (!dir.exists()) {
                 return false;
             }
