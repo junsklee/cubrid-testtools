@@ -1,6 +1,7 @@
 package com.navercorp.cubridqa.builder.logs;
 
 import com.navercorp.cubridqa.builder.logging.RequestContext;
+import com.navercorp.cubridqa.builder.logging.RequestIds;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -19,6 +20,31 @@ public class LogLocator {
     private static final int RECENT_REQUESTS_SCAN_LIMIT = 60;
     private static final ConcurrentHashMap<String, Path> CACHE = new ConcurrentHashMap<>();
     
+    /**
+     * Find a log of a known request: its tests/ and root directories only. Log names carry no
+     * request ID, so a lookup by name alone can return an earlier request's log of the same
+     * commit and test. Falls back to {@link #findLogFile(String)} only if the request's directory
+     * does not have it.
+     */
+    public Path findLogFile(String filename, String requestId) {
+        if (filename == null || filename.trim().isEmpty()) {
+            return null;
+        }
+        if (RequestIds.isValid(requestId)) {
+            try {
+                Path requestLogDir = RequestLogManager.getInstance().getRequestLogDirectory(requestId);
+                for (Path candidate : new Path[] {requestLogDir.resolve("tests").resolve(filename), requestLogDir.resolve(filename)}) {
+                    if (Files.isRegularFile(candidate)) {
+                        return candidate;
+                    }
+                }
+            } catch (Exception e) {
+                logger.warning("Failed to look up " + filename + " for request " + requestId + ": " + e.getMessage());
+            }
+        }
+        return findLogFile(filename);
+    }
+
     public Path findLogFile(String filename) {
         if (filename == null || filename.trim().isEmpty()) {
             return null;

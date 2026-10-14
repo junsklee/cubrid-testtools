@@ -30,7 +30,7 @@ public class LogStreamHandler implements HttpHandler {
         logger.info("Searching for log file: " + filename);
         
         try {
-            Path logFile = logLocator.findLogFile(filename);
+            Path logFile = logLocator.findLogFile(filename, queryParam(exchange, "requestId"));
             if (logFile != null && Files.exists(logFile)) {
                 logger.info("Found log file at: " + logFile.toString());
                 
@@ -60,5 +60,23 @@ public class LogStreamHandler implements HttpHandler {
             logger.log(Level.SEVERE, "Error serving log file " + filename, e);
             responseWriter.sendText(exchange, 500, "Error serving log file: " + e.getMessage());
         }
+    }
+
+    private static String queryParam(HttpExchange exchange, String name) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null) {
+            return null;
+        }
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq > 0 && name.equals(pair.substring(0, eq))) {
+                try {
+                    return java.net.URLDecoder.decode(pair.substring(eq + 1), "UTF-8");
+                } catch (java.io.UnsupportedEncodingException e) {
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 }

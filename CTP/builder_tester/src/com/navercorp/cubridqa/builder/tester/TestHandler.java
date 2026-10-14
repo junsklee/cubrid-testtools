@@ -12,11 +12,6 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -45,7 +40,6 @@ public class TestHandler implements HttpHandler {
         }
 
         JSONObject responsePayload = null;
-        List<Path> logFilesToSend = new ArrayList<>();
         int httpStatus = 200;
 
         try {
@@ -96,16 +90,8 @@ public class TestHandler implements HttpHandler {
             }
             }
             
-            // Extract log files to send
-            if (responsePayload.has("attemptLogFiles")) {
-                Object logFilesObj = responsePayload.get("attemptLogFiles");
-                if (logFilesObj instanceof List) {
-                    @SuppressWarnings("unchecked")
-                    List<Path> paths = (List<Path>) logFilesObj;
-                    logFilesToSend = paths;
-                }
-                responsePayload.remove("attemptLogFiles");
-            }
+            // Logs and artifacts are not sent with the result: the Builder fetches each file named
+            // in attemptLogMetadata through GET /log/<name>?requestId=<id>.
 
         } catch (JSONException | IllegalArgumentException e) {
             logger.log(Level.WARNING, "Bad test request", e);
@@ -131,22 +117,7 @@ public class TestHandler implements HttpHandler {
         }
 
         try {
-            // Check if we should send multipart response (when we have log files)
-            if (!logFilesToSend.isEmpty()) {
-                // Prepare files map for multipart sending
-                Map<String, Path> files = new HashMap<>();
-                for (int i = 0; i < logFilesToSend.size(); i++) {
-                    Path logFile = logFilesToSend.get(i);
-                    String fieldName = "log_attempt_" + (i + 1);
-                    files.put(fieldName, logFile);
-                }
-                
-                // Send multipart response with JSON and log files
-                responseWriter.sendMultipart(exchange, httpStatus, responsePayload, logFilesToSend);
-            } else {
-                // Send regular JSON response (backward compatibility or no logs)
-                responseWriter.sendJson(exchange, httpStatus, responsePayload);
-            }
+            responseWriter.sendJson(exchange, httpStatus, responsePayload);
         } catch (IOException ioe) {
             String msg = ioe.getMessage() == null ? "" : ioe.getMessage();
             if (HttpUtils.isClientAbort(ioe) || msg.contains("insufficient bytes written")) {

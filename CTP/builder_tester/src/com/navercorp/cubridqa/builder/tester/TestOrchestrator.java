@@ -187,19 +187,8 @@ public class TestOrchestrator {
                 attemptResponse.remove("logFilePath");
             }
 
-            // Collect extra artifact files (sent via the same multipart channel; metadata
-            // entries carry artifactType so the report can render diffs/expected/actual)
-            if (attemptResponse.has("artifactFiles")) {
-                Object artifactsObj = attemptResponse.get("artifactFiles");
-                if (artifactsObj instanceof List) {
-                    for (Object p : (List<?>) artifactsObj) {
-                        if (p instanceof Path) {
-                            attemptLogFiles.add((Path) p);
-                        }
-                    }
-                }
-                attemptResponse.remove("artifactFiles");
-            }
+            // Extra artifacts (SQL diffs, case bundles): their metadata entries carry artifactType so
+            // the report can render them; the Builder fetches each file by logFileName.
             if (attemptResponse.has("artifactMetadata")) {
                 try {
                     JSONArray artifactMetadata = attemptResponse.getJSONArray("artifactMetadata");
@@ -235,7 +224,6 @@ public class TestOrchestrator {
 
             if ("started".equalsIgnoreCase(status)) {
                 attemptResponse.put("attempts", attempt);
-                attemptResponse.put("attemptLogFiles", attemptLogFiles);
                 attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
                 // Note: keepAlive mode doesn't check for flakiness since it's not meant for testing
                 return attemptResponse;
@@ -260,7 +248,6 @@ public class TestOrchestrator {
                     attemptResponse.put("flaky", true);
                     attemptResponse.put("status", "flaky");  // Override status to indicate flakiness
                     testLogger.info("Test marked as flaky - saw both pass and failure in " + attempt + " attempts");
-                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
                     attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
                     return attemptResponse;
                 }
@@ -268,7 +255,6 @@ public class TestOrchestrator {
                 else if (!sawFailure && attempt >= minRuns) {
                     attemptResponse.put("attempts", attempt);
                     testLogger.info("Test appears stable - only passes in " + attempt + " attempts");
-                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
                     attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
                     return attemptResponse;
                 }
@@ -286,7 +272,6 @@ public class TestOrchestrator {
                     attemptResponse.put("flaky", true);
                     attemptResponse.put("status", "flaky");  // Override status to indicate flakiness
                     testLogger.info("Test marked as flaky in until-fail mode - saw both pass and failure in " + attempt + " attempts");
-                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
                     attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
                     return attemptResponse;
                 }
@@ -294,7 +279,6 @@ public class TestOrchestrator {
                 else if (!sawPass && attempt >= Math.max(2, minRuns)) {
                     attemptResponse.put("attempts", attempt);
                     testLogger.info("Test failure reproduced - only failures in " + attempt + " attempts (reproduce mode)");
-                    attemptResponse.put("attemptLogFiles", attemptLogFiles);
                     attemptResponse.put("attemptLogMetadata", attemptLogMetadata);
                     return attemptResponse;
                 }
@@ -309,7 +293,6 @@ public class TestOrchestrator {
         // Completed due to maxRuns or time budget
         JSONObject finalResponse = lastResponse != null ? new JSONObject(lastResponse.toString()) : new JSONObject();
         finalResponse.put("attempts", Math.max(1, attempt));
-        finalResponse.put("attemptLogFiles", attemptLogFiles);
         finalResponse.put("attemptLogMetadata", attemptLogMetadata);
         finalResponse.put("runMode", runMode);
         
@@ -545,11 +528,6 @@ public class TestOrchestrator {
             json.put("workspace", result.getWorkspace());
         }
         
-        // Handle log files for multipart response
-        if (!result.getAttemptLogFiles().isEmpty()) {
-            json.put("attemptLogFiles", result.getAttemptLogFiles());
-        }
-
         // Add single log file path for backward compatibility
         if (!result.getAttemptLogFiles().isEmpty()) {
             Path firstLogFile = result.getAttemptLogFiles().get(0);
@@ -559,10 +537,8 @@ public class TestOrchestrator {
 
         // Extra artifacts (SQL answer diffs, actual/expected output, case source, ...)
         if (!result.getArtifactFiles().isEmpty()) {
-            List<Path> artifactPaths = new ArrayList<>();
             JSONArray artifactMetadata = new JSONArray();
             for (TestResult.ArtifactFile artifact : result.getArtifactFiles()) {
-                artifactPaths.add(artifact.path);
                 JSONObject meta = new JSONObject()
                     .put("attempt", artifact.attempt)
                     .put("logFileName", artifact.path.getFileName().toString())
@@ -572,7 +548,6 @@ public class TestOrchestrator {
                 }
                 artifactMetadata.put(meta);
             }
-            json.put("artifactFiles", artifactPaths);
             json.put("artifactMetadata", artifactMetadata);
         }
 

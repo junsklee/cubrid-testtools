@@ -3163,6 +3163,12 @@ public class BuilderTask {
      */
     private String fetchLogContentFromRemoteTester(String host, int port, String logFileName) throws Exception {
         String url = "http://" + host + ":" + port + "/log/" + logFileName;
+        // Log names carry no request ID; name the request so the tester looks in its directory
+        // instead of returning an earlier request's log of the same commit and test.
+        String requestId = request.optString("requestId", taskId);
+        if (RequestIds.isValid(requestId)) {
+            url += "?requestId=" + requestId;
+        }
         int connectTimeout = config.getLogFetchConnectTimeoutSeconds();
         int readTimeout = config.getLogFetchReadTimeoutSeconds();
         taskLogger.info(String.format("Fetching log from: %s (connect timeout: %ds, read timeout: %ds)", 
