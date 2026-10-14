@@ -3,6 +3,7 @@
  */
 package com.navercorp.cubridqa.builder;
 
+import com.navercorp.cubridqa.builder.logging.RequestIds;
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
@@ -422,7 +423,8 @@ public class BuilderTask {
             try {
                 List<String> workerIps = resolveWorkerIpsForCancel();
                 if (!workerIps.isEmpty()) {
-                    sendCancelRequests(requestId, workerIps, true);
+                    // Only this request's containers: other requests may be testing on the same nodes.
+                    sendCancelRequests(requestId, workerIps, false);
                 }
             } catch (Exception e) {
                 if (taskLogger != null) {

@@ -1,5 +1,6 @@
 package com.navercorp.cubridqa.builder.exec;
 
+import com.navercorp.cubridqa.builder.docker.DockerLabels;
 import com.navercorp.cubridqa.builder.tester.TestRequest;
 import com.navercorp.cubridqa.builder.tester.TestResult;
 import com.navercorp.cubridqa.builder.tester.TestStatus;
@@ -306,6 +307,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         // Always name the container so we can manage it on timeout/failure
         dockerCommand.add("--name");
         dockerCommand.add(containerName);
+        DockerLabels.addRequestLabel(dockerCommand, request.getRequestId());
         dockerCommand.add("--cap-add");
         dockerCommand.add("SYS_ADMIN");
         dockerCommand.add("--security-opt");
@@ -531,7 +533,9 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 try { Files.createFile(workDir.resolve("KEEP_WORKSPACE")); } catch (Exception ignore) {}
                 List<String> keepCmd = new ArrayList<>();
                 keepCmd.add("docker"); keepCmd.add("run"); keepCmd.add("-d");
-                keepCmd.add("--name"); keepCmd.add(containerName);
+                // Own name: the run's name stays free for the test's next attempt.
+                keepCmd.add("--name"); keepCmd.add(containerName + "_kept");
+                keepCmd.add("--label"); keepCmd.add(DockerLabels.KEEP + "=true");
                 keepCmd.add("--cap-add"); keepCmd.add("SYS_ADMIN");
                 keepCmd.add("--security-opt"); keepCmd.add("apparmor=unconfined");
                 keepCmd.add("-v"); keepCmd.add(dockerWorkDir.toString() + ":/workspace");
@@ -545,8 +549,8 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 keepCmd.add(config.getDockerTestImage());
                 keepCmd.add("-lc"); keepCmd.add("echo READY; tail -f /dev/null");
                 try { new ProcessBuilder(keepCmd).start().waitFor(5, TimeUnit.SECONDS); } catch (Exception ignore) {}
-                testLogger.info("Failure container kept for debugging: " + containerName);
-                String execCmd = "docker exec -it " + containerName + " bash";
+                testLogger.info("Failure container kept for debugging: " + containerName + "_kept");
+                String execCmd = "docker exec -it " + containerName + "_kept bash";
                 
                 return finalizeResult(
                     TestResult.builder()
@@ -555,7 +559,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                         .message("Docker test execution failed; container kept for debugging")
                         .commit(request.getCommit() != null ? request.getCommit() : "unknown")
                         .commitShort(request.getCommitShort())
-                        .containerName(containerName)
+                        .containerName(containerName + "_kept")
                         .execCommand(execCmd)
                         .workspace(dockerWorkDir.toString())
                         .timestamp(System.currentTimeMillis()),

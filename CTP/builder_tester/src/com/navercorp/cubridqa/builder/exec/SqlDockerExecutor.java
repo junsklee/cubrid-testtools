@@ -1,5 +1,7 @@
 package com.navercorp.cubridqa.builder.exec;
 
+import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
+import com.navercorp.cubridqa.builder.docker.DockerLabels;
 import com.navercorp.cubridqa.builder.cache.BuildCache;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
@@ -317,7 +319,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         String containerName = "tester_sqlagent_" + buildType + "_" + safeReq + "_" + commitShort
             + "_" + seq + "_" + AGENT_LAUNCH_SEQ.incrementAndGet();
 
-        List<String> cmd = baseDockerRunCommand(containerName, agentWorkDir, repoRoot, dockerImage);
+        List<String> cmd = baseDockerRunCommand(containerName, request.getRequestId(), agentWorkDir, repoRoot, dockerImage);
         cmd.add("-lc");
         cmd.add("bash /workspace/sql_agent_entry.sh");
         // Detach flag must come before the image; rebuild with -d inserted
@@ -408,7 +410,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
                 containerName = containerName + "_v" + attemptNumber;
             }
 
-            List<String> cmd = baseDockerRunCommand(containerName, dockerWorkDir, repoRoot, dockerImage);
+            List<String> cmd = baseDockerRunCommand(containerName, request.getRequestId(), dockerWorkDir, repoRoot, dockerImage);
             cmd.add("-lc");
             cmd.add("bash /workspace/run_sql_test.sh");
             int runIdx = cmd.indexOf("run") + 1;
@@ -475,7 +477,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
     }
 
     /** Common `docker run` prefix shared by per-case containers and pool agents (no -d/--rm, no command). */
-    private List<String> baseDockerRunCommand(String containerName, Path hostWorkspaceDir, Path repoRoot, String dockerImage) {
+    private List<String> baseDockerRunCommand(String containerName, String requestId, Path hostWorkspaceDir, Path repoRoot, String dockerImage) {
         List<String> cmd = new ArrayList<>();
         cmd.add("docker");
         cmd.add("run");
@@ -499,6 +501,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         cmd.add("max-file=3");
         cmd.add("--name");
         cmd.add(containerName);
+        DockerLabels.addRequestLabel(cmd, requestId);
         // The setup script bind-mounts /opt/cubrid at $HOME/CUBRID (mount --bind needs SYS_ADMIN)
         cmd.add("--cap-add");
         cmd.add("SYS_ADMIN");

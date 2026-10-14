@@ -880,7 +880,7 @@ public class BuilderConfig {
     }
     
     public boolean getKeepFailedContainers() {
-        return Boolean.parseBoolean(properties.getProperty("keep_failed_containers", "true"));
+        return Boolean.parseBoolean(properties.getProperty("keep_failed_containers", "false"));
     }
 
     public int getBuildTimeoutMinutes() {

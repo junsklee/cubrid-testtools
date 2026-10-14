@@ -1,5 +1,6 @@
 package com.navercorp.cubridqa.builder.tester;
 
+import com.navercorp.cubridqa.builder.docker.DockerLabels;
 import com.navercorp.cubridqa.builder.logging.RequestIds;
 import com.navercorp.cubridqa.builder.docker.DockerUtils;
 import com.navercorp.cubridqa.builder.exec.SqlAgentPool;
@@ -91,23 +92,16 @@ public class CancelRequestHandler implements HttpHandler {
                 return;
             }
 
-            String safeRequestId = requestId.replaceAll("[^a-zA-Z0-9_.-]", "_");
-            List<String> ids = new ArrayList<>();
-            if (killAll) {
-                ids.addAll(listContainers("tester_"));
-            } else if (!safeRequestId.isEmpty()) {
-                ids.addAll(listContainers(safeRequestId));
-            }
+            // A request's containers are selected by label, so cancelling one request never touches
+            // other requests' containers or those of another tester sharing this Docker daemon.
+            // killAll (explicit operator use only; the Builder no longer sends it) still sweeps every
+            // tester_* container.
+            String filter = killAll ? "name=tester_" : DockerLabels.requestFilter(requestId);
+            List<String> ids = listContainers(filter);
 
             int killed = 0;
             if (!ids.isEmpty()) {
-                List<String> runningIds = new ArrayList<>();
-                if (killAll) {
-                    runningIds.addAll(listRunningContainers("tester_"));
-                } else if (!safeRequestId.isEmpty()) {
-                    runningIds.addAll(listRunningContainers(safeRequestId));
-                }
-                killRunningContainers(runningIds);
+                killRunningContainers(listRunningContainers(filter));
                 killed = removeContainers(ids);
             }
 
@@ -126,18 +120,18 @@ public class CancelRequestHandler implements HttpHandler {
         }
     }
 
-    private List<String> listContainers(String nameFilter) throws IOException, InterruptedException {
+    private List<String> listContainers(String filter) throws IOException, InterruptedException {
         CommandResult result = runCommand(
-            Arrays.asList("docker", "ps", "-aq", "--filter", "name=" + nameFilter),
-            "list containers: " + nameFilter
+            Arrays.asList("docker", "ps", "-aq", "--filter", filter),
+            "list containers: " + filter
         );
         return parseContainerIds(result);
     }
 
-    private List<String> listRunningContainers(String nameFilter) throws IOException, InterruptedException {
+    private List<String> listRunningContainers(String filter) throws IOException, InterruptedException {
         CommandResult result = runCommand(
-            Arrays.asList("docker", "ps", "-q", "--filter", "name=" + nameFilter),
-            "list running containers: " + nameFilter
+            Arrays.asList("docker", "ps", "-q", "--filter", filter),
+            "list running containers: " + filter
         );
         return parseContainerIds(result);
     }

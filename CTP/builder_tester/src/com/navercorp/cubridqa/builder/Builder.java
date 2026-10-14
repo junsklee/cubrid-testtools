@@ -3,6 +3,8 @@
  */
 package com.navercorp.cubridqa.builder;
 
+import com.navercorp.cubridqa.builder.logging.RequestIds;
+import com.navercorp.cubridqa.builder.docker.DockerLabels;
 import java.io.*;
 import java.net.*;
 import java.util.*;
@@ -591,7 +593,7 @@ public class Builder {
 
                 if (runningTask != null) {
                     try {
-                        cleanupContainersForCancel();
+                        cleanupContainersForCancel(taskId);
                     } catch (Exception cleanupEx) {
                         logger.warning("Cancel cleanup failed: " + cleanupEx.getMessage());
                     }
@@ -1185,65 +1187,47 @@ public class Builder {
     }
 
     // Remove containers left from prior runs. Per requirement, perform from Builder only.
+    // Runs on every POST /build, possibly while other requests are testing on this host's Docker
+    // daemon, so it must never touch a running test or build container.
     private void cleanupStaleContainers() throws IOException, InterruptedException {
         if (!DockerUtils.isDockerAvailable()) {
             logger.info("Docker not available; skipping container cleanup");
             return;
         }
-        // 1) Remove tester containers kept alive from previous runs (both debug and release)
-        removeByNamePrefix("tester_debug_");
-        removeByNamePrefix("tester_release_");
-        // 2) Prune exited containers for our known images (safe)
-        removeExitedByAncestor(config.getDockerBuildImage());
-        removeExitedByAncestor(config.getDockerTestImage());
+        // 1) Failed-test containers kept alive for debugging (keep_failed_containers)
+        removeContainers("kept debug containers", "--filter", "label=" + DockerLabels.KEEP + "=true");
+        // 2) Exited tester containers and exited containers of our known images
+        removeContainers("exited tester containers", "--filter", "status=exited", "--filter", "name=tester_");
+        String buildImage = config.getDockerBuildImage();
+        if (buildImage != null && !buildImage.trim().isEmpty()) {
+            removeContainers("exited build containers", "--filter", "status=exited", "--filter", "ancestor=" + buildImage);
+        }
+        String testImage = config.getDockerTestImage();
+        if (testImage != null && !testImage.trim().isEmpty()) {
+            removeContainers("exited test containers", "--filter", "status=exited", "--filter", "ancestor=" + testImage);
+        }
     }
 
-    private void cleanupContainersForCancel() throws IOException, InterruptedException {
+    /** Removes the cancelled request's own build and test containers on this host. */
+    private void cleanupContainersForCancel(String requestId) throws IOException, InterruptedException {
         if (!DockerUtils.isDockerAvailable()) {
             logger.info("Docker not available; skipping cancel cleanup");
             return;
         }
-        // Stop any active tester containers
-        removeByNamePrefix("tester_");
-        // Stop all containers for builder/tester images (running or exited)
-        removeByAncestor(config.getDockerBuildImage());
-        removeByAncestor(config.getDockerTestImage());
-    }
-
-    private void removeByNamePrefix(String prefix) throws IOException, InterruptedException {
-        String listCmd = "docker ps -aq --filter name=" + prefix;
-        List<String> ids = readCommandOutput(new String[]{"bash", "-lc", listCmd});
-        if (!ids.isEmpty()) {
-            logger.info("Removing stale tester containers by name prefix '" + prefix + "': " + String.join(",", ids));
-            List<String> cmd = new ArrayList<>();
-            cmd.add("bash"); cmd.add("-lc");
-            cmd.add("docker rm -f " + String.join(" ", ids));
-            new ProcessBuilder(cmd).inheritIO().start().waitFor();
+        if (!RequestIds.isValid(requestId)) {
+            return;
         }
+        removeContainers("containers of cancelled request " + requestId,
+            "--filter", DockerLabels.requestFilter(requestId));
     }
 
-    private void removeExitedByAncestor(String image) throws IOException, InterruptedException {
-        if (image == null || image.trim().isEmpty()) return;
-        String listCmd = "docker ps -aq --filter status=exited --filter ancestor=" + image;
-        List<String> ids = readCommandOutput(new String[]{"bash", "-lc", listCmd});
+    private void removeContainers(String what, String... filters) throws IOException, InterruptedException {
+        List<String> listCmd = new ArrayList<>(Arrays.asList("docker", "ps", "-aq"));
+        listCmd.addAll(Arrays.asList(filters));
+        List<String> ids = readCommandOutput(listCmd.toArray(new String[0]));
         if (!ids.isEmpty()) {
-            logger.info("Pruning exited containers for image '" + image + "': " + String.join(",", ids));
-            List<String> cmd = new ArrayList<>();
-            cmd.add("bash"); cmd.add("-lc");
-            cmd.add("docker rm " + String.join(" ", ids));
-            new ProcessBuilder(cmd).inheritIO().start().waitFor();
-        }
-    }
-
-    private void removeByAncestor(String image) throws IOException, InterruptedException {
-        if (image == null || image.trim().isEmpty()) return;
-        List<String> ids = readCommandOutput(new String[]{
-            "docker", "ps", "-aq", "--filter", "ancestor=" + image
-        });
-        if (!ids.isEmpty()) {
-            logger.info("Removing containers for image '" + image + "': " + String.join(",", ids));
-            List<String> cmd = new ArrayList<>();
-            cmd.add("docker"); cmd.add("rm"); cmd.add("-f");
+            logger.info("Removing " + what + ": " + String.join(",", ids));
+            List<String> cmd = new ArrayList<>(Arrays.asList("docker", "rm", "-f"));
             cmd.addAll(ids);
             new ProcessBuilder(cmd).inheritIO().start().waitFor();
         }

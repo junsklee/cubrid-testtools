@@ -1,5 +1,7 @@
 package com.navercorp.cubridqa.builder.exec;
 
+import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
+import com.navercorp.cubridqa.builder.docker.DockerLabels;
 import com.navercorp.cubridqa.builder.tester.TestRequest;
 import com.navercorp.cubridqa.builder.tester.TestResult;
 import com.navercorp.cubridqa.builder.tester.TestStatus;
@@ -360,6 +362,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         // Always name the container so we can manage it on timeout/failure
         dockerCommand.add("--name");
         dockerCommand.add(containerName);
+        DockerLabels.addRequestLabel(dockerCommand, request.getRequestId());
         dockerCommand.add("--cap-add");
         dockerCommand.add("SYS_ADMIN");
         dockerCommand.add("--security-opt");
