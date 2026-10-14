@@ -122,9 +122,6 @@ class ReportService {
     }
 
     /**
-     * Get basic report template
-     */
-    /**
      * Serialise data for embedding in a <script> block.
      *
      * JSON.stringify does not escape "<", so content containing "</script>" would end
@@ -135,6 +132,9 @@ class ReportService {
         return JSON.stringify(data).replace(/</g, '\\u003c');
     }
 
+    /**
+     * Get basic report template
+     */
     getReportTemplate(data, requestId, timestamp, resultsJSON) {
         // Use the integrated template from Java report-template.html for full UI
         try {

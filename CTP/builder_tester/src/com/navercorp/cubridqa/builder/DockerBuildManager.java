@@ -1933,24 +1933,6 @@ public class DockerBuildManager {
     }
 
     /**
-     * Emit a best-effort shell snippet that guarantees Perl's Time::Piece module is
-     * present before invoking ./build.sh. CUBRID's OpenSSL 3.x build step aborts early
-     * with "requires Perl with the Time::Piece module" when it is missing, which the
-     * stock cubridci build images do not ship. The container runs as root, so the
-     * package install needs no sudo. Failures here are non-fatal: build.sh still emits
-     * the canonical prerequisite error if the module cannot be provided.
-     */
-    /**
-     * Inlines build-accel.sh into a generated build script. The helpers remove the
-     * network round-trips the build otherwise repeats from scratch every time (the
-     * Temurin JDK, the 3rdparty tarballs, the submodule clones); see that file for
-     * why each one is safe to skip. They are inlined rather than mounted so the
-     * generated script stays self-contained and reproducible from the log.
-     *
-     * Emitted unconditionally, so the script shape does not depend on configuration;
-     * the BT_ACCEL environment variable is what turns the accelerators on and off.
-     */
-    /**
      * Image id of the build image, so a republished tag invalidates a reused workspace.
      * docker_build_image is a moving tag: without this, a workspace keeps 3rdparty
      * libraries and objects built by the previous image's toolchain. Empty on failure,
@@ -1972,6 +1954,16 @@ public class DockerBuildManager {
         }
     }
 
+    /**
+     * Inlines build-accel.sh into a generated build script. The helpers remove the
+     * network round-trips the build otherwise repeats from scratch every time (the
+     * Temurin JDK, the 3rdparty tarballs, the submodule clones); see that file for
+     * why each one is safe to skip. They are inlined rather than mounted so the
+     * generated script stays self-contained and reproducible from the log.
+     *
+     * Emitted unconditionally, so the script shape does not depend on configuration;
+     * the BT_ACCEL environment variable is what turns the accelerators on and off.
+     */
     private static void writeBuildAccelHelpers(PrintWriter writer) {
         String[] candidates = {
             "build-accel.sh",
@@ -2048,6 +2040,14 @@ public class DockerBuildManager {
         return (name == null || seconds == null) ? null : name + "=" + seconds + "s";
     }
 
+    /**
+     * Emit a best-effort shell snippet that guarantees Perl's Time::Piece module is
+     * present before invoking ./build.sh. CUBRID's OpenSSL 3.x build step aborts early
+     * with "requires Perl with the Time::Piece module" when it is missing, which the
+     * stock cubridci build images do not ship. The container runs as root, so the
+     * package install needs no sudo. Failures here are non-fatal: build.sh still emits
+     * the canonical prerequisite error if the module cannot be provided.
+     */
     private static void writePerlPrerequisite(PrintWriter writer) {
         writer.println("# Ensure Perl Time::Piece is available (required by the OpenSSL 3.x build)");
         writer.println("ensure_perl_time_piece() {");

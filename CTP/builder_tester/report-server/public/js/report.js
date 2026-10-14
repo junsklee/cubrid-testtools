@@ -83,6 +83,14 @@ async function normalizePayload(data) {
         const commit = item.commit || 'unknown_commit';
         commitsSet.add(commit);
         if (!resultsMap[testName]) resultsMap[testName] = {};
+        // An upload result follows the build result of the same commit; it must not replace it
+        // (last-write-wins showed a successful build as "upload_failed").
+        const existing = resultsMap[testName][commit];
+        const status = (item.status || '').toString();
+        if (existing && /^build_/.test(existing.status) && /^upload_/.test(status)) {
+            existing.uploadStatus = status;
+            return;
+        }
         resultsMap[testName][commit] = {
             status: item.status || 'unknown',
             message: item.message || '',
