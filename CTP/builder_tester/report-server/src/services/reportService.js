@@ -247,12 +247,20 @@ class ReportService {
             if (!r || !r.commit) continue;
             const commit = r.commit;
             const status = (r.status || 'unknown').toString().toLowerCase();
-            const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: false };
+            const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: false, uploadFailed: false };
 
-            if (r.flaky || status === 'flaky') slot.flaky = true;
+            // Uploading the artifact is a stage AFTER the build. A tarball that
+            // fails to transfer (bad SFTP credentials, unreachable host) says
+            // nothing about whether the commit built, so it is tracked apart
+            // instead of being counted as a build failure - folding it in here
+            // reported "Build failed" for builds that had in fact succeeded.
+            if (status === 'upload_failed') {
+                slot.uploadFailed = true;
+            }
+            else if (r.flaky || status === 'flaky') slot.flaky = true;
             else if (status === 'error' || status === 'execution_error' || status === 'environment_error') slot.error = true;
             else if (status === 'pass' || status === 'build_success' || status === 'upload_success') slot.pass = true;
-            else if (status === 'fail' || status === 'build_failed' || status === 'upload_failed') slot.fail = true;
+            else if (status === 'fail' || status === 'build_failed') slot.fail = true;
             else slot.unknown = true;
 
             aggregated.set(commit, slot);
@@ -261,8 +269,9 @@ class ReportService {
         const commitStatus = new Map(); // commit -> pass|fail|error|flaky|unknown
         let hasFlaky = false;
         let hasError = false;
+        let uploadFailures = 0;
         for (const commit of order) {
-            const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: true };
+            const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: true, uploadFailed: false };
             let s = 'unknown';
             if (slot.flaky) s = 'flaky';
             else if (slot.error) s = 'error';
@@ -272,8 +281,10 @@ class ReportService {
             commitStatus.set(commit, s);
             if (s === 'flaky') hasFlaky = true;
             if (s === 'error') hasError = true;
+            if (slot.uploadFailed) uploadFailures += 1;
         }
 
+        const verdict = (() => {
         if (hasFlaky) return { text: 'Flaky: Mixed pass/fail across attempts', class: 'verdict-flaky' };
         if (hasError) return { text: 'Error: Test execution failed', class: 'verdict-error' };
 
@@ -327,6 +338,17 @@ class ReportService {
         if (failCount === normalized.length) return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
         if (isBuildOnly) return { text: `Build unstable across commits${baselineSuffix}`, class: 'verdict-unstable' };
         return { text: `Unstable: Mixed results across commits${baselineSuffix}`, class: 'verdict-unstable' };
+        })();
+
+        // The build/test outcome stands on its own; a failed upload qualifies a
+        // successful one rather than overturning it. Reported as a warning, not
+        // a bug - nothing is wrong with the commit, the artifact just never
+        // reached its destination.
+        if (uploadFailures > 0 && verdict.class === 'verdict-success') {
+            const which = uploadFailures === 1 ? 'artifact upload failed' : `${uploadFailures} artifact uploads failed`;
+            return { text: `${verdict.text} \u2014 ${which}`, class: 'verdict-flaky' };
+        }
+        return verdict;
     }
 
     /**

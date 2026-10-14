@@ -161,7 +161,8 @@ async function sortCommitsChronologically(commits) {
     let failedTests = 0;
     let errorTests = 0;
     let flakyTests = 0;
-    
+    let uploadFailures = 0;
+
     // Process test results
     if (data.results) {
         for (const testName in data.results) {
@@ -171,20 +172,25 @@ async function sortCommitsChronologically(commits) {
             let hasPass = false;
             let hasFail = false;
             let hasError = false;
+            let hasUploadFailure = false;
             
             for (const commit in testResults) {
                 const result = testResults[commit];
                 const status = result.status || '';
 
-                // Handle both test statuses and build-only statuses
+                // Handle both test statuses and build-only statuses.
+                // Uploading the artifact is a stage after the build, so a failed
+                // transfer is not a failed build and must not be counted here -
+                // doing so reported successful builds as failures.
                 if (status === 'pass' || status === 'build_success') hasPass = true;
-                if (status === 'fail' || status === 'upload_failed' || status === 'build_failed') hasFail = true;
+                if (status === 'fail' || status === 'build_failed') hasFail = true;
+                if (status === 'upload_failed') hasUploadFailure = true;
                 if (status === 'error') hasError = true;
                 if (result.flaky) flakyTests++;
             }
             
             if (hasError) errorTests++;
-            else if (hasPass && !hasFail) passedTests++;
+            else if (hasPass && !hasFail) { passedTests++; if (hasUploadFailure) uploadFailures++; }
             else failedTests++;
         }
     }
@@ -195,6 +201,7 @@ async function sortCommitsChronologically(commits) {
         failed: failedTests,
         error: errorTests,
         flaky: flakyTests,
+        uploadFailures: uploadFailures,
         passRate: totalTests > 0 ? Math.round((passedTests / totalTests) * 100) : 0
     };
 }
