@@ -47,6 +47,13 @@ public class TestRequestValidator {
      */
     public static ValidationResult validate(JSONObject json) {
         ValidationResult result = new ValidationResult();
+        // snake_case spellings (as in builder.conf) were silently ignored; accept them as aliases
+        String[][] aliases = {{"run_mode", "runMode"}, {"min_runs", "minRuns"}, {"max_runs", "maxRuns"}, {"time_budget_ms", "timeBudgetMs"}};
+        for (String[] alias : aliases) {
+            if (!json.has(alias[1]) && json.has(alias[0])) {
+                json.put(alias[1], json.get(alias[0]));
+            }
+        }
 
         // 1. Validate runMode
         String runMode = "until-pass";

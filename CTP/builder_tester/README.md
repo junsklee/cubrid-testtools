@@ -290,17 +290,21 @@ The Builder-Tester system includes an interactive web-based report viewer for an
 
 ### Unified Test Execution & Flaky Detection
 
-The system now supports unified test execution semantics with configurable run modes:
+The system supports unified test execution semantics with run modes chosen per request:
 
-#### Run Modes (configured in `builder.conf`)
-- **until-pass**: Run tests until they pass or max_runs reached
-- **until-fail**: Run tests until they fail or max_runs reached
-- **fixed-runs**: Always run exactly min_runs to max_runs times
+#### Run Modes (request field `runMode`)
+- **until-pass**: Run tests until they pass or `maxRuns` reached (default)
+- **until-fail**: Run tests until they fail or `maxRuns` reached
+- **fixed-runs**: Always run exactly `minRuns` (= `maxRuns`) times
 
-#### Configuration Parameters
-- `run_mode`: Execution mode (until-pass, until-fail, fixed-runs)
-- `min_runs`: Minimum number of test attempts (default: 1)
-- `max_runs`: Maximum number of test attempts (default: 3)
+#### Request Parameters
+- `runMode`: Execution mode (until-pass, until-fail, fixed-runs); default until-pass
+- `minRuns`: Minimum number of test attempts (default: 1)
+- `maxRuns`: Maximum number of test attempts (default: `minRuns`)
+- `timeBudgetMs`: Optional time budget stop condition (not with fixed-runs)
+
+`run_mode`, `min_runs` and `max_runs` are also accepted as request aliases. The same keys in
+`builder.conf` are not used; the Builder logs a warning when they are set.
 
 #### Flaky Test Detection
 - **Unified Logic**: Flaky detection works consistently across all run modes

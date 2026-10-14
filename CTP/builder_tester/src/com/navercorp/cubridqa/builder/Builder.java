@@ -53,6 +53,11 @@ public class Builder {
     
     public Builder(BuilderConfig config) throws IOException {
         this.config = config;
+        List<String> ignoredRunKeys = config.getIgnoredRunSettingKeys();
+        if (!ignoredRunKeys.isEmpty()) {
+            logger.warning("builder.conf sets " + ignoredRunKeys + ", which have no effect: run settings come from each "
+                + "request (runMode/minRuns/maxRuns/timeBudgetMs; defaults until-pass, 1, 1)");
+        }
         this.buildExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_REQUESTS);
         this.activeTasks = new ConcurrentHashMap<>();
         this.pendingRequests = new LinkedBlockingQueue<>();

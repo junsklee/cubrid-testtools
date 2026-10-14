@@ -1020,6 +1020,20 @@ public class BuilderConfig {
         return value.trim();
     }
 
+    /**
+     * Run settings set in this file. Requests carry their own run settings (TestRequestValidator
+     * defaults: until-pass, 1, 1), so these keys have no effect on what a request runs.
+     */
+    public List<String> getIgnoredRunSettingKeys() {
+        List<String> keys = new ArrayList<>();
+        for (String key : new String[] {RUN_MODE, MIN_RUNS, MAX_RUNS, TIME_BUDGET_MS}) {
+            if (properties.getProperty(key) != null) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
     // ---- V2 unified config with migration from v1 (retry_count) ----
     public String getRunMode() {
         String mode = properties.getProperty(RUN_MODE, "until-pass").toLowerCase();
