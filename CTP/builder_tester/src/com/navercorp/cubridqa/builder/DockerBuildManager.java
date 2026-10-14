@@ -3,6 +3,7 @@
  */
 package com.navercorp.cubridqa.builder;
 
+import com.navercorp.cubridqa.builder.docker.DockerLabels;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
@@ -226,14 +227,8 @@ public class DockerBuildManager {
 
         // No per-build extra environment overrides (reverted)
         
-        baseDockerCmd.add(config.getDockerBuildImage());
-        // Run build script in login shell to ensure git-worktree is available and PATH updated
-        baseDockerCmd.add("bash");
-        baseDockerCmd.add("-lc");
-        baseDockerCmd.add("/build.sh");
+        // Image and command are appended by runBuildContainer, after the per-attempt options
         
-        int attempts = 0;
-        IOException lastError = null;
         // Prepare per-build log file
         Path perBuildLog = null;
         try {
@@ -257,28 +252,114 @@ public class DockerBuildManager {
             secureEnv.add("GITHUB_TOKEN", githubToken);
             String envFilePath = secureEnv.getFilePath();
 
-            // Add env file to base command
+            // Must precede the image: anything after it is passed to the container's command.
             baseDockerCmd.add("--env-file");
             baseDockerCmd.add(envFilePath);
+            runBuildContainer(baseDockerCmd, "Docker build", commitShort, perBuildLog);
 
-            while (attempts < 2) { // first attempt + 1 retry
-                attempts++;
-                List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
-                logger.info("Running Docker build [" + commitShort + "] (attempt " + attempts + ")");
-                // Don't log the full command to avoid exposing the env file path in logs
+            // Return path to built package
+            String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
+            return new File(workDir, packageName).getAbsolutePath();
+        } // SecureDockerEnv auto-closes here, removing the env file
+    }
 
-                ProcessBuilder pb = new ProcessBuilder(dockerCommand);
-                pb.redirectErrorStream(true);
-                Process process = pb.start();
-            
-            // Capture output
-            StringBuilder output = new StringBuilder();
-            List<String> phases = new ArrayList<>();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                 java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8)) {
+    // Requests cancelled while one of their builds may be running (see cancelBuilds)
+    private static final java.util.Set<String> CANCELLED_REQUESTS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.atomic.AtomicLong BUILD_SEQ = new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * Stops the running build containers of a cancelled request and keeps its builds from retrying.
+     */
+    public void cancelBuilds(String requestId) {
+        if (!RequestIds.isValid(requestId)) {
+            return;
+        }
+        CANCELLED_REQUESTS.add(requestId);
+        try {
+            List<String> ids = new ArrayList<>();
+            Process list = new ProcessBuilder("docker", "ps", "-q", "--filter", DockerLabels.requestFilter(requestId))
+                .redirectErrorStream(true).start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(list.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
+                    if (!line.trim().isEmpty()) ids.add(line.trim());
+                }
+            }
+            list.waitFor();
+            if (!ids.isEmpty()) {
+                List<String> kill = new ArrayList<>(Arrays.asList("docker", "kill"));
+                kill.addAll(ids);
+                new ProcessBuilder(kill).redirectErrorStream(true).start().waitFor(30, java.util.concurrent.TimeUnit.SECONDS);
+                logger.info("Stopped build containers of cancelled request " + requestId + ": " + ids);
+            }
+        } catch (IOException e) {
+            logger.warning("Failed to stop build containers of " + requestId + ": " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Runs a build container (one retry), streaming its output to the per-build log.
+     * Each attempt gets a unique name and the request label, so build_timeout_minutes can stop
+     * it and a cancel (cancelBuilds, or the Builder's /queue/remove cleanup) can find it.
+     *
+     * @param dockerOptions "docker run ..." options without the image and command
+     */
+    private void runBuildContainer(List<String> dockerOptions, String label, String commitShort, Path perBuildLog)
+            throws IOException, InterruptedException {
+        String requestId = RequestContext.getRequestId();
+        long timeoutMinutes = Math.max(1, config.getBuildTimeoutMinutes());
+        IOException lastError = null;
+        for (int attempt = 1; attempt <= 2; attempt++) { // first attempt + 1 retry
+            if (requestId != null && CANCELLED_REQUESTS.contains(requestId)) {
+                throw new IOException(label + " cancelled");
+            }
+            String containerName = "bt_build_" + commitShort + "_" + BUILD_SEQ.incrementAndGet() + "_" + System.currentTimeMillis();
+            List<String> dockerCommand = new ArrayList<>(dockerOptions);
+            dockerCommand.add("--name");
+            dockerCommand.add(containerName);
+            DockerLabels.addRequestLabel(dockerCommand, requestId);
+            dockerCommand.add(config.getDockerBuildImage());
+            // Run build script in login shell to ensure git-worktree is available and PATH updated
+            dockerCommand.add("bash");
+            dockerCommand.add("-lc");
+            dockerCommand.add("/build.sh");
+            logger.info("Running " + label + " [" + commitShort + "] (attempt " + attempt + ", container " + containerName + ")");
+            // Don't log the full command to avoid exposing the env file path in logs
+
+            ProcessBuilder pb = new ProcessBuilder(dockerCommand);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            // Reading the output blocks until the container exits, so the timeout is enforced by a
+            // watchdog that stops the container (docker kill) and the client process.
+            java.util.concurrent.atomic.AtomicBoolean timedOut = new java.util.concurrent.atomic.AtomicBoolean(false);
+            Thread watchdog = new Thread(() -> {
+                try {
+                    if (!process.waitFor(timeoutMinutes, java.util.concurrent.TimeUnit.MINUTES)) {
+                        timedOut.set(true);
+                        logger.severe(label + " [" + commitShort + "] exceeded build_timeout_minutes=" + timeoutMinutes + "; stopping " + containerName);
+                        try {
+                            new ProcessBuilder("docker", "kill", containerName).redirectErrorStream(true).start()
+                                .waitFor(60, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (IOException ignore) {
+                        }
+                        process.destroyForcibly();
+                    }
+                } catch (InterruptedException ignore) {
+                    Thread.currentThread().interrupt();
+                }
+            }, "build-watchdog-" + containerName);
+            watchdog.setDaemon(true);
+            watchdog.start();
+
+            List<String> phases = new ArrayList<>();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                 java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8,
+                     java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
                     String phase = parsePhaseMarker(line);
                     if (phase != null) {
                         phases.add(phase);
@@ -291,28 +372,30 @@ public class DockerBuildManager {
                 }
                 try { logWriter.flush(); } catch (Exception ignore) {}
             }
-            
+
             int exitCode = process.waitFor();
+            watchdog.interrupt();
             if (!phases.isEmpty()) {
                 logPhaseSummary(commitShort, phases);
             }
-            if (exitCode == 0) {
-                lastError = null;
-                break;
+            if (exitCode == 0 && !timedOut.get()) {
+                return;
             }
-            lastError = new IOException("Docker build failed with exit code: " + exitCode + " (log: " + perBuildLog.toString() + ")");
-            logger.warning("Docker build [" + commitShort + "] attempt " + attempts + " failed (exit=" + exitCode + ")." +
-                           (attempts < 2 ? " Retrying..." : " No more retries."));
-            try { Thread.sleep(5000); } catch (InterruptedException ignore) { }
+            if (timedOut.get()) {
+                // A hung download or build would hang again; do not retry.
+                throw new IOException(label + " timed out after " + timeoutMinutes + " minutes (log: " + perBuildLog + ")");
             }
-            if (lastError != null) {
-                throw lastError;
+            if (requestId != null && CANCELLED_REQUESTS.contains(requestId)) {
+                throw new IOException(label + " cancelled");
             }
-
-            // Return path to built package
-            String packageName = "cubrid_" + commitHash.substring(0, 7) + ".tar.gz";
-            return new File(workDir, packageName).getAbsolutePath();
-        } // SecureDockerEnv auto-closes here, removing the env file
+            lastError = new IOException(label + " failed with exit code: " + exitCode + " (log: " + perBuildLog.toString() + ")");
+            logger.warning(label + " [" + commitShort + "] attempt " + attempt + " failed (exit=" + exitCode + ")." +
+                           (attempt < 2 ? " Retrying..." : " No more retries."));
+            if (attempt < 2) {
+                Thread.sleep(5000);
+            }
+        }
+        throw lastError;
     }
 
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
@@ -437,13 +520,8 @@ public class DockerBuildManager {
         baseDockerCmd.add("-e");
         baseDockerCmd.add("BT_WORKSPACE_REUSE_MAX=" + config.getBuildWorkspaceReuseMax());
 
-        baseDockerCmd.add(config.getDockerBuildImage());
-        baseDockerCmd.add("bash");
-        baseDockerCmd.add("-lc");
-        baseDockerCmd.add("/build.sh");
+        // Image and command are appended by runBuildContainer, after the per-attempt options
 
-        int attempts = 0;
-        IOException lastError = null;
         Path perBuildLog = null;
         try {
             String requestId = RequestContext.getRequestId();
@@ -466,56 +544,10 @@ public class DockerBuildManager {
             secureEnv.add("GITHUB_TOKEN", githubToken);
             String envFilePath = secureEnv.getFilePath();
 
-            // Add env file to base command
+            // Must precede the image: anything after it is passed to the container's command.
             baseDockerCmd.add("--env-file");
             baseDockerCmd.add(envFilePath);
-
-            while (attempts < 2) {
-                attempts++;
-                List<String> dockerCommand = new ArrayList<>(baseDockerCmd);
-                logger.info("Running Docker PR build [" + commitShort + "] (attempt " + attempts + ")");
-                // Don't log the full command to avoid exposing the env file path in logs
-
-                ProcessBuilder pb = new ProcessBuilder(dockerCommand);
-                pb.redirectErrorStream(true);
-                Process process = pb.start();
-
-            StringBuilder output = new StringBuilder();
-            List<String> phases = new ArrayList<>();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                 java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8)) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
-                    String phase = parsePhaseMarker(line);
-                    if (phase != null) {
-                        phases.add(phase);
-                    }
-                    logger.info("DOCKER[" + commitShort + "]: " + line);
-                    try {
-                        logWriter.write(line);
-                        logWriter.newLine();
-                    } catch (Exception ignore) {}
-                }
-                try { logWriter.flush(); } catch (Exception ignore) {}
-            }
-
-            int exitCode = process.waitFor();
-            if (!phases.isEmpty()) {
-                logPhaseSummary(commitShort, phases);
-            }
-            if (exitCode == 0) {
-                lastError = null;
-                break;
-            }
-            lastError = new IOException("Docker PR build failed with exit code: " + exitCode + " (log: " + perBuildLog.toString() + ")");
-            logger.warning("Docker PR build [" + commitShort + "] attempt " + attempts + " failed (exit=" + exitCode + ")." +
-                           (attempts < 2 ? " Retrying..." : " No more retries."));
-            try { Thread.sleep(5000); } catch (InterruptedException ignore) { }
-            }
-            if (lastError != null) {
-                throw lastError;
-            }
+            runBuildContainer(baseDockerCmd, "Docker PR build", commitShort, perBuildLog);
 
             String packageName = "cubrid_" + headSha.substring(0, 7) + ".tar.gz";
             return new File(workDir, packageName).getAbsolutePath();
@@ -1608,10 +1640,23 @@ public class DockerBuildManager {
     private void executeCommand(ProcessBuilder pb, String... command) 
             throws IOException, InterruptedException {
         pb.command(command);
+        pb.redirectErrorStream(true);
         Process process = pb.start();
+        // Drain the output: ./build.sh fills a 64KB pipe within seconds and would block forever.
+        Deque<String> tail = new ArrayDeque<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                logger.fine(line);
+                tail.addLast(line);
+                if (tail.size() > 20) {
+                    tail.removeFirst();
+                }
+            }
+        }
         int exitCode = process.waitFor();
         if (exitCode != 0) {
-            throw new IOException("Command failed: " + String.join(" ", command));
+            throw new IOException("Command failed: " + String.join(" ", command) + "\n" + String.join("\n", tail));
         }
     }
 

@@ -424,6 +424,16 @@ public class BuilderTask {
         String requestId = request.optString("requestId", taskId);
         CompletableFuture.runAsync(() -> {
             try {
+                // A build in progress would otherwise run (and retry) to completion
+                if (dockerManager != null) {
+                    dockerManager.cancelBuilds(requestId);
+                }
+            } catch (Exception e) {
+                if (taskLogger != null) {
+                    taskLogger.warning("Stopping build containers failed: " + e.getMessage());
+                }
+            }
+            try {
                 List<String> workerIps = resolveWorkerIpsForCancel();
                 if (!workerIps.isEmpty()) {
                     // Only this request's containers: other requests may be testing on the same nodes.
