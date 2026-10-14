@@ -335,6 +335,9 @@ class FileService {
 
                 // Add raw results for verdict analysis
                 row.results = resultsData.results || [];
+                // Error callback: the request failed before producing results
+                row.requestError = (resultsData.status === 'error' && row.results.length === 0)
+                    ? (resultsData.message || 'Request failed') : null;
                 row.commitOrder = resultsData.commitOrder || resultsData.commits || requestData.commitOrder || requestData.commits || row.commits;
             } catch (enrichErr) {
                 console.warn(`Could not enrich report ${id}:`, enrichErr.message);

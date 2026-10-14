@@ -1988,15 +1988,16 @@
                 perCommit[commit] = { statusLower, attempts };
             });
             
-            if (hasFlaky) {
+            const flakyVerdict = () => {
                 if (isSingleCommit && commits[0]) {
                     const attempts = perCommit[commits[0]] ? perCommit[commits[0]].attempts : maxAttempts;
                     return { text: 'Flaky: Mixed pass/fail' + attemptsNote(attempts), class: 'verdict-flaky' };
                 }
                 return { text: 'Flaky: Mixed pass/fail across attempts', class: 'verdict-flaky' };
-            }
-            
-            // Check for errors (execution_error, environment_error, build_error)
+            };
+
+            // Build failures, then real test failures, outrank errors and flakiness: a regression on
+            // one commit must not be hidden by a flaky or errored result on another.
             const errorCommits = [];
             const buildErrs = [];
             commits.forEach(commit => {
@@ -2007,7 +2008,9 @@
                     // Upload failures are treated as build errors only if the build itself didn't succeed
                     // In build-only mode, upload_failed should already be filtered out if build_success exists
                     buildErrs.push(commit.substring(0,7));
-                } else if (statusLower === 'execution_error' || statusLower === 'environment_error' || statusLower === 'error') {
+                } else if (statusLower === 'execution_error' || statusLower === 'environment_error' ||
+                           statusLower === 'build_error' || statusLower === 'error') {
+                    // build_error: the tester could not install the build (VM/direct mode)
                     errorCommits.push(commit.substring(0,7));
                 }
             });
@@ -2015,22 +2018,33 @@
             if (buildErrs.length > 0) {
                 return { text: 'Build errors in: ' + buildErrs.join(', '), class: 'verdict-bug' };
             }
-            if (errorCommits.length > 0) {
-                return { text: 'Error: Test execution failed', class: 'verdict-error' };
-            }
 
             if (commitCount === 0) {
                 return { text: 'Unknown: No results', class: 'verdict-error' };
             }
 
-            const normalized = commits.map(commit => {
-                const statusLower = perCommit[commit] ? perCommit[commit].statusLower : 'error';
-                // Treat build_success and upload_success as pass for build-only mode
-                return (statusLower === 'pass' || statusLower === 'build_success' || statusLower === 'upload_success') ? 'pass' : 'fail';
-            });
+            // Commits that passed (flaky ones eventually did) or failed; errored commits say nothing
+            // about the commit and are left out of regression detection.
+            const isPassStatus = (st) => st === 'pass' || st === 'flaky' || st === 'build_success' || st === 'upload_success';
+            const sequence = commits
+                .filter(commit => perCommit[commit] && (perCommit[commit].statusLower === 'fail' || isPassStatus(perCommit[commit].statusLower)))
+                .map(commit => ({ commit, s: perCommit[commit].statusLower === 'fail' ? 'fail' : 'pass' }));
+            const anyFail = sequence.some(e => e.s === 'fail');
+            if (!anyFail) {
+                if (errorCommits.length > 0 || sequence.length < commitCount) {
+                    return { text: 'Error: Test execution failed', class: 'verdict-error' };
+                }
+                if (hasFlaky) {
+                    return flakyVerdict();
+                }
+            }
 
-            if (isSingleCommit) {
-                const attempts = commits[0] && perCommit[commits[0]] ? perCommit[commits[0]].attempts : maxAttempts;
+            const seqCommits = sequence.map(e => e.commit);
+            const normalized = sequence.map(e => e.s);
+            const seqCount = normalized.length;
+
+            if (seqCount === 1) {
+                const attempts = perCommit[seqCommits[0]] ? perCommit[seqCommits[0]].attempts : maxAttempts;
                 if (normalized[0] === 'pass') {
                     return { text: singleCommitPassText(attempts), class: 'verdict-success' };
                 }
@@ -2038,8 +2052,8 @@
             }
 
             if (isCheckout) {
-                const allPass = normalized.every(s => s === 'pass');
-                const allFail = normalized.every(s => s === 'fail');
+                const allPass = normalized.every(st => st === 'pass');
+                const allFail = normalized.every(st => st === 'fail');
                 if (allPass) {
                     return { text: multiCommitPassText(), class: 'verdict-success' };
                 }
@@ -2056,13 +2070,11 @@
 
                 if (transitions === 1) {
                     if (normalized[0] === 'pass') {
-                        const firstFailIndex = normalized.indexOf('fail');
-                        const failedCommit = commits[firstFailIndex] || '';
+                        const failedCommit = seqCommits[normalized.indexOf('fail')] || '';
                         return { text: regressionText(failedCommit.substring(0, 7)), class: 'verdict-bug' };
                     }
                     if (normalized[0] === 'fail') {
-                        const firstPassIndex = normalized.indexOf('pass');
-                        const fixedCommit = commits[firstPassIndex] || '';
+                        const fixedCommit = seqCommits[normalized.indexOf('pass')] || '';
                         return { text: fixText(fixedCommit.substring(0, 7)), class: 'verdict-success' };
                     }
                 }
@@ -2071,20 +2083,14 @@
             }
 
             // Baseline build mode verdict logic
-            const failCount = normalized.filter(s => s === 'fail').length;
+            const failCount = normalized.filter(st => st === 'fail').length;
 
             if (failCount === 0) {
                 return { text: multiCommitPassText(), class: 'verdict-success' };
             } else if (failCount === 1) {
-                let failedCommit = null;
-                for (let i = 0; i < commits.length; i++) {
-                    if (normalized[i] === 'fail') {
-                        failedCommit = commits[i];
-                        break;
-                    }
-                }
-                return { text: isolatedFailureText(failedCommit ? failedCommit.substring(0, 7) : ''), class: 'verdict-bug' };
-            } else if (failCount === commitCount) {
+                const failedCommit = seqCommits[normalized.indexOf('fail')] || '';
+                return { text: isolatedFailureText(failedCommit.substring(0, 7)), class: 'verdict-bug' };
+            } else if (failCount === seqCount) {
                 return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
             }
             
@@ -2190,6 +2196,7 @@
                         break;
                     case 'fail': statusClass = 'result-fail'; statusText = 'FAIL'; break;
                     case 'build_failed': statusClass = 'result-error'; statusText = 'BUILD'; break;
+                    case 'build_error': statusClass = 'result-error'; statusText = 'INSTALL'; break;
                     case 'execution_error':
                     case 'environment_error':
                     case 'error': statusClass = 'result-error'; statusText = 'ERROR'; break;
@@ -2387,6 +2394,7 @@
                         break;
                     case 'fail': statusClass = 'result-fail'; statusText = 'FAIL'; break;
                     case 'build_failed': statusClass = 'result-error'; statusText = 'BUILD'; break;
+                    case 'build_error': statusClass = 'result-error'; statusText = 'INSTALL'; break;
                     case 'execution_error':
                     case 'environment_error':
                     case 'error': statusClass = 'result-error'; statusText = 'ERROR'; break;
@@ -2777,6 +2785,7 @@
                     return { border: '#ef4444', background: '#fef2f2', text: '#991b1b' };
                 case 'execution_error':
                 case 'environment_error':
+                case 'build_error':
                 case 'error':
                     return { border: '#f59e0b', background: '#fefbf2', text: '#92400e' };
                 default:

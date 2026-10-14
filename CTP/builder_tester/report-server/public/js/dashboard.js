@@ -1745,10 +1745,31 @@
                             try {
                                 const reportResponse = await fetch(`/report?id=${id}`, { method: 'HEAD' });
                                 if (reportResponse.ok) {
-                                    // Report exists - task completed successfully
-                                    statusElement.textContent = 'Completed';
-                                    statusElement.parentElement.className = 'status success';
-                                    progressDetails.textContent = 'Build and tests completed successfully - Report available';
+                                    // Report exists. The Builder also reports a request that failed
+                                    // before testing ({status:'error', message}, no results), so check
+                                    // results.json before calling it a success.
+                                    let failure = null;
+                                    try {
+                                        const resultsResponse = await fetch(`/api/log-root/${encodeURIComponent(id)}/results.json`);
+                                        if (resultsResponse.ok) {
+                                            const resultsData = await resultsResponse.json();
+                                            const hasResults = Array.isArray(resultsData.results) && resultsData.results.length > 0;
+                                            if (resultsData.status === 'error' && !hasResults) {
+                                                failure = resultsData.message || 'Request failed';
+                                            }
+                                        }
+                                    } catch (resultsError) {
+                                        console.warn('Could not read results.json:', resultsError);
+                                    }
+                                    if (failure) {
+                                        statusElement.textContent = 'Failed';
+                                        statusElement.parentElement.className = 'status offline';
+                                        progressDetails.textContent = 'Request failed: ' + failure;
+                                    } else {
+                                        statusElement.textContent = 'Completed';
+                                        statusElement.parentElement.className = 'status success';
+                                        progressDetails.textContent = 'Request completed - Report available';
+                                    }
                                     progressFill.style.width = '100%';
                                     return;
                                 }

@@ -297,8 +297,13 @@ class ReportController {
 
             // Add verdict analysis and test counts to each item
             for (const item of result.items) {
-                // Use the same calculateTestStatistics logic as report.js
-                const stats = reportService.calculateTestStatistics(item.results || []);
+                // Per-test verdicts, counted the way the report page counts them
+                const stats = reportService.calculateTestStatistics(item.results || [], {
+                    commitOrder: item.commitOrder,
+                    commitBuildMode: item.commitBuildMode,
+                    runMode: item.runMode,
+                    buildOnly: item.buildOnly
+                });
 
                 item.testCounts = {
                     pass: stats.passed,
@@ -308,17 +313,16 @@ class ReportController {
                     unstable: stats.unstable
                 };
 
-                // Still add overall verdict for compatibility
-                if (item.results && item.commitOrder) {
-                    const verdict = reportService.analyzeVerdict(
+                if ((item.results && item.commitOrder) || item.requestError) {
+                    item.verdict = reportService.analyzeVerdict(
                         item.commits,
-                        item.results,
+                        item.results || [],
                         item.commitOrder,
                         item.commitBuildMode,
                         item.runMode,
-                        item.buildOnly
+                        item.buildOnly,
+                        item.requestError
                     );
-                    item.verdict = verdict;
                 }
             }
 

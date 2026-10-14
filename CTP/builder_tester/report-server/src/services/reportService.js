@@ -179,21 +179,19 @@ class ReportService {
     /**
      * Analyze test verdict based on results
      */
-    analyzeVerdict(commits, results, commitOrder, commitBuildMode, runMode, buildOnlyMode) {
+    analyzeVerdict(commits, results, commitOrder, commitBuildMode, runMode, buildOnlyMode, requestError) {
         const resultsArr = Array.isArray(results) ? results : [];
         const order = Array.isArray(commitOrder) && commitOrder.length > 0 ? commitOrder : (Array.isArray(commits) ? commits : []);
-        const commitCount = order.length;
 
         const mode = (runMode || 'until-pass').toString().toLowerCase();
         const isCheckout = (commitBuildMode || '').toString().toLowerCase() === 'checkout';
-        const isBuildOnly = !!buildOnlyMode || resultsArr.some(r => {
+        const BUILD_STAGE = new Set(['build_success', 'build_failed', 'upload_success', 'upload_failed']);
+        // Build-only when flagged, or when every result is a build/upload stage. A test run in which
+        // one commit failed to build still has test results for the others and keeps test wording.
+        const isBuildOnly = !!buildOnlyMode || (resultsArr.length > 0 && resultsArr.every(r => {
             const status = (r && r.status ? r.status : '').toString().toLowerCase();
-            return status === 'build_success' ||
-                   status === 'build_failed' ||
-                   status === 'upload_success' ||
-                   status === 'upload_failed' ||
-                   (r && r.test === 'build_only');
-        });
+            return BUILD_STAGE.has(status) || (r && r.test === 'build_only');
+        }));
         const modeSuffix = (!isBuildOnly && mode !== 'until-pass') ? ` (${mode})` : '';
         const baselineSuffix = isCheckout ? '' : ' (baseline mode)';
 
@@ -240,9 +238,10 @@ class ReportService {
             return `Isolated failure on ${shortSha}${baselineSuffix}`;
         };
 
-        // Aggregate per-commit so this function stays correct even if callers pass results across multiple tests.
-        // This avoids "last write wins" overwrites when multiple rows share the same commit.
-        const aggregated = new Map(); // commit -> { pass, fail, error, flaky, unknown }
+        // Aggregate per commit across tests. A failure on a commit is what the verdict is about, so
+        // it is never hidden by another test's flaky or errored result on the same commit.
+        const ERROR_STATUSES = new Set(['error', 'execution_error', 'environment_error', 'build_error']);
+        const aggregated = new Map(); // commit -> { pass, fail, error, flaky, unknown, uploadFailed }
         for (const r of resultsArr) {
             if (!r || !r.commit) continue;
             const commit = r.commit;
@@ -258,7 +257,9 @@ class ReportService {
                 slot.uploadFailed = true;
             }
             else if (r.flaky || status === 'flaky') slot.flaky = true;
-            else if (status === 'error' || status === 'execution_error' || status === 'environment_error') slot.error = true;
+            // build_error: the tester could not install the build (VM/direct mode) - an
+            // environment problem, not a verdict on the commit.
+            else if (ERROR_STATUSES.has(status)) slot.error = true;
             else if (status === 'pass' || status === 'build_success' || status === 'upload_success') slot.pass = true;
             else if (status === 'fail' || status === 'build_failed') slot.fail = true;
             else slot.unknown = true;
@@ -266,78 +267,79 @@ class ReportService {
             aggregated.set(commit, slot);
         }
 
-        const commitStatus = new Map(); // commit -> pass|fail|error|flaky|unknown
+        // Per commit: fail (some test failed), pass (everything passed, flaky ones eventually),
+        // or skip (only errors / no results: says nothing about the commit).
         let hasFlaky = false;
         let hasError = false;
         let uploadFailures = 0;
+        const sequence = [];
         for (const commit of order) {
-            const slot = aggregated.get(commit) || { pass: false, fail: false, error: false, flaky: false, unknown: true, uploadFailed: false };
-            let s = 'unknown';
-            if (slot.flaky) s = 'flaky';
-            else if (slot.error) s = 'error';
-            else if (slot.fail) s = 'fail';
-            else if (slot.unknown) s = 'unknown';
-            else if (slot.pass) s = 'pass';
-            commitStatus.set(commit, s);
-            if (s === 'flaky') hasFlaky = true;
-            if (s === 'error') hasError = true;
+            const slot = aggregated.get(commit) || { unknown: true };
+            if (slot.flaky) hasFlaky = true;
+            if (slot.error || slot.unknown) hasError = true;
             if (slot.uploadFailed) uploadFailures += 1;
+            if (slot.fail) sequence.push({ commit, s: 'fail' });
+            else if ((slot.pass || slot.flaky) && !slot.error && !slot.unknown) sequence.push({ commit, s: 'pass' });
         }
+
+        const patternVerdict = () => {
+            const seqCommits = sequence.map(e => e.commit);
+            const normalized = sequence.map(e => e.s);
+            const commitCount = normalized.length;
+
+            if (commitCount === 1) {
+                if (normalized[0] === 'pass') return { text: singleCommitPassText(), class: 'verdict-success' };
+                return { text: singleCommitFailText(), class: 'verdict-bug' };
+            }
+
+            if (isCheckout) {
+                const allPass = normalized.every(st => st === 'pass');
+                const allFail = normalized.every(st => st === 'fail');
+                if (allPass) return { text: multiCommitPassText(), class: 'verdict-success' };
+                if (allFail) return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
+
+                let transitions = 0;
+                for (let i = 1; i < normalized.length; i++) {
+                    if (normalized[i] !== normalized[i - 1]) transitions++;
+                }
+
+                if (transitions === 1) {
+                    const firstFailIndex = normalized.indexOf('fail');
+                    if (firstFailIndex > 0 && normalized[0] === 'pass') {
+                        return { text: regressionText(seqCommits[firstFailIndex].substring(0, 7)), class: 'verdict-bug' };
+                    }
+                    const firstPassIndex = normalized.indexOf('pass');
+                    if (firstPassIndex > 0 && normalized[0] === 'fail') {
+                        return { text: fixText(seqCommits[firstPassIndex].substring(0, 7)), class: 'verdict-success' };
+                    }
+                }
+
+                return { text: 'Unstable: Multiple transitions', class: 'verdict-unstable' };
+            }
+
+            const failCount = normalized.filter(st => st === 'fail').length;
+            if (failCount === 0) return { text: multiCommitPassText(), class: 'verdict-success' };
+            if (failCount === 1) {
+                const failedCommit = seqCommits[normalized.indexOf('fail')] || '';
+                return { text: isolatedFailureText(failedCommit.substring(0, 7)), class: 'verdict-bug' };
+            }
+            if (failCount === normalized.length) return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
+            if (isBuildOnly) return { text: `Build unstable across commits${baselineSuffix}`, class: 'verdict-unstable' };
+            return { text: `Unstable: Mixed results across commits${baselineSuffix}`, class: 'verdict-unstable' };
+        };
 
         const verdict = (() => {
-        if (hasFlaky) return { text: 'Flaky: Mixed pass/fail across attempts', class: 'verdict-flaky' };
-        if (hasError) return { text: 'Error: Test execution failed', class: 'verdict-error' };
-
-        const normalized = order.map((c) => (commitStatus.get(c) === 'pass' ? 'pass' : 'fail'));
-        if (normalized.length === 0) {
-            return { text: 'Unknown: No results', class: 'verdict-error' };
-        }
-
-        if (commitCount === 1) {
-            if (normalized[0] === 'pass') return { text: singleCommitPassText(), class: 'verdict-success' };
-            return { text: singleCommitFailText(), class: 'verdict-bug' };
-        }
-
-        if (isCheckout) {
-            const allPass = normalized.every(s => s === 'pass');
-            const allFail = normalized.every(s => s === 'fail');
-            if (allPass) return { text: multiCommitPassText(), class: 'verdict-success' };
-            if (allFail) return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
-
-            let transitions = 0;
-            for (let i = 1; i < normalized.length; i++) {
-                if (normalized[i] !== normalized[i - 1]) transitions++;
+            if (resultsArr.length === 0) {
+                // The Builder sends {status:'error', message} with no results when a request fails
+                // before testing (checkout, build setup, ...).
+                if (requestError) return { text: `Error: ${requestError}`, class: 'verdict-error' };
+                return { text: 'Unknown: No results', class: 'verdict-error' };
             }
-
-            if (transitions === 1) {
-                const firstFailIndex = normalized.indexOf('fail');
-                if (firstFailIndex > 0 && normalized[0] === 'pass') {
-                    const regressionCommit = order[firstFailIndex];
-                    const shortSha = regressionCommit ? regressionCommit.substring(0, 7) : '';
-                    return { text: regressionText(shortSha), class: 'verdict-bug' };
-                }
-                const firstPassIndex = normalized.indexOf('pass');
-                if (firstPassIndex > 0 && normalized[0] === 'fail') {
-                    const fixCommit = order[firstPassIndex];
-                    const shortSha = fixCommit ? fixCommit.substring(0, 7) : '';
-                    return { text: fixText(shortSha), class: 'verdict-success' };
-                }
-            }
-
-            return { text: 'Unstable: Multiple transitions', class: 'verdict-unstable' };
-        }
-
-        const failCount = normalized.filter(s => s === 'fail').length;
-        if (failCount === 0) return { text: multiCommitPassText(), class: 'verdict-success' };
-        if (failCount === 1) {
-            const failIndex = normalized.indexOf('fail');
-            const failedCommit = order[failIndex] || '';
-            const shortSha = failedCommit ? failedCommit.substring(0, 7) : '';
-            return { text: isolatedFailureText(shortSha), class: 'verdict-bug' };
-        }
-        if (failCount === normalized.length) return { text: multiCommitAllFailText(), class: 'verdict-preexisting' };
-        if (isBuildOnly) return { text: `Build unstable across commits${baselineSuffix}`, class: 'verdict-unstable' };
-        return { text: `Unstable: Mixed results across commits${baselineSuffix}`, class: 'verdict-unstable' };
+            if (sequence.some(e => e.s === 'fail')) return patternVerdict();
+            if (hasError) return { text: 'Error: Test execution failed', class: 'verdict-error' };
+            if (hasFlaky) return { text: 'Flaky: Mixed pass/fail across attempts', class: 'verdict-flaky' };
+            if (sequence.length === 0) return { text: 'Unknown: No results', class: 'verdict-error' };
+            return patternVerdict();
         })();
 
         // The build/test outcome stands on its own; a failed upload qualifies a
@@ -358,104 +360,42 @@ class ReportService {
      * @param {Array} resultsArray - Array of test results
      * @returns {Object} Statistics with counts
      */
-    calculateTestStatistics(resultsArray) {
+    calculateTestStatistics(resultsArray, context = {}) {
+        const stats = { total: 0, passed: 0, failed: 0, error: 0, flaky: 0, unstable: 0 };
         if (!resultsArray || !Array.isArray(resultsArray) || resultsArray.length === 0) {
-            return {
-                total: 0,
-                passed: 0,
-                failed: 0,
-                error: 0,
-                flaky: 0,
-                unstable: 0
-            };
+            return stats;
         }
 
-        // First, convert array format to map format like report.js expects
-        // resultsMap: { testName: { commit: { status, flaky, ... }, ... }, ... }
-        const resultsMap = {};
-
-        // Check if this is build-only mode
-        const buildOnlyMode = resultsArray.length > 0 && resultsArray.some(r =>
-            r.status === 'build_success' || r.status === 'upload_success' || r.status === 'upload_failed' || r.test === 'build_only'
-        );
-
+        // Classify each test by its own verdict, as the report page does (updateStatistics):
+        // success -> passed, bug/pre-existing -> failed, unstable, error, flaky. A test that passed
+        // on one commit and failed on the next is a regression (failed), not "unstable".
+        const byTest = new Map();
         for (const item of resultsArray) {
-            const testName = item.test || 'unknown_test';
-            const commit = item.commit || 'unknown_commit';
-
-            if (!resultsMap[testName]) {
-                resultsMap[testName] = {};
-            }
-
-            // In build-only mode, prioritize build_success over upload statuses
-            // Don't overwrite build_success with upload_success or upload_failed
-            const existingData = resultsMap[testName][commit];
-            const shouldSkip = buildOnlyMode &&
-                              existingData &&
-                              existingData.status === 'build_success' &&
-                              (item.status === 'upload_failed' || item.status === 'upload_success');
-
-            if (!shouldSkip) {
-                resultsMap[testName][commit] = {
-                    status: item.status || 'unknown',
-                    flaky: !!item.flaky,
-                    message: item.message || '',
-                    attempts: item.attempts || 0
-                };
-            }
+            const testName = (item && item.test) || 'unknown_test';
+            if (!byTest.has(testName)) byTest.set(testName, []);
+            byTest.get(testName).push(item);
         }
 
-        // Now apply the EXACT same logic as report.js's calculateStatistics
-        let totalTests = 0;
-        let passedTests = 0;
-        let failedTests = 0;
-        let errorTests = 0;
-        let flakyTests = 0;
-        let unstableTests = 0;
+        const commitOrder = Array.isArray(context.commitOrder) && context.commitOrder.length > 0
+            ? context.commitOrder
+            : Array.from(new Set(resultsArray.map(r => r && r.commit).filter(Boolean)));
 
-        for (const testName in resultsMap) {
-            totalTests++;
-            const testResults = resultsMap[testName];
-
-            let hasPass = false;
-            let hasFail = false;
-            let hasError = false;
-            let hasFlaky = false;
-
-            for (const commit in testResults) {
-                const result = testResults[commit];
-                const status = result.status || '';
-
-                // Recognize both test statuses and build-only statuses
-                if (status === 'pass' || status === 'build_success' || status === 'upload_success') hasPass = true;
-                if (status === 'fail' || status === 'build_failed' || status === 'upload_failed') hasFail = true;
-                if (status === 'error' || status === 'execution_error') hasError = true;
-                if (result.flaky) hasFlaky = true;
-            }
-
-            // Classify this test (using report.js logic + unstable)
-            if (hasError) {
-                errorTests++;
-            } else if (hasFlaky) {
-                flakyTests++;
-            } else if (hasPass && hasFail) {
-                // Test passed on some commits and failed on others = unstable
-                unstableTests++;
-            } else if (hasPass && !hasFail) {
-                passedTests++;
-            } else {
-                failedTests++;
+        for (const testResults of byTest.values()) {
+            stats.total++;
+            const testCommits = new Set(testResults.map(r => r && r.commit));
+            const order = commitOrder.filter(c => testCommits.has(c));
+            const verdict = this.analyzeVerdict(order, testResults, order,
+                context.commitBuildMode, context.runMode, context.buildOnly);
+            switch (verdict.class) {
+                case 'verdict-success': stats.passed++; break;
+                case 'verdict-bug':
+                case 'verdict-preexisting': stats.failed++; break;
+                case 'verdict-unstable': stats.unstable++; break;
+                case 'verdict-flaky': stats.flaky++; break;
+                default: stats.error++; break;
             }
         }
-
-        return {
-            total: totalTests,
-            passed: passedTests,
-            failed: failedTests,
-            error: errorTests,
-            flaky: flakyTests,
-            unstable: unstableTests
-        };
+        return stats;
     }
 }
 
