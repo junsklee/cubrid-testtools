@@ -236,6 +236,9 @@ public class BuilderConfig {
         }
     }
     
+    private static final java.util.regex.Pattern ENV_REFERENCE =
+        java.util.regex.Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}|\\$([A-Za-z_][A-Za-z0-9_]*)");
+
     private String expandEnvironmentVariables(String value) {
         if (value == null) {
             return null;
@@ -243,18 +246,23 @@ public class BuilderConfig {
         
         String result = value;
         
-        // Expand tilde (~) to home directory
+        // Expand a leading tilde (~) to the home directory
         if (result.startsWith("~/")) {
-            String homeDir = System.getProperty("user.home");
-            result = result.replace("~/", homeDir + "/");
+            result = System.getProperty("user.home") + result.substring(1);
         }
-        
-        // Expand environment variables for $VAR format
-        for (Map.Entry<String, String> env : System.getenv().entrySet()) {
-            result = result.replace("$" + env.getKey(), env.getValue());
+
+        // Expand $VAR and ${VAR} by whole name. Replacing "$" + name for every environment variable
+        // in turn let a shorter name corrupt a longer one ($CUBRID inside $CUBRID_DATABASES,
+        // depending on HashMap order) and left ${VAR} unexpanded. Undefined variables stay as written.
+        java.util.regex.Matcher m = ENV_REFERENCE.matcher(result);
+        StringBuffer expanded = new StringBuffer();
+        while (m.find()) {
+            String name = m.group(1) != null ? m.group(1) : m.group(2);
+            String envValue = System.getenv(name);
+            m.appendReplacement(expanded, java.util.regex.Matcher.quoteReplacement(envValue != null ? envValue : m.group()));
         }
-        
-        return result;
+        m.appendTail(expanded);
+        return expanded.toString();
     }
     
     private void validateConfiguration() throws IllegalArgumentException {
