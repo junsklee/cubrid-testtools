@@ -70,10 +70,13 @@ public class DockerBuildManager {
         pullPrebuiltImage();
     }
     
+    /**
+     * Builds without workspace reuse. Callers that do not know the branch (/build-single) cannot
+     * pass the build_workspace_reuse_branches gate, so they must not inherit a previous workspace.
+     */
     public String buildCubrid(String commitHash, File workDir, String buildType, String baselineCommit, String commitBuildMode)
             throws IOException, InterruptedException {
-        return buildCubrid(commitHash, workDir, buildType, baselineCommit, commitBuildMode,
-                           config.isBuildWorkspaceReuseEnabled(), null);
+        return buildCubrid(commitHash, workDir, buildType, baselineCommit, commitBuildMode, false, null);
     }
 
     /**
@@ -403,8 +406,8 @@ public class DockerBuildManager {
 
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
             throws IOException, InterruptedException {
-        return buildPullRequest(prBranch, headSha, workDir, buildType, baselineCommit,
-                                config.isBuildWorkspaceReuseEnabled(), null);
+        // No branch to gate on: no workspace reuse (see the buildCubrid overload)
+        return buildPullRequest(prBranch, headSha, workDir, buildType, baselineCommit, false, null);
     }
 
     /** @param reuseWorkspace see {@link #buildCubrid}. Serialized with buildCubrid (shared workspace). */
@@ -2001,6 +2004,13 @@ public class DockerBuildManager {
         writer.println("bt_seed_jdk() { :; }");
         writer.println("bt_seed_3rdparty() { :; }");
         writer.println("bt_save_3rdparty() { :; }");
+        // Every helper the scripts call needs a stub, or the script dies on an unknown command.
+        // Without the accelerators there is no workspace reuse: always start from an empty target.
+        writer.println("bt_prepare_workspace() { BT_WORKSPACE_REUSED=0; rm -rf \"$1\"; mkdir -p \"$1\"; }");
+        writer.println("bt_workspace_ok() { :; }");
+        writer.println("bt_clean_submodules() { :; }");
+        writer.println("bt_guard_build_inputs() { :; }");
+        writer.println("bt_reset_install() { :; }");
         writer.println();
     }
 
