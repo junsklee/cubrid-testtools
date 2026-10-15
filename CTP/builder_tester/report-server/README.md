@@ -265,7 +265,9 @@ BUILDER_PROTOCOL=http    # Protocol (http/https)
 GITHUB_TOKEN=ghp_xxx     # Personal access token for API rate limits
 
 # Security Settings
-CORS_ORIGIN=*            # CORS allowed origins
+CORS_ORIGIN=*            # Origins allowed to READ the API cross-origin ("*" = any), comma-separated.
+                         # Writes (POST/PUT/DELETE) from a browser are accepted only from this server's
+                         # own pages or an origin listed explicitly here; "*" never authorizes them.
 RATE_LIMIT_MAX=100       # Max requests per 15 minutes
 
 # Paths (Auto-configured)
