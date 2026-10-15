@@ -5,12 +5,22 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 PID_FILE="$SCRIPT_DIR/builder.pid"
 
+# The PID file may be stale and its pid reused by an unrelated process: only act on ours
+is_ours() {
+  [ -n "$1" ] && kill -0 "$1" 2>/dev/null \
+    && grep -qa "com.navercorp.cubridqa.builder.Builder" "/proc/$1/cmdline" 2>/dev/null
+}
+
 stop_by_pid() {
   local pid="$1"
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+  if is_ours "$pid"; then
     echo "Stopping Builder (pid $pid)..."
     kill "$pid" 2>/dev/null || true
-    sleep 2
+    # Give the shutdown hook (final stats snapshot, WAL drain) time before forcing
+    for _ in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
     if kill -0 "$pid" 2>/dev/null; then
       echo "Force killing Builder (pid $pid)..."
       kill -9 "$pid" 2>/dev/null || true

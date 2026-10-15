@@ -1,6 +1,11 @@
 #!/bin/bash
 
 # Compile Builder-Tester System
+#
+# Compiles into fresh staging locations and swaps them in only after a successful build:
+# running Builder/Tester JVMs use build/ and lib/builder-tester.jar as their classpath, and
+# deleting them first (as before) broke those JVMs, and left nothing to run if javac failed.
+# A replaced jar keeps its old inode open in running JVMs, so they keep their classes.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
@@ -14,21 +19,21 @@ if ! command -v javac &> /dev/null; then
     exit 1
 fi
 
-# Clean and create build directory (force full rebuild)
 BUILD_DIR="$PROJECT_ROOT/build"
-echo "Cleaning previous build..."
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
+STAGE_DIR="$PROJECT_ROOT/build.new"
+JAR_PATH="$PROJECT_ROOT/lib/builder-tester.jar"
+STAGE_JAR="$JAR_PATH.new"
 
-# Clean old JAR
-rm -f "$PROJECT_ROOT/lib/builder-tester.jar"
+# Fresh staging directory (force full rebuild)
+rm -rf "$STAGE_DIR" "$STAGE_JAR"
+mkdir -p "$STAGE_DIR"
 
 # Remove any stray .class files from src directory (they shouldn't be there)
 echo "Cleaning stray class files from source directory..."
 find "$PROJECT_ROOT/src" -name "*.class" -type f -delete 2>/dev/null || true
 
 # Set classpath
-CLASSPATH="$PROJECT_ROOT/lib/json.jar:$PROJECT_ROOT/lib/jsch-0.1.55.jar:$BUILD_DIR"
+CLASSPATH="$PROJECT_ROOT/lib/json.jar:$PROJECT_ROOT/lib/jsch-0.1.55.jar:$STAGE_DIR"
 
 # Source directory
 SRC_DIR="$PROJECT_ROOT/src"
@@ -45,11 +50,12 @@ fi
 echo "Compiling $(echo "$JAVA_FILES" | wc -l) Java files..."
 
 # Compile (capture exit code immediately)
-javac -cp "$CLASSPATH" -d "$BUILD_DIR" $JAVA_FILES
+javac -encoding UTF-8 -cp "$CLASSPATH" -d "$STAGE_DIR" $JAVA_FILES
 JAVAC_EXIT=$?
 
 if [ $JAVAC_EXIT -ne 0 ]; then
-    echo "Compilation failed!"
+    rm -rf "$STAGE_DIR"
+    echo "Compilation failed! The previous build was left in place."
     exit 1
 fi
 
@@ -57,18 +63,26 @@ echo "Copying resources (non-Java files) into build..."
 # Copy all non-Java files from src into build, preserving paths (POSIX-compatible)
 find "$SRC_DIR" -type f ! -name "*.java" | while IFS= read -r file; do
     rel_path="${file#$SRC_DIR/}"
-    dest_dir="$BUILD_DIR/$(dirname "$rel_path")"
+    dest_dir="$STAGE_DIR/$(dirname "$rel_path")"
     mkdir -p "$dest_dir"
     cp "$file" "$dest_dir/"
 done
 
-echo "Compilation successful!"
-echo "Build output: $BUILD_DIR"
-
 # Create JAR file
 echo "Creating JAR file..."
-cd "$BUILD_DIR"
-jar cf "$PROJECT_ROOT/lib/builder-tester.jar" com/
-cd - > /dev/null
+(cd "$STAGE_DIR" && jar cf "$STAGE_JAR" com/) || {
+    rm -rf "$STAGE_DIR" "$STAGE_JAR"
+    echo "Creating the JAR failed! The previous build was left in place."
+    exit 1
+}
 
-echo "JAR created: $PROJECT_ROOT/lib/builder-tester.jar"
+# Swap in: rename, so readers see either the old or the new version, never a partial one
+rm -rf "$BUILD_DIR.old"
+[ -d "$BUILD_DIR" ] && mv "$BUILD_DIR" "$BUILD_DIR.old"
+mv "$STAGE_DIR" "$BUILD_DIR"
+mv -f "$STAGE_JAR" "$JAR_PATH"
+rm -rf "$BUILD_DIR.old"
+
+echo "Compilation successful!"
+echo "Build output: $BUILD_DIR"
+echo "JAR created: $JAR_PATH"

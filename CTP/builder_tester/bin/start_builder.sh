@@ -28,7 +28,9 @@ fi
 # If already running, refuse to start
 if [ -f "$PID_FILE" ]; then
   oldpid=$(cat "$PID_FILE" || true)
-  if [ -n "${oldpid:-}" ] && kill -0 "$oldpid" 2>/dev/null; then
+  # A stale PID file whose pid was reused by another process must not block the start
+  if [ -n "${oldpid:-}" ] && kill -0 "$oldpid" 2>/dev/null \
+     && grep -qa "com.navercorp.cubridqa.builder.Builder" "/proc/$oldpid/cmdline" 2>/dev/null; then
     echo "Builder already running with pid $oldpid (PID file: $PID_FILE)" >&2
     exit 0
   fi
