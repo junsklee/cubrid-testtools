@@ -103,7 +103,7 @@ public class SmartSchedulingIntegrationTest {
             .build());
 
         ReadyQueue readyQueue = new ReadyQueue(20_000);
-        SchedulerService scheduler = new SchedulerService(directory, new ScoreFunction(), readyQueue);
+        SchedulerService scheduler = new SchedulerService(directory, new ScoreFunction(), readyQueue, 0.0); // mice first: elephant weight 0 (the default picks at random)
 
         scheduler.offer(Arrays.asList(mouseInstance, elephantInstance));
         assert readyQueue.getMiceCount() == 1 : "Mouse should be routed to mice queue";
