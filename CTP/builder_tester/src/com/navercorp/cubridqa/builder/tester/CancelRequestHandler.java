@@ -154,7 +154,12 @@ public class CancelRequestHandler implements HttpHandler {
             RequestLogManager.getInstance().closeRequestLoggers(requestId);
             Path logDir = RequestLogManager.getInstance().getRequestLogDirectory(requestId);
             if (logDir != null) {
-                SafeIo.deleteDirectoryWithPrivileges(logDir.toFile(), logger);
+                // Plain delete first: a tester without passwordless sudo (a VM's user) cannot use
+                // the privileged one
+                SafeIo.deleteDirectory(logDir.toFile());
+                if (logDir.toFile().exists()) {
+                    SafeIo.deleteDirectoryWithPrivileges(logDir.toFile(), logger);
+                }
             }
         } catch (Exception e) {
             logger.warning("Failed to delete request logs for " + requestId + ": " + e.getMessage());

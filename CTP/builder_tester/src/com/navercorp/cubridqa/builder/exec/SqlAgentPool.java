@@ -255,7 +255,10 @@ public class SqlAgentPool {
         }
         if (agent.workDir != null) {
             try {
-                SafeIo.deleteDirectoryWithPrivileges(agent.workDir.toFile(), log);
+                SafeIo.deleteDirectory(agent.workDir.toFile());
+                if (agent.workDir.toFile().exists()) {
+                    SafeIo.deleteDirectoryWithPrivileges(agent.workDir.toFile(), log);
+                }
             } catch (Exception e) {
                 log.warning("Failed to delete SQL agent workdir " + agent.workDir + ": " + e.getMessage());
             }
