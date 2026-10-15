@@ -1693,7 +1693,8 @@ public class DockerBuildManager {
 
     private void deleteRecursively(File f) {
         if (f == null || !f.exists()) return;
-        if (f.isDirectory()) {
+        // Never descend through a symbolic link (a worktree may contain committed links)
+        if (f.isDirectory() && !java.nio.file.Files.isSymbolicLink(f.toPath())) {
             File[] children = f.listFiles();
             if (children != null) {
                 for (File c : children) deleteRecursively(c);

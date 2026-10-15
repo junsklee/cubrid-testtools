@@ -261,7 +261,8 @@ public class LogRotationManager {
      * Recursively delete a directory
      */
     private void deleteDirectory(File dir) {
-        if (dir.isDirectory()) {
+        // Never descend through a symbolic link: only the link is removed
+        if (dir.isDirectory() && !java.nio.file.Files.isSymbolicLink(dir.toPath())) {
             File[] children = dir.listFiles();
             if (children != null) {
                 for (File child : children) {

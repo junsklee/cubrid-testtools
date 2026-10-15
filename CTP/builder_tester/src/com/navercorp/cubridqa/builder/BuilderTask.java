@@ -2868,7 +2868,8 @@ public class BuilderTask {
 
     private void deleteRecursively(File path) {
         if (path == null || !path.exists()) return;
-        if (path.isDirectory()) {
+        // Never descend through a symbolic link (a worktree may contain committed links)
+        if (path.isDirectory() && !java.nio.file.Files.isSymbolicLink(path.toPath())) {
             File[] files = path.listFiles();
             if (files != null) {
                 for (File f : files) {

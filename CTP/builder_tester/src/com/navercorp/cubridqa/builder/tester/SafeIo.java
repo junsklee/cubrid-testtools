@@ -48,12 +48,21 @@ public class SafeIo {
         });
     }
     
+    /**
+     * Deletes a directory tree without following symbolic links: File.isDirectory() follows them,
+     * so a link a test left in its workspace (to $HOME, say) had its target's contents deleted.
+     * A link is removed itself.
+     */
     public static void deleteDirectory(File dir) {
+        if (java.nio.file.Files.isSymbolicLink(dir.toPath())) {
+            dir.delete();
+            return;
+        }
         if (dir.exists()) {
             File[] files = dir.listFiles();
             if (files != null) {
                 for (File file : files) {
-                    if (file.isDirectory()) {
+                    if (!java.nio.file.Files.isSymbolicLink(file.toPath()) && file.isDirectory()) {
                         deleteDirectory(file);
                     } else {
                         file.delete();

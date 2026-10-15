@@ -201,7 +201,8 @@ public class CubridInstaller {
         File[] files = dir.listFiles();
         if (files != null) {
             for (File file : files) {
-                if (file.isDirectory()) {
+                // Never descend through a symbolic link: only the link is removed
+                if (file.isDirectory() && !java.nio.file.Files.isSymbolicLink(file.toPath())) {
                     deleteDirectory(file);
                 } else {
                     file.delete();
