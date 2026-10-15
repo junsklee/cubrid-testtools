@@ -1489,6 +1489,19 @@
         function jsArg(value) {
             return escHtml(JSON.stringify(String(value == null ? '' : value)));
         }
+
+        // Logs can be tens of MB; putting one whole into innerHTML froze the page. Show the tail
+        // and link the full log.
+        const LOG_DISPLAY_LIMIT = 2 * 1024 * 1024;
+        function renderLogText(logContent, fullUrl) {
+            const text = String(logContent == null ? '' : logContent);
+            if (text.length <= LOG_DISPLAY_LIMIT) {
+                return escHtml(text);
+            }
+            const note = '[Showing the last ' + Math.round(LOG_DISPLAY_LIMIT / 1048576) + ' MB of '
+                + (text.length / 1048576).toFixed(1) + ' MB. Full log: ' + (fullUrl || '(see Logs)') + ']\n\n';
+            return escHtml(note + text.slice(text.length - LOG_DISPLAY_LIMIT));
+        }
         const commitBuildMode = rawData.commitBuildMode || 'baseline_cherrypick';
         const buildOnlyMode = rawData.buildOnly || rawData.buildOnlyMode || false;
         let processedData = {};
@@ -2334,7 +2347,7 @@
                     let content = '<div style="padding: 1.5rem;">';
                     content += '<h3>Build Log: ' + escHtml(fileName) + '</h3>';
                     content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap;">';
-                    content += escHtml(logContent);
+                    content += renderLogText(logContent, response.url);
                     content += '</pre>';
                     content += '</div>';
                     
@@ -2487,7 +2500,7 @@
                             let content = '<div style="padding: 1.5rem;">';
                             content += '<h3>Test Log: ' + escHtml(testName) + ' @ ' + escHtml(commitShort) + '</h3>';
                             content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
-                            content += escHtml(logContent);
+                            content += renderLogText(logContent, logResponse.url);
                             content += '</pre>';
                             content += '</div>';
                             
@@ -2758,7 +2771,7 @@
                     content += '</button>';
                     content += '</div>';
                     content += '<pre style="background: #f3f4f6; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; white-space: pre-wrap; max-height: 400px;">';
-                    content += escHtml(logContent);
+                    content += renderLogText(logContent, response.url);
                     content += '</pre>';
                     content += '</div>';
                     

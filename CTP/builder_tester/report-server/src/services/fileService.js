@@ -367,6 +367,23 @@ class FileService {
      * @param {Object} options - Query options
      * @returns {Promise<Object>} Paginated results with items and metadata
      */
+    /**
+     * A date from <input type="date"> ("YYYY-MM-DD") means that whole local day: new Date() reads it
+     * as UTC midnight, which shifted the window by the server's UTC offset (9h in KST) and left
+     * the "To" day out (from == to matched nothing). Other values are parsed as given.
+     */
+    parseDayBoundary(value, endOfDay) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value).trim());
+        if (!m) {
+            return new Date(value);
+        }
+        const day = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+        if (endOfDay) {
+            day.setHours(23, 59, 59, 999);
+        }
+        return day;
+    }
+
     async queryReports(options = {}) {
         try {
             const {
@@ -409,13 +426,13 @@ class FileService {
 
             // Filter by date range
             if (from) {
-                const fromDate = new Date(from);
+                const fromDate = this.parseDayBoundary(from, false);
                 if (!isNaN(fromDate)) {
                     filtered = filtered.filter(r => r.modified >= fromDate);
                 }
             }
             if (to) {
-                const toDate = new Date(to);
+                const toDate = this.parseDayBoundary(to, true);
                 if (!isNaN(toDate)) {
                     filtered = filtered.filter(r => r.modified <= toDate);
                 }

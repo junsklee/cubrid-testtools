@@ -80,34 +80,6 @@ class ProxyService {
         return result;
     }
 
-    /**
-     * Proxy request to another server
-     */
-    proxyRequest(targetUrl, req, res) {
-        const parsedUrl = new URL(targetUrl);
-        const client = parsedUrl.protocol === 'https:' ? https : http;
-        
-        const options = {
-            hostname: parsedUrl.hostname,
-            port: parsedUrl.port,
-            path: parsedUrl.pathname + parsedUrl.search,
-            method: req.method,
-            headers: req.headers
-        };
-
-        const proxyReq = client.request(options, (proxyRes) => {
-            res.writeHead(proxyRes.statusCode, proxyRes.headers);
-            proxyRes.pipe(res);
-        });
-
-        proxyReq.on('error', (err) => {
-            console.error('Proxy error:', err);
-            res.writeHead(502);
-            res.end('Bad Gateway');
-        });
-
-        req.pipe(proxyReq);
-    }
 }
 
 module.exports = new ProxyService();

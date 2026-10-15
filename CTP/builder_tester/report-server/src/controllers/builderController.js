@@ -117,20 +117,6 @@ class BuilderController {
         }
     }
 
-    /**
-     * Proxy any other Builder endpoint
-     */
-    async proxy(req, res) {
-        try {
-            const path = req.path.replace('/api/builder', '');
-            const builderUrl = `${config.builder.protocol}://${config.builder.host}:${config.builder.port}${path}`;
-            
-            proxyService.proxyRequest(builderUrl, req, res);
-        } catch (err) {
-            console.error('Error proxying request:', err);
-            res.status(500).json({ error: err.message });
-        }
-    }
 }
 
 module.exports = new BuilderController();

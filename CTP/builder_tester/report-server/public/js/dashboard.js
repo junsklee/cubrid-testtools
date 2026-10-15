@@ -2089,7 +2089,8 @@
             }
 
             try {
-                const url = `/log-tail/builder?taskId=${taskId}&offset=${logTailOffset}&knownMtimeMs=${logTailKnownMtime}`;
+                // 1MB chunks: at the server's 64KB default a 6MB builder.log took ~3 minutes to catch up
+                const url = `/log-tail/builder?taskId=${encodeURIComponent(taskId)}&offset=${logTailOffset}&knownMtimeMs=${logTailKnownMtime}&maxBytes=1048576`;
                 const response = await fetch(url);
                 const data = await response.json();
 

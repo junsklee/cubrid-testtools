@@ -217,7 +217,8 @@ class ReportController {
         try {
             const { taskId, offset, maxBytes, knownMtimeMs } = req.query;
             const start = parseInt(offset) || 0;
-            const limit = parseInt(maxBytes) || 1024 * 64; // Default 64KB per chunk
+            // Default 64KB per chunk; at most 2MB per request
+            const limit = Math.min(parseInt(maxBytes) || 1024 * 64, 2 * 1024 * 1024);
 
             if (!taskId) {
                 return res.status(400).json({ status: 'invalid', message: 'taskId is required' });
