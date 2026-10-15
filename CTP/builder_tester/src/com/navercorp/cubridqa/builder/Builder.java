@@ -919,7 +919,12 @@ public class Builder {
                     String raw = String.valueOf(tests.get(i));
                     if (raw == null) continue;
                     String t = raw.trim();
-                    if (t.isEmpty()) continue;
+                    if (t.isEmpty()) {
+                        // An empty entry passed validation and failed every commit at dispatch
+                        // ("String index out of range: -1")
+                        invalid.add("\"\" (empty)");
+                        continue;
+                    }
                     if ("custom_script_test".equals(t)) continue;
 
                     if (sqlMode) {
