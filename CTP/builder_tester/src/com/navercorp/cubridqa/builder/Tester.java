@@ -24,6 +24,8 @@ import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
 import com.navercorp.cubridqa.builder.git.SqlTcSync;
 import com.navercorp.cubridqa.builder.logging.LogConfig;
+import com.navercorp.cubridqa.builder.logging.LogRotationManager;
+import com.navercorp.cubridqa.builder.tester.SafeIo;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.docker.DockerTesterManager;
 import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
@@ -40,6 +42,8 @@ import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
@@ -126,6 +130,13 @@ public class Tester {
                 config.isRequestGroupingEnabled()
             );
             RequestLogManager.initialize(logConfig);
+            LogRotationManager rotation = new LogRotationManager(logConfig);
+            ScheduledExecutorService rotationTimer = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "tester-log-rotation");
+                t.setDaemon(true);
+                return t;
+            });
+            rotationTimer.scheduleWithFixedDelay(rotation::cleanupTesterRequestLogs, 1, 60, TimeUnit.MINUTES);
         } catch (IOException e) {
             logger.warning("Failed to initialize RequestLogManager: " + e.getMessage());
         }
@@ -145,6 +156,7 @@ public class Tester {
         this.cubridInstaller = new CubridInstaller();
         this.shellTcSync.cleanupStaleRequestWorkspaces(logger);
         this.sqlTcSync.cleanupStaleRequestWorkspaces(logger);
+        sweepStaleAttemptWorkDirs(Paths.get(config.getWorkDir()));
 
         // Create execution strategies
         this.directExecutor = new DirectExecutor(config, buildCache, shellTcSync, cubridInstaller);
@@ -246,6 +258,28 @@ public class Tester {
         this.server.setExecutor(Executors.newFixedThreadPool(maxThreads));
     }
     
+    /**
+     * Removes per-attempt work directories (work_dir/test_*) left by a tester that was killed or
+     * restarted mid-test: they are only deleted in the attempt's finally block, so each one stayed
+     * forever (80 directories, 15GB here). Only directories older than a day are removed, so a
+     * second tester sharing work_dir keeps its running attempts.
+     */
+    private void sweepStaleAttemptWorkDirs(Path workRoot) {
+        long cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000;
+        File[] stale = workRoot.toFile().listFiles(f -> f.isDirectory() && f.getName().startsWith("test_")
+            && f.lastModified() < cutoff);
+        if (stale == null || stale.length == 0) {
+            return;
+        }
+        logger.info("Removing " + stale.length + " stale attempt work directories under " + workRoot);
+        for (File dir : stale) {
+            SafeIo.deleteDirectory(dir);
+            if (dir.exists()) {
+                SafeIo.deleteDirectoryWithPrivileges(dir, logger);
+            }
+        }
+    }
+
     public void start() {
         if (config.isStatsEnabled()) {
             // Start TestStatsStore first: it loads MANIFEST and the snapshot and replays the WAL

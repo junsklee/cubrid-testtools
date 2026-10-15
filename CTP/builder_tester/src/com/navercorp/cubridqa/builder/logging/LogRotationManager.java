@@ -83,6 +83,35 @@ public class LogRotationManager {
     }
     
     /**
+     * Tester-side rotation (the Tester never rotated, so log/requests grew without bound on remote
+     * and VM testers). Only directories holding nothing but tester logs are candidates: where a
+     * Builder (and the report server) share log/requests, its request directories carry
+     * builder.log, request.json, results.json or report.html and are never touched here. Keeps the
+     * newest max_request_logs candidates and anything modified in the last 6 hours (a running
+     * request).
+     */
+    public void cleanupTesterRequestLogs() {
+        File[] dirs = new File(config.getRequestsDir()).listFiles(File::isDirectory);
+        if (dirs == null) {
+            return;
+        }
+        List<File> testerOnly = Arrays.stream(dirs)
+            .filter(d -> !new File(d, "builder.log").exists() && !new File(d, "request.json").exists()
+                && !new File(d, "results.json").exists() && !new File(d, "report.html").exists())
+            .sorted((a, b) -> Long.compare(b.lastModified(), a.lastModified()))
+            .collect(Collectors.toList());
+        long now = System.currentTimeMillis();
+        for (int i = config.getMaxRequestLogs(); i < testerOnly.size(); i++) {
+            File dir = testerOnly.get(i);
+            if (now - dir.lastModified() < 6L * 60 * 60 * 1000) {
+                continue;
+            }
+            deleteDirectory(dir);
+            logger.info("Deleted old tester request log directory: " + dir.getName());
+        }
+    }
+
+    /**
      * Clean up old tar files in the work directory
      */
     private void cleanupTarFiles(String workDir) {
