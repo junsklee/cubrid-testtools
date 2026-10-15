@@ -331,10 +331,39 @@ public class DockerImageBuilder {
         return value.replaceAll("[^a-zA-Z0-9_.-]", "_");
     }
     
+    // Image provisioning (extract + install inside a container, then commit) normally takes minutes
+    private static final long COMMAND_TIMEOUT_MINUTES = 30;
+
     private void runCommand(List<String> command, String logPrefix) throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
         Process process = pb.start();
+        // Every image build runs under one lock, so a hung provisioning container used to stall all
+        // image builds (and every test waiting for one) indefinitely. A watchdog stops it; killing
+        // the docker client alone would leave the named container running, so it is removed too.
+        int nameIdx = command.indexOf("--name");
+        final String containerName = nameIdx >= 0 && nameIdx + 1 < command.size() ? command.get(nameIdx + 1) : null;
+        final java.util.concurrent.atomic.AtomicBoolean timedOut = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread watchdog = new Thread(() -> {
+            try {
+                if (!process.waitFor(COMMAND_TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
+                    timedOut.set(true);
+                    logger.severe("Command exceeded " + COMMAND_TIMEOUT_MINUTES + " minutes; stopping: " + String.join(" ", command));
+                    if (containerName != null) {
+                        try {
+                            new ProcessBuilder("docker", "rm", "-f", containerName).redirectErrorStream(true).start()
+                                .waitFor(60, TimeUnit.SECONDS);
+                        } catch (IOException ignore) {
+                        }
+                    }
+                    process.destroyForcibly();
+                }
+            } catch (InterruptedException ignore) {
+                Thread.currentThread().interrupt();
+            }
+        }, "image-build-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
         StringBuilder output = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
@@ -346,6 +375,10 @@ public class DockerImageBuilder {
             }
         }
         int exitCode = process.waitFor();
+        watchdog.interrupt();
+        if (timedOut.get()) {
+            throw new IOException("Command timed out after " + COMMAND_TIMEOUT_MINUTES + " minutes: " + String.join(" ", command));
+        }
         if (exitCode != 0) {
             throw new IOException("Command failed with exit code " + exitCode + ": " +
                     String.join(" ", command) + "\n" + output);
