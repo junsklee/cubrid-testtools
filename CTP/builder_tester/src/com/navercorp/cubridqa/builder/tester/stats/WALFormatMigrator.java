@@ -47,6 +47,12 @@ public class WALFormatMigrator {
         System.out.println("New directory: " + newDir);
         System.out.println();
 
+        // In place, the rebuilt snapshot (one observation per test) replaced the real one
+        if (java.nio.file.Paths.get(args[0]).toAbsolutePath().normalize()
+                .equals(java.nio.file.Paths.get(args[1]).toAbsolutePath().normalize())) {
+            System.err.println("Refusing to migrate in place: give a new profiles directory");
+            System.exit(1);
+        }
         WALFormatMigrator migrator = new WALFormatMigrator();
         migrator.migrate(oldDir, newDir);
     }

@@ -373,6 +373,9 @@ public class BuilderConfig {
         }
     }
 
+    // Marks a shell_tc_overlay_dir created here, so a broken clone may be deleted and recreated
+    private static final String OVERLAY_MARKER = ".bt_shell_tc_overlay";
+
     private Path prepareShellTcOverlay(Path source, Path overlay) throws IOException {
         if (overlay == null) {
             return source;
@@ -386,13 +389,27 @@ public class BuilderConfig {
         if (source != null && overlay.startsWith(source)) {
             throw new IOException("shell_tc_overlay_dir must not reside inside shell_tc_dir: " + overlay);
         }
+        if (source != null && source.toAbsolutePath().normalize().startsWith(overlay.toAbsolutePath().normalize())) {
+            throw new IOException("shell_tc_overlay_dir must not contain shell_tc_dir: " + overlay);
+        }
 
         synchronized (SHELL_TC_OVERLAY_LOCK) {
             if (Files.exists(overlay) && !Files.exists(overlay.resolve(".git"))) {
+                // Only replace what is ours to replace: a misconfigured overlay path ($HOME, a data
+                // directory) used to be deleted recursively here.
+                boolean empty;
+                try (java.util.stream.Stream<Path> entries = Files.list(overlay)) {
+                    empty = !entries.findAny().isPresent();
+                }
+                if (!empty && !Files.exists(overlay.resolve(OVERLAY_MARKER))) {
+                    throw new IOException("shell_tc_overlay_dir exists, is not a git checkout and was not created by "
+                        + "Builder-Tester; refusing to delete it: " + overlay);
+                }
                 deleteRecursively(overlay);
             }
             if (!Files.exists(overlay.resolve(".git"))) {
                 cloneShellTestcases(source, overlay);
+                Files.write(overlay.resolve(OVERLAY_MARKER), new byte[0]);
             }
             replicateGitRemotes(source, overlay);
         }
