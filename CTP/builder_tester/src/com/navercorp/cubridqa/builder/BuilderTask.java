@@ -126,9 +126,10 @@ public class BuilderTask {
             if (RequestLogManager.getInstance().isRequestGroupingEnabled()) {
                 RequestLogManager.getInstance().createRequestSubdir(requestId, "tests");
             }
-        } catch (IOException e) {
-            taskLogger.warning("Failed to create request logger, using system logger: " + e.getMessage());
+        } catch (IOException | RuntimeException e) {
+            // taskLogger is still null here when getRequestLogger failed
             taskLogger = logger;
+            taskLogger.warning("Failed to create request logger, using system logger: " + e.getMessage());
         }
         
         long startTime = System.currentTimeMillis();
@@ -405,6 +406,11 @@ public class BuilderTask {
         long duration = System.currentTimeMillis() - startTime;
         taskLogger.info(String.format("Builder task %s completed in %d seconds", 
             taskId, duration / 1000));
+        // Release the request log's file handle (each finished request kept one open)
+        try {
+            RequestLogManager.getInstance().closeRequestLoggers(requestId);
+        } catch (RuntimeException ignore) {
+        }
     }
 
     public void requestCancel(boolean deleteLogs) {
@@ -1438,7 +1444,7 @@ public class BuilderTask {
                 String requestId = RequestContext.getRequestId();
                 if (requestId != null && config.isRequestGroupingEnabled()) {
                     String buildsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "builds");
-                    String buildLogFile = String.format("build_%s.log", commit.substring(0, 7));
+                    String buildLogFile = String.format("build_%s.log", shortSha(commit));
                     Path logFile = Paths.get(buildsDir, buildLogFile);
                     Files.write(logFile, buildOutput.getBytes("UTF-8"));
                     taskLogger.info("Saved build log to: " + logFile.toString());
@@ -1448,7 +1454,7 @@ public class BuilderTask {
             }
 
             // 5) Create package from the isolated worktree build output
-            String packageName = "cubrid_" + commit.substring(0, 7) + ".tar.gz";
+            String packageName = "cubrid_" + shortSha(commit) + ".tar.gz";
             File packageFile = new File(workDir, packageName);
 
             ProcessBuilder tarPb = new ProcessBuilder();
@@ -1901,6 +1907,11 @@ public class BuilderTask {
         return name.length() > 0 ? name.toString() : base;
     }
 
+    /** First 7 characters of a commit reference, or all of it when shorter (substring threw). */
+    static String shortSha(String commit) {
+        return commit == null ? "" : commit.substring(0, Math.min(7, commit.length()));
+    }
+
     public static String buildSqlTestName(String testPath) {
         String p = testPath;
         if (p.endsWith(".sql")) {
@@ -2036,7 +2047,7 @@ public class BuilderTask {
                 .put("commitShort", commit.substring(0, Math.min(commit.length(), 7)))  // Add short commit
                 .put("baseline", baselineToken)  // Add baseline key for Docker image differentiation
                 .put("baselineShort", baselineToken.substring(0, Math.min(baselineToken.length(), 7)))  // Add short baseline
-                .put("expectedBuildVersion", commit.substring(0, 7))
+                .put("expectedBuildVersion", shortSha(commit))
                 .put("buildType", buildType != null ? buildType : "release")  // Add build type for container naming
                 .put("keepAlive", false)
                 .put("runMode", runModeOverride)
@@ -3093,7 +3104,7 @@ public class BuilderTask {
             String requestId = RequestContext.getRequestId();
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String buildsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "builds");
-                String buildLogFile = String.format("build_%s.log", commit.substring(0, 7));
+                String buildLogFile = String.format("build_%s.log", shortSha(commit));
                 Path logFile = Paths.get(buildsDir, buildLogFile);
                 
                 // Create build log content for cached build

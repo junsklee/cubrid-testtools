@@ -284,9 +284,6 @@ public class Builder {
                 // Validate request
                 validateRequest(request);
 
-                // Record the request in metadata (with secrets redacted)
-                logRotationManager.recordRequest(requestId, sanitizeRequestForLog(request));
-                
                 // Extract parameters (commits optional when using prNumber)
                 JSONArray commits = request.has("commits") ? request.getJSONArray("commits") : new JSONArray();
                 JSONArray tests = request.has("tests") ? request.getJSONArray("tests") : new JSONArray();
@@ -321,6 +318,10 @@ public class Builder {
                     }
                 }
                 
+                // Record the request in metadata (with secrets redacted) once it is accepted: recording
+                // it before the checks above left a request folder behind for every rejected request.
+                logRotationManager.recordRequest(requestId, sanitizeRequestForLog(request));
+
                 // Log request with request ID
                 if (buildOnly) {
                     JSONObject upload = request.getJSONObject("buildUpload");
