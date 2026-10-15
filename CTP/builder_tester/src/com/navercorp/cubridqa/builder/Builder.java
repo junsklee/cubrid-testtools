@@ -355,15 +355,6 @@ public class Builder {
                 // Create task ID (use request ID as task ID)
                 String taskId = requestId;
                 
-                // Check if already running
-                if (activeTasks.containsKey(taskId)) {
-                    JSONObject response = new JSONObject()
-                        .put("status", "already_running")
-                        .put("taskId", taskId);
-                    sendJsonResponse(exchange, 200, response);
-                    return;
-                }
-                
                 // Capacity check + queue/task admission must be atomic to prevent over-admission
                 synchronized (taskDispatchLock) {
                     // Queue the request if at capacity, or if others are already waiting: requests

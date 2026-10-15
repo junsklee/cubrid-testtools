@@ -901,53 +901,6 @@ public class TestOrchestrator {
     }
 
     /**
-     * Recursively delete a directory with privilege escalation if needed
-     */
-    private void deleteDirectory(java.io.File dir) {
-        if (dir == null || !dir.exists()) {
-            return;
-        }
-        
-        // Try normal deletion first
-        java.io.File[] files = dir.listFiles();
-        if (files != null) {
-            for (java.io.File file : files) {
-                if (file.isDirectory()) {
-                    deleteDirectory(file);
-                } else {
-                    file.delete();
-                }
-            }
-        }
-        boolean deleted = dir.delete();
-        
-        // If deletion failed and directory still exists, try privileged deletion
-        if (!deleted && dir.exists()) {
-            try {
-                String path = dir.getAbsolutePath();
-                // Validate path to prevent command injection
-                if (path.contains(";") || path.contains("|") || path.contains("&") || path.contains("`")) {
-                    Logger.getLogger(TestOrchestrator.class.getName()).warning("Refusing to delete path with suspicious characters: " + path);
-                    return;
-                }
-                
-                ProcessBuilder pb = new ProcessBuilder("sudo", "-n", "rm", "-rf", path);
-                pb.redirectErrorStream(true);
-                Process p = pb.start();
-                int exitCode = p.waitFor();
-                
-                if (exitCode == 0) {
-                    Logger.getLogger(TestOrchestrator.class.getName()).fine("Privileged deletion succeeded for: " + path);
-                } else {
-                    Logger.getLogger(TestOrchestrator.class.getName()).warning("Privileged deletion failed (exit=" + exitCode + ") for: " + path);
-                }
-            } catch (Exception e) {
-                Logger.getLogger(TestOrchestrator.class.getName()).warning("Failed privileged deletion for " + dir.getAbsolutePath() + ": " + e.getMessage());
-            }
-        }
-    }
-
-    /**
      * Returns the current number of running tests.
      * Used by HealthHandler for concurrency reporting.
      */

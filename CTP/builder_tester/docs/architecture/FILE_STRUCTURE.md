@@ -49,11 +49,7 @@ tester/
 ├── HealthHandler.java                        # HTTP /health handler
 ├── LogStreamHandler.java                     # HTTP /log/<filename> handler
 ├── HttpResponseWriter.java                   # HTTP response utilities
-├── ExecutionTimeParser.java                  # Parse execution time from output
-├── ClientAbortDetector.java                  # Detect client aborts
 ├── SafeIo.java                               # Safe I/O operations
-├── ApiServer.java                            # HTTP server factory
-└── TesterService.java                        # Tester service interface
 ```
 
 ### Build Cache Management (cache/)
