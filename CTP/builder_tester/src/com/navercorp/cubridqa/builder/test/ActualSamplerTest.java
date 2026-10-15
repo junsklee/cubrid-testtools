@@ -8,7 +8,7 @@ public class ActualSamplerTest {
     public static void main(String[] args) throws Exception {
         System.out.println("=== ActualSampler Test ===\n");
 
-        BuilderConfig config = new BuilderConfig("/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf");
+        BuilderConfig config = new BuilderConfig(System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf"));
         ActualSampler sampler = new ActualSampler(config);
 
         System.out.println("Sampling current utilization...");

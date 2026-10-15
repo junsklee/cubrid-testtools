@@ -63,7 +63,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(2000);
 
             BuilderConfig config = new BuilderConfig(
-                "/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf"
+                System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
             ActualSampler sampler = new ActualSampler(config);
 
@@ -104,7 +104,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(2000);
 
             BuilderConfig config = new BuilderConfig(
-                "/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf"
+                System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
             ActualSampler sampler = new ActualSampler(config);
 
@@ -168,7 +168,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(2000);
 
             BuilderConfig config = new BuilderConfig(
-                "/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf"
+                System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
             ActualSampler sampler = new ActualSampler(config);
 
@@ -236,7 +236,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(2000);
 
             BuilderConfig config = new BuilderConfig(
-                "/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf"
+                System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
             ActualSampler sampler = new ActualSampler(config);
 

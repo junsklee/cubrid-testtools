@@ -30,11 +30,13 @@ public class ActualSampler {
     private static final Logger logger = Logger.getLogger(ActualSampler.class.getName());
     private static final String FORMAT = "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}";
     private static final double BYTES_PER_MB = 1024d * 1024d;
-    private static final long SAMPLE_TIMEOUT_MS = 2000; // 2 second timeout
+    // `docker stats --no-stream` itself takes ~2s (it measures over an interval); the old 2s limit
+    // was never enforced (the output was read to EOF first), and enforced it would fail most rounds
+    private static final long SAMPLE_TIMEOUT_MS = 15_000;
     private final BuilderConfig config;
     private final boolean enabled;
     private final String containerPattern;
-    private boolean dockerAvailable = true;
+    private volatile boolean dockerAvailable = true;
     private long lastWarningTime = 0;
     private static final long WARNING_THROTTLE_MS = 60000; // Warn once per minute
 
@@ -100,8 +102,6 @@ public class ActualSampler {
     }
 
     private void performSampling() {
-        if (!dockerAvailable) return;
-
         try {
             List<String> containers = listRunningTestContainers();
             if (containers.isEmpty()) {
@@ -110,8 +110,38 @@ public class ActualSampler {
                 cachedSnapshot = aggregateContainerMetrics(containers);
             }
             lastSnapshotTime = System.currentTimeMillis();
+            dockerAvailable = true;
         } catch (Exception e) {
+            // Keep sampling: a Docker restart used to disable the sampler (and the circuit breaker)
+            // until the tester restarted. Drop the old snapshot rather than keep acting on it.
+            dockerAvailable = false;
+            cachedSnapshot = UtilizationSnapshot.empty();
             logThrottledWarning("Failed to sample actual utilization: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Runs a docker CLI command with its output in a temp file, so the timeout applies to the whole
+     * run: reading a pipe to EOF first meant a hung `docker stats` froze the sampler (and its last
+     * snapshot) indefinitely.
+     */
+    private List<String> runDocker(List<String> command, String what) throws IOException, InterruptedException {
+        java.io.File out = java.io.File.createTempFile("actual_sampler", ".out");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+            pb.redirectOutput(out);
+            Process process = pb.start();
+            if (!process.waitFor(SAMPLE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                throw new IOException(what + " timed out");
+            }
+            if (process.exitValue() != 0) {
+                throw new IOException(what + " failed with exit code: " + process.exitValue());
+            }
+            return java.nio.file.Files.readAllLines(out.toPath(), java.nio.charset.StandardCharsets.UTF_8);
+        } finally {
+            out.delete();
         }
     }
 
@@ -190,34 +220,12 @@ public class ActualSampler {
     private List<String> listRunningTestContainers() throws IOException, InterruptedException {
         List<String> containers = new ArrayList<>();
 
-        ProcessBuilder pb = new ProcessBuilder(
-            "docker", "ps", "--filter", "name=" + containerPattern,
-            "--format", "{{.Names}}"
-        );
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (!line.isEmpty()) {
-                    containers.add(line);
-                }
+        for (String line : runDocker(java.util.Arrays.asList(
+                "docker", "ps", "--filter", "name=" + containerPattern, "--format", "{{.Names}}"), "docker ps")) {
+            line = line.trim();
+            if (!line.isEmpty()) {
+                containers.add(line);
             }
-        }
-
-        boolean completed = process.waitFor(SAMPLE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-        if (!completed) {
-            process.destroyForcibly();
-            throw new IOException("docker ps command timed out");
-        }
-
-        int exitCode = process.exitValue();
-        if (exitCode != 0) {
-            dockerAvailable = false;
-            throw new IOException("docker ps failed with exit code: " + exitCode);
         }
 
         return containers;
@@ -239,61 +247,45 @@ public class ActualSampler {
         // Track active containers for cleanup
         Set<String> activeContainers = new HashSet<>(containers);
 
-        // Sample all containers in a single docker stats call
+        // Sample all running containers in one call and keep ours: naming them made docker fail
+        // the whole call (no sample at all) when one had exited since `docker ps`.
         List<String> command = new ArrayList<>();
         command.add("docker");
         command.add("stats");
         command.add("--no-stream");
         command.add("--format");
         command.add(FORMAT);
-        command.addAll(containers);
 
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
-
-                // Parse line format: Name|CPU%|MemUsage|NetIO|BlockIO
-                String[] parts = line.split("\\|", 2);
-                if (parts.length < 2) {
-                    continue;
-                }
-
-                String containerName = parts[0].trim();
-                String statsLine = parts[1];
-
-                Sample sample = parseSample(containerName, statsLine);
-                if (sample != null) {
-                    // Aggregate instant metrics
-                    totalCpuPercent += sample.cpuPercent;
-                    totalMemBytes += sample.memUsageBytes;
-
-                    // Calculate I/O rates using delta tracking
-                    IoRates rates = calculateIoRates(containerName, sample);
-                    totalIoReadBytesPerSec += rates.ioReadBytesPerSec;
-                    totalIoWriteBytesPerSec += rates.ioWriteBytesPerSec;
-                    totalNetBytesPerSec += rates.netBytesPerSec;
-                }
+        for (String rawLine : runDocker(command, "docker stats")) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) {
+                continue;
             }
-        }
 
-        boolean completed = process.waitFor(SAMPLE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-        if (!completed) {
-            process.destroyForcibly();
-            throw new IOException("docker stats command timed out");
-        }
+            // Parse line format: Name|CPU%|MemUsage|NetIO|BlockIO
+            String[] parts = line.split("\\|", 2);
+            if (parts.length < 2) {
+                continue;
+            }
 
-        int exitCode = process.exitValue();
-        if (exitCode != 0) {
-            throw new IOException("docker stats failed with exit code: " + exitCode);
+            String containerName = parts[0].trim();
+            if (!activeContainers.contains(containerName)) {
+                continue;
+            }
+            String statsLine = parts[1];
+
+            Sample sample = parseSample(containerName, statsLine);
+            if (sample != null) {
+                // Aggregate instant metrics
+                totalCpuPercent += sample.cpuPercent;
+                totalMemBytes += sample.memUsageBytes;
+
+                // Calculate I/O rates using delta tracking
+                IoRates rates = calculateIoRates(containerName, sample);
+                totalIoReadBytesPerSec += rates.ioReadBytesPerSec;
+                totalIoWriteBytesPerSec += rates.ioWriteBytesPerSec;
+                totalNetBytesPerSec += rates.netBytesPerSec;
+            }
         }
 
         // Cleanup stale cache entries

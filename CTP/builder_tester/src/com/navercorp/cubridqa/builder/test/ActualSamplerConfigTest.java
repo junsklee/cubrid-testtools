@@ -6,7 +6,7 @@ public class ActualSamplerConfigTest {
     public static void main(String[] args) throws Exception {
         System.out.println("=== ActualSampler Config Test ===\n");
 
-        BuilderConfig config = new BuilderConfig("/home/qahome/cubrid-testtools/CTP/builder_tester/conf/tester.conf");
+        BuilderConfig config = new BuilderConfig(System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf"));
 
         // Test reflection access to properties
         try {
