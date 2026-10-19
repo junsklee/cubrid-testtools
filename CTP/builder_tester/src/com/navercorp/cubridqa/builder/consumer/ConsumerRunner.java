@@ -329,7 +329,6 @@ public final class ConsumerRunner {
         conf.setProperty("shell_tc_dir", defaultShellTcDir(regression, userHome));
         conf.setProperty("shell_tc_branch", "develop");
         conf.setProperty("shell_tc_preferred_remote", "upstream");
-        conf.setProperty("shell_tc_sync_mode", "per_request");
         conf.setProperty("work_dir", home.resolve("work").toString());
         conf.setProperty("cubrid_src_dir", home.resolve("unused_cubrid_src").toString());
         String cubrid = System.getenv("CUBRID");
@@ -358,6 +357,10 @@ public final class ConsumerRunner {
         conf.setProperty("tester_port", String.valueOf(testerPort));
         // Only this runner talks to the tester: /test runs any script it is given
         conf.setProperty("tester_bind_address", "127.0.0.1");
+        // The testcase checkout belongs to regression: fetch the requested commit into it and run
+        // from a per-request worktree, but never check out, clean or reset its working tree
+        // (per_request mode fast-forwards the base checkout to the requested branch)
+        conf.setProperty("shell_tc_sync_mode", "disabled");
         conf.setProperty("execution_mode", "vm");
         return conf;
     }
