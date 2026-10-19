@@ -210,6 +210,10 @@ public class Tester {
             actualSampler
         );
         if (config.isVmMode()) {
+            if (config.isVmGitCredentialsFromCtp()) {
+                com.navercorp.cubridqa.builder.git.GitCredentials.configureFromCtp(
+                    VmShellExecutor.resolveCtpHome(config), Paths.get(config.getWorkDir(), ".git_helper"));
+            }
             testOrchestrator.setVmShellExecutor(new VmShellExecutor(config, buildCache, shellTcSync));
             testOrchestrator.setVmSqlExecutor(new VmSqlExecutor(config, buildCache, sqlTcSync));
             logger.info("Execution mode: vm (one case at a time, shell or SQL, CUBRID=" + config.getVmCubridHome()

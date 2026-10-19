@@ -620,6 +620,7 @@ public class TcRepoSync {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(basePb.directory());
         pb.redirectErrorStream(true);
+        GitCredentials.apply(pb);
         Process process = pb.start();
         StringBuilder output = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
@@ -734,6 +735,7 @@ public class TcRepoSync {
         );
         lp.directory(pb.directory());
         lp.redirectErrorStream(true);
+        GitCredentials.apply(lp);
         Process p = lp.start();
         boolean found = false;
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {

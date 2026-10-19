@@ -50,6 +50,30 @@
         // adds or removes one
         let vmTesters = [];
         let vmTestersTouched = false;
+        // Configured VM testers left out of the default list because they did not answer
+        let vmTestersDown = [];
+
+        // A VM tester counts as reachable when its /health answers healthy in vm mode
+        async function isReachableVmTester(address) {
+            try {
+                const response = await fetch(`/api/tester/health?ip=${encodeURIComponent(address)}`);
+                if (!response.ok) return false;
+                const data = await response.json();
+                return !data.error && data.status === 'healthy' && data.executionMode === 'vm';
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // Default VM tester list: the Builder's vm_tester_nodes that are up, in their configured order
+        async function loadDefaultVmTesters(nodes) {
+            const up = await Promise.all(nodes.map(isReachableVmTester));
+            if (vmTestersTouched) return; // the user edited the list meanwhile
+            vmTesters = nodes.filter((_, i) => up[i]);
+            vmTestersDown = nodes.filter((_, i) => !up[i]);
+            renderVmTesters();
+            updateExecutionModeState();
+        }
 
         function getSelectedExecutionMode() {
             const checked = document.querySelector('input[name="executionMode"]:checked');
@@ -79,10 +103,15 @@
             if (vmTesterSection) vmTesterSection.style.display = mode === 'vm' ? '' : 'none';
             if (note) {
                 if (mode === 'vm') {
-                    note.textContent = vmTesters.length > 0
+                    const down = vmTestersDown.length > 0 && !vmTestersTouched
+                        ? ' Not reachable, so not added: ' + vmTestersDown.join(', ') + '.'
+                        : '';
+                    note.textContent = (vmTesters.length > 0
                         ? (sql ? 'SQL' : 'Shell') + ' cases run one at a time on each VM tester below, in parallel across them'
                             + (sql ? ', with the VM\'s own CTP SQL tool and SQL conf.' : '.')
-                        : 'Add at least one VM tester below (none are configured on the Builder in vm_tester_nodes).';
+                        : (vmTesterNodes.length > 0
+                            ? 'Add at least one VM tester below.'
+                            : 'Add at least one VM tester below (none are configured on the Builder in vm_tester_nodes).')) + down;
                 } else if (mode === 'consumer') {
                     note.textContent = (sql ? 'SQL' : 'Shell') + ' cases run on idle QAHome regression VMs that take the request from '
                         + consumerQueue.queue + ', one case at a time per VM, on up to ' + consumerQueue.maxParallel
@@ -958,8 +987,7 @@
                 builderCommitBuildMode = data.commitBuildMode || null;
                 vmTesterNodes = Array.isArray(data.vmTesterNodes) ? data.vmTesterNodes : [];
                 if (!vmTestersTouched) {
-                    vmTesters = vmTesterNodes.slice();
-                    renderVmTesters();
+                    loadDefaultVmTesters(vmTesterNodes.slice());
                 }
                 consumerQueue = data.consumerQueue && typeof data.consumerQueue === 'object' ? data.consumerQueue : null;
                 updateExecutionModeState();

@@ -10,6 +10,7 @@ public class ProcessIO {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(basePb.directory());
         pb.redirectErrorStream(true);
+        com.navercorp.cubridqa.builder.git.GitCredentials.apply(pb);
         Process p = pb.start();
         drain(p.getInputStream());
         p.waitFor();

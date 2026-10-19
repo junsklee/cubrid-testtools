@@ -899,6 +899,14 @@ public class BuilderConfig {
         return vmProperty("vm_sql_default_conf", "sql_local.conf");
     }
 
+    /**
+     * VM mode: fetch the testcase repositories with git_user/git_pwd from the VM's
+     * CTP/conf/common.conf, as CTP's run_git_update does (the private repo needs them).
+     */
+    public boolean isVmGitCredentialsFromCtp() {
+        return Boolean.parseBoolean(vmProperty("vm_git_credentials_from_ctp", "true"));
+    }
+
     /** VM mode: when to archive the case directory after a run: fail (default), always or never. */
     public String getVmKeepArtifacts() {
         return vmProperty("vm_keep_artifacts", "fail").toLowerCase(Locale.ENGLISH);

@@ -52,7 +52,10 @@ import com.navercorp.cubridqa.builder.tester.SafeIo;
  * <p>Usage: ConsumerRunner &lt;builder url&gt; &lt;request id&gt; &lt;slot&gt; &lt;runner home&gt; &lt;CTP home&gt;
  */
 public final class ConsumerRunner {
-    /** Remote added to the testcase checkout for the run, with the VM's git credentials. */
+    /**
+     * Remote with the VM's git credentials that earlier runners added to the testcase checkout; removed
+     * if found. The tester now passes the credentials through GIT_ASKPASS (GitCredentials).
+     */
     static final String AUTH_REMOTE = "bt_consumer_auth";
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int CALL_TIMEOUT_MS = 120_000;
@@ -117,9 +120,6 @@ public final class ConsumerRunner {
         Tester tester = null;
         int cases = 0;
         try {
-            if (addAuthRemote(shellTcDir) && !overrides.has("shell_tc_preferred_remote")) {
-                testerConf.setProperty("shell_tc_preferred_remote", AUTH_REMOTE);
-            }
             Path confFile = home.resolve("conf").resolve("tester_consumer.conf");
             try (OutputStream out = Files.newOutputStream(confFile)) {
                 testerConf.store(out, "Written by ConsumerRunner for request " + requestId + "; replaced on every run");
@@ -154,7 +154,7 @@ public final class ConsumerRunner {
                 }
                 tester.stop();
             }
-            // Also removes one left by an earlier runner that was killed
+            // A remote with credentials that runners before GitCredentials added (and a killed one left)
             git(shellTcDir, "remote", "remove", AUTH_REMOTE);
             git(shellTcDir, "worktree", "prune");
             // The request's worktrees and attempt directories; only under this runner's home, in
@@ -421,47 +421,6 @@ public final class ConsumerRunner {
             }
         }
         return nonEmpty(port, "22");
-    }
-
-    /**
-     * Adds a remote with the VM's git credentials (CTP/conf/common.conf git_user and git_pwd), as
-     * CTP's run_git_update does for regression: the testcase repo is private and its origin URL
-     * usually carries none. Returns false when there is nothing to add.
-     */
-    boolean addAuthRemote(Path repo) {
-        try {
-            File commonConf = ctpHome.resolve("conf").resolve("common.conf").toFile();
-            if (!commonConf.isFile() || !repo.resolve(".git").toFile().exists()) {
-                return false;
-            }
-            Properties common = new Properties();
-            try (Reader in = new InputStreamReader(new FileInputStream(commonConf), StandardCharsets.UTF_8)) {
-                common.load(in);
-            }
-            String user = common.getProperty("git_user", "").trim();
-            String password = common.getProperty("git_pwd", "").trim();
-            String origin = git(repo, "remote", "get-url", "origin").trim();
-            int at = origin.indexOf("github.com");
-            if (user.isEmpty() || password.isEmpty() || !origin.startsWith("https://") || at < 0) {
-                return false;
-            }
-            String url = "https://" + URLEncoder.encode(user, "UTF-8") + ":" + URLEncoder.encode(password, "UTF-8") + "@"
-                + origin.substring(at);
-            git(repo, "remote", "remove", AUTH_REMOTE);
-            // Written to .git/config directly, as `git remote add` would, so the password never
-            // appears on a command line (ps). Removed again when the runner ends.
-            File gitConfig = repo.resolve(".git").resolve("config").toFile();
-            if (!gitConfig.isFile() || url.contains("\"") || url.contains("\n")) {
-                return false;
-            }
-            String section = "[remote \"" + AUTH_REMOTE + "\"]\n\turl = " + url + "\n\tfetch = +refs/heads/*:refs/remotes/"
-                + AUTH_REMOTE + "/*\n";
-            Files.write(gitConfig.toPath(), section.getBytes(StandardCharsets.UTF_8), java.nio.file.StandardOpenOption.APPEND);
-            return true;
-        } catch (Exception e) {
-            say("could not add the authenticated testcase remote: " + e.getMessage());
-            return false;
-        }
     }
 
     private static String git(Path repo, String... args) {

@@ -362,7 +362,22 @@ public class Builder {
                             throw new IllegalArgumentException("VM execution requested, but no VM testers are configured "
                                 + "(vm_tester_nodes in builder.conf) and the request names none in workerIps");
                         }
-                        request.put("workerIps", new JSONArray(vmTesters));
+                        // The configured VM testers that are up: a VM may be down (rebooted, taken
+                        // for other work) without failing requests the others can run.
+                        List<String> reachable = new ArrayList<>();
+                        for (String node : vmTesters) {
+                            try {
+                                validateTesterReachability(node, "vm");
+                                reachable.add(node);
+                            } catch (IllegalArgumentException down) {
+                                logger.warning("Skipping configured VM tester " + node + ": " + down.getMessage());
+                            }
+                        }
+                        if (reachable.isEmpty()) {
+                            throw new IllegalArgumentException("VM execution requested, but none of the configured VM testers "
+                                + vmTesters + " is reachable as a VM tester");
+                        }
+                        request.put("workerIps", new JSONArray(reachable));
                     }
                 }
 

@@ -44,7 +44,10 @@ The VM is a regular QA regression VM (or one set up the same way):
 2. `~/CTP`: a cubrid-testtools CTP checkout (only `shell/init_path`, `bin` and
    `common/script` are used; nothing needs building).
 3. `~/cubrid-testcases-private-ex`: a clone with an `upstream` (or `origin`) remote the
-   tester can fetch requested commits from.
+   tester can fetch requested commits from. The repository is private: the tester uses
+   `git_user`/`git_pwd` from `~/CTP/conf/common.conf` like regression does. On a VM shared with
+   other work, set `shell_tc_sync_mode=disabled` (and `sql_tc_sync_mode`): requested commits are
+   still fetched and run from per-request worktrees, but the checkout itself is never moved.
 4. Any regression assets the cases expect under `$HOME` (`~/dblink_mysql`, `~/dblink_mariadb`,
    `~/dblink_oracle`, `~/cubrid-testcases` for the cases that call `ctp.sh`, ...).
 5. Java 8+ and this builder_tester directory (`lib/` + `build/` or `lib/builder-tester.jar`).
@@ -57,7 +60,9 @@ cp conf/tester_vm.conf conf/tester.conf   # or pass the file directly
 curl http://<vm>:8090/health              # "executionMode":"vm", concurrency max 1
 ```
 
-and add `<vm>:8090` to `vm_tester_nodes` in the Builder's `builder.conf`. Each VM
+and add `<vm>:8090` to `vm_tester_nodes` in the Builder's `builder.conf`. A configured VM tester
+that is down is skipped: VM requests that name no testers run on the reachable ones, and the
+dashboard's default VM tester list holds only those that answer. Each VM
 advertises one slot, so the builder sends it one case at a time; add more VMs to run more
 cases in parallel. In the dashboard, choose Advanced Configuration → Execution Mode → VM.
 
@@ -82,6 +87,7 @@ See `conf/tester_vm.conf`. VM-specific keys:
 | `vm_keep_artifacts` | `fail` | Collect the case's files and `$CUBRID/log` after the run: `fail`, `always`, `never` |
 | `vm_sql_conf_rules` | `10.1.*,10.2.*=sql_dont_reuse_heap.conf` | SQL cases: `CTP/conf` file per build version (`patterns=conf;...`, job.conf `acceptversions` globs), as job.conf's `MKEY_CONFIG` |
 | `vm_sql_default_conf` | `sql_local.conf` | SQL cases: the conf when no rule matches (`run_sql.sh` without `MKEY_CONFIG`) |
+| `vm_git_credentials_from_ctp` | `true` | Fetch the testcase repositories with `git_user`/`git_pwd` from `vm_ctp_home`'s `conf/common.conf`, as CTP's `run_git_update` does (the private repo needs them). They reach git through `GIT_ASKPASS`, never a command line or `.git/config`. |
 
 `test_read_timeout_minutes` (Builder -> Tester) must outlast one case plus an install.
 

@@ -386,7 +386,7 @@ public class VmShellExecutor implements ExecutorStrategy {
         return null;
     }
 
-    static Path resolveCtpHome(Config config) {
+    public static Path resolveCtpHome(Config config) {
         String configured = config.getVmCtpHome();
         if (configured != null && !configured.isEmpty()) {
             return Paths.get(configured).toAbsolutePath().normalize();
