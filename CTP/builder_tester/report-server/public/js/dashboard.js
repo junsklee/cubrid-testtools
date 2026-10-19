@@ -42,36 +42,48 @@
             updateBaselineDisplay();
         }
 
-        // VM testers configured on the Builder (vm_tester_nodes), from /api/builder/health
+        // VM testers configured on the Builder (vm_tester_nodes), and its QAHome consumer queue
+        // (consumerQueue: {enabled, queue, maxParallel}), from /api/builder/health
         let vmTesterNodes = [];
+        let consumerQueue = null;
 
         function getSelectedExecutionMode() {
-            const vm = document.getElementById('executionModeVm');
-            return (vm && vm.checked) ? 'vm' : 'docker';
+            const checked = document.querySelector('input[name="executionMode"]:checked');
+            return checked ? checked.value : 'docker';
         }
 
-        // VM execution runs shell tests on the Builder's VM testers: unavailable for SQL, and the
-        // worker list does not apply while it is selected.
+        // VM and consumer execution run shell tests on VMs: unavailable for SQL, and the worker
+        // list does not apply while either is selected. Consumer execution also needs the
+        // Builder's consumer queue.
         function updateExecutionModeState() {
             const dockerRadio = document.getElementById('executionModeDocker');
             const vmRadio = document.getElementById('executionModeVm');
+            const consumerRadio = document.getElementById('executionModeConsumer');
             const note = document.getElementById('executionModeNote');
             if (!dockerRadio || !vmRadio) return;
             const sql = getSelectedTestType() === 'sql';
+            const consumerEnabled = !!(consumerQueue && consumerQueue.enabled);
             vmRadio.disabled = sql;
-            if (sql && vmRadio.checked) {
+            if (consumerRadio) consumerRadio.disabled = sql || !consumerEnabled;
+            if ((vmRadio.checked && vmRadio.disabled) || (consumerRadio && consumerRadio.checked && consumerRadio.disabled)) {
                 dockerRadio.checked = true;
             }
-            const vm = vmRadio.checked;
+            const mode = getSelectedExecutionMode();
             const workerSection = document.getElementById('workerSection');
-            if (workerSection) workerSection.style.display = vm ? 'none' : '';
+            if (workerSection) workerSection.style.display = mode === 'docker' ? '' : 'none';
             if (note) {
-                if (vm) {
+                if (mode === 'vm') {
                     note.textContent = vmTesterNodes.length > 0
                         ? 'Shell cases run one at a time on VM tester(s): ' + vmTesterNodes.join(', ')
                         : 'No VM testers are configured on the Builder (vm_tester_nodes); the request will be rejected.';
+                } else if (mode === 'consumer') {
+                    note.textContent = 'Shell cases run on idle QAHome regression VMs that take the request from '
+                        + consumerQueue.queue + ', one case at a time per VM, on up to ' + consumerQueue.maxParallel
+                        + ' VMs. Cases wait while the VMs run regression.';
                 } else if (sql) {
-                    note.textContent = 'Cases run in Docker containers on the worker nodes. VM execution supports shell tests only.';
+                    note.textContent = 'Cases run in Docker containers on the worker nodes. VM and consumer execution support shell tests only.';
+                } else if (consumerRadio && !consumerEnabled) {
+                    note.textContent = 'Cases run in Docker containers on the worker nodes. QA consumer VMs: not configured on the Builder (consumer_activemq_url).';
                 } else {
                     note.textContent = 'Cases run in Docker containers on the worker nodes.';
                 }
@@ -940,6 +952,7 @@
                 const data = await response.json();
                 builderCommitBuildMode = data.commitBuildMode || null;
                 vmTesterNodes = Array.isArray(data.vmTesterNodes) ? data.vmTesterNodes : [];
+                consumerQueue = data.consumerQueue && typeof data.consumerQueue === 'object' ? data.consumerQueue : null;
                 updateExecutionModeState();
                 if (!baselineModeTouched && builderCommitBuildMode) {
                     const checkoutRadio = document.getElementById('buildModeCheckout');
@@ -1516,9 +1529,9 @@
                     payload[TC_REPOS[getSelectedTestType()].payloadKey] = manualTcBranch;
                 }
                 const executionMode = getSelectedExecutionMode();
-                if (executionMode === 'vm') {
-                    // The Builder sends VM requests to its configured VM testers
-                    payload.executionMode = 'vm';
+                if (executionMode === 'vm' || executionMode === 'consumer') {
+                    // The Builder picks the VMs: its VM testers, or the consumers of its queue
+                    payload.executionMode = executionMode;
                 } else if (!buildOnly) {
                     payload.workerIps = workers;
                 }
@@ -2456,7 +2469,7 @@
                     const commit = report.firstCommit
                         ? '<code style="color: var(--text-secondary);">' + escapeHtml(report.firstCommit) + '</code>'
                         : '';
-                    const modeLabels = { docker: 'Docker', vm: 'VM', direct: 'Direct', mixed: 'Docker + VM' };
+                    const modeLabels = { docker: 'Docker', vm: 'VM', consumer: 'QA consumer VMs', direct: 'Direct', mixed: 'Docker + VM' };
                     const modeLabel = modeLabels[(report.executionMode || '').toLowerCase()] || '';
                     const bits = [when + ' ' + time];
                     if (typeLabel) bits.push(typeLabel);

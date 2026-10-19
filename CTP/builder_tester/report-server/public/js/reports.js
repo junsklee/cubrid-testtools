@@ -434,12 +434,14 @@
         const styles = {
             docker: 'background: var(--row-hover); color: var(--muted); border: 1px solid var(--line);',
             vm: 'background: transparent; color: var(--primary); border: 1px solid var(--primary);',
+            consumer: 'background: transparent; color: var(--primary); border: 1px solid var(--primary);',
             direct: 'background: var(--row-hover); color: var(--muted); border: 1px solid var(--line);',
             mixed: 'background: transparent; color: var(--primary); border: 1px dashed var(--primary);'
         };
         const titles = {
             docker: 'Tests ran in Docker containers',
             vm: 'Tests ran on QA VMs (regression-equivalent, one case at a time)',
+            consumer: 'Tests ran on idle QAHome regression VMs through the consumer queue (regression-equivalent, one case at a time per VM)',
             direct: 'Tests ran directly on the tester host',
             mixed: 'Tests ran on both Docker and VM testers'
         };

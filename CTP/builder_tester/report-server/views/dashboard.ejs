@@ -298,7 +298,7 @@
                         </select>
                     </div>
 
-                    <!-- Execution mode decides whether the worker list applies (Docker) or the VM testers do -->
+                    <!-- Execution mode decides whether the worker list applies (Docker) or VMs run the cases -->
                     <div class="form-group">
                         <label class="form-label">Execution Mode</label>
                         <div class="baseline-info" id="executionModeInfo">
@@ -315,6 +315,13 @@
                                     <input type="radio" id="executionModeVm" name="executionMode" class="baseline-radio" value="vm">
                                     <span class="baseline-label">VM</span>
                                     <span class="info-icon" title="Runs shell cases one at a time on a QA VM tester with its own CTP, the way QAHome regression does: process reset, conf restore, core and fatal-error checks.&#10;Uses the VM testers configured on the Builder (vm_tester_nodes). Shell tests only."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                                </span>
+                            </label>
+                            <label class="baseline-option" for="executionModeConsumer">
+                                <span class="baseline-choice">
+                                    <input type="radio" id="executionModeConsumer" name="executionMode" class="baseline-radio" value="consumer">
+                                    <span class="baseline-label">QA consumer VMs</span>
+                                    <span class="info-icon" title="Runs shell cases like VM mode, on QAHome regression VMs while they are idle: the request waits in the Builder-Tester queue and each VM that takes it runs cases one at a time until none are left.&#10;Cases may wait while the VMs run regression. Shell tests only."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                                 </span>
                             </label>
                             </div>
