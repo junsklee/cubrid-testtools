@@ -215,6 +215,18 @@
             margin-bottom: 1.5rem;
         }
 
+        /* Short fields side by side (Timeout, Min Runs, Max Runs); wraps on narrow screens */
+        .form-row-inline {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .form-row-inline > .form-group {
+            flex: 1 1 8rem;
+            min-width: 0;
+        }
+
         .branch-config-row {
             margin-bottom: 1rem;
         }

@@ -42,10 +42,53 @@
             updateBaselineDisplay();
         }
 
+        // VM testers configured on the Builder (vm_tester_nodes), from /api/builder/health
+        let vmTesterNodes = [];
+
+        function getSelectedExecutionMode() {
+            const vm = document.getElementById('executionModeVm');
+            return (vm && vm.checked) ? 'vm' : 'docker';
+        }
+
+        // VM execution runs shell tests on the Builder's VM testers: unavailable for SQL, and the
+        // worker list does not apply while it is selected.
+        function updateExecutionModeState() {
+            const dockerRadio = document.getElementById('executionModeDocker');
+            const vmRadio = document.getElementById('executionModeVm');
+            const note = document.getElementById('executionModeNote');
+            if (!dockerRadio || !vmRadio) return;
+            const sql = getSelectedTestType() === 'sql';
+            vmRadio.disabled = sql;
+            if (sql && vmRadio.checked) {
+                dockerRadio.checked = true;
+            }
+            const vm = vmRadio.checked;
+            const workerSection = document.getElementById('workerSection');
+            if (workerSection) workerSection.style.display = vm ? 'none' : '';
+            if (note) {
+                if (vm) {
+                    note.textContent = vmTesterNodes.length > 0
+                        ? 'Shell cases run one at a time on VM tester(s): ' + vmTesterNodes.join(', ')
+                        : 'No VM testers are configured on the Builder (vm_tester_nodes); the request will be rejected.';
+                } else if (sql) {
+                    note.textContent = 'Cases run in Docker containers on the worker nodes. VM execution supports shell tests only.';
+                } else {
+                    note.textContent = 'Cases run in Docker containers on the worker nodes.';
+                }
+            }
+        }
+
+        function onExecutionModeRadioChange(event) {
+            const target = event && event.target;
+            if (!target || target.name !== 'executionMode') return;
+            updateExecutionModeState();
+        }
+
         // Bind at parse-time (not inside DOMContentLoaded) so it still works even if some init code throws.
         // Capture phase makes it resilient across browsers and DOM structures.
         document.addEventListener('change', onBuildModeRadioChange, true);
         document.addEventListener('input', onBuildModeRadioChange, true);
+        document.addEventListener('change', onExecutionModeRadioChange, true);
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -89,6 +132,10 @@
             tcBranchByTestType.sql = DEFAULT_TC_BRANCH;
             tcBranchInputTestType = DEFAULT_TEST_TYPE;
             applyCustomFieldsForTestType();
+            // Docker is the default; a reload must not resume a previous VM selection
+            const dockerRadio = document.getElementById('executionModeDocker');
+            if (dockerRadio) dockerRadio.checked = true;
+            updateExecutionModeState();
         }
 
         // Latest queue snapshot (load-first: refreshed on page load, manual refresh, and background polling)
@@ -434,6 +481,7 @@
             applyTestCasesDisabledState();
             applyTcBranchSectionState();
             applyCustomFieldsForTestType();
+            updateExecutionModeState();
         }
 
         // In Custom Script mode, show shell vs SQL custom fields per selected test type.
@@ -891,6 +939,8 @@
                 if (!response.ok) return;
                 const data = await response.json();
                 builderCommitBuildMode = data.commitBuildMode || null;
+                vmTesterNodes = Array.isArray(data.vmTesterNodes) ? data.vmTesterNodes : [];
+                updateExecutionModeState();
                 if (!baselineModeTouched && builderCommitBuildMode) {
                     const checkoutRadio = document.getElementById('buildModeCheckout');
                     const baselineRadio = document.getElementById('buildModeBaseline');
@@ -1465,7 +1515,11 @@
                 if (manualTcBranch) {
                     payload[TC_REPOS[getSelectedTestType()].payloadKey] = manualTcBranch;
                 }
-                if (!buildOnly) {
+                const executionMode = getSelectedExecutionMode();
+                if (executionMode === 'vm') {
+                    // The Builder sends VM requests to its configured VM testers
+                    payload.executionMode = 'vm';
+                } else if (!buildOnly) {
                     payload.workerIps = workers;
                 }
                 if (prNumberPayload) {

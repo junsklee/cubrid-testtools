@@ -57,8 +57,9 @@ cp conf/tester_vm.conf conf/tester.conf   # or pass the file directly
 curl http://<vm>:8090/health              # "executionMode":"vm", concurrency max 1
 ```
 
-and add `<vm>:8090` to the request's `workerIps`. Each VM advertises one slot, so the
-builder sends it one case at a time; add more VMs to run more cases in parallel.
+and add `<vm>:8090` to `vm_tester_nodes` in the Builder's `builder.conf`. Each VM
+advertises one slot, so the builder sends it one case at a time; add more VMs to run more
+cases in parallel. In the dashboard, choose Advanced Configuration → Execution Mode → VM.
 
 The VM must be dedicated to Builder-Tester while the tester runs: each case kills the
 user's CUBRID and helper processes and replaces `~/CUBRID` and `~/.CUBRID_SHELL_FM`
@@ -99,17 +100,19 @@ SQL requests (`testType=sql`) are not supported in VM mode; send them to a Docke
 
 ## Client integration (differences from Docker mode)
 
-The Builder API, request payload, callback and `results.json` schema are unchanged. A
-client that already drives Docker mode needs only the following.
+The Builder API, callback and `results.json` schema are unchanged. A client that already
+drives Docker mode needs only the following.
 
-**Choosing VM nodes.** `GET http://<node>:8090/health` returns `"executionMode": "vm"` and
-`concurrency.max == 1` on a VM tester (`"docker"` otherwise). A request runs only on the
-nodes in its `workerIps`, so list VM nodes only (`["10.0.0.11:8090", "10.0.0.12:8090"]`)
-to get VM-mode results; mixing Docker and VM nodes in one request lets the scheduler place
-cases on either.
+**Choosing VM nodes.** Send `"executionMode": "vm"`. Without `workerIps` the request runs
+on the Builder's `vm_tester_nodes` (`GET /health` on the Builder lists them as
+`vmTesterNodes`); with `workerIps`, on those nodes. The Builder checks each node's
+`/health` (`"executionMode": "vm"`, `concurrency.max == 1` on a VM tester) and rejects the
+request with HTTP 400 if a node runs the other mode: Docker requests (`executionMode`
+absent or `"docker"`) cannot use VM testers, and VM requests cannot use Docker testers.
 
 **Request fields.**
-- `testType`: `shell` (default). `sql` cases come back `environment_error`.
+- `executionMode`: `"vm"` (see above); `"docker"` is the default.
+- `testType`: `shell` (default). A VM request with `"testType": "sql"` is rejected.
 - `tests`, `commits`, `buildType`, `shellTcBranch`, `shellTcCommit`, `runMode`, `minRuns`,
   `maxRuns`, `customShellScript`, `customAttachments`, `customScriptTestPath`: as in Docker
   mode. Each attempt starts from the case directory restored to `shellTcCommit`, then the

@@ -1475,6 +1475,17 @@ public class BuilderConfig {
         return Math.max(60L, Long.parseLong(properties.getProperty("smart_scheduling_stall_timeout_minutes", "10").trim()) * 60L);
     }
 
+    /** Testers running execution_mode=vm that VM-mode requests go to when they name no workers. */
+    public List<String> getVmTesterNodes() {
+        List<String> nodes = new ArrayList<>();
+        for (String node : properties.getProperty("vm_tester_nodes", "").split(",")) {
+            if (!node.trim().isEmpty()) {
+                nodes.add(node.trim());
+            }
+        }
+        return nodes;
+    }
+
     public long getSchedulingNodeStaleThresholdSeconds() {
         return Long.parseLong(properties.getProperty(SCHEDULING_NODE_STALE_THRESHOLD_SECONDS, "30"));
     }

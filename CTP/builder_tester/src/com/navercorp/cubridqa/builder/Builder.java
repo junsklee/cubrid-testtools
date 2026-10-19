@@ -281,6 +281,28 @@ public class Builder {
                 // Add request ID to the request object
                 request.put("requestId", requestId);
 
+                // Execution mode: "docker" (default) runs cases in containers on the worker nodes;
+                // "vm" runs shell cases one at a time on QA VM testers (execution_mode=vm), which
+                // the request may name in workerIps or which come from vm_tester_nodes.
+                String executionMode = request.optString("executionMode", "docker").trim().toLowerCase(Locale.ROOT);
+                if (!"docker".equals(executionMode) && !"vm".equals(executionMode)) {
+                    throw new IllegalArgumentException("Invalid executionMode '" + executionMode + "': expected docker or vm");
+                }
+                request.put("executionMode", executionMode);
+                if ("vm".equals(executionMode) && !request.optBoolean("buildOnly", false)) {
+                    if ("sql".equals(request.optString("testType", "shell"))) {
+                        throw new IllegalArgumentException("VM execution runs shell tests only");
+                    }
+                    if (!request.has("workerIps") || request.getJSONArray("workerIps").length() == 0) {
+                        List<String> vmTesters = config.getVmTesterNodes();
+                        if (vmTesters.isEmpty()) {
+                            throw new IllegalArgumentException("VM execution requested, but no VM testers are configured "
+                                + "(vm_tester_nodes in builder.conf) and the request names none in workerIps");
+                        }
+                        request.put("workerIps", new JSONArray(vmTesters));
+                    }
+                }
+
                 // Validate request
                 validateRequest(request);
 
@@ -314,7 +336,7 @@ public class Builder {
                 // Check tester reachability for all worker IPs
                 if (!buildOnly) {
                     for (int i = 0; i < workerIps.length(); i++) {
-                        validateTesterReachability(workerIps.getString(i));
+                        validateTesterReachability(workerIps.getString(i), executionMode);
                     }
                 }
                 
@@ -522,7 +544,8 @@ public class Builder {
                     .put("maxConcurrentBuilds", MAX_CONCURRENT_REQUESTS)
                     .put("workDir", config.getWorkDir())
                     .put("dockerEnabled", config.useDocker())
-                    .put("commitBuildMode", config.getCommitBuildMode());
+                    .put("commitBuildMode", config.getCommitBuildMode())
+                    .put("vmTesterNodes", new JSONArray(config.getVmTesterNodes()));
                 
                 // If requestId provided, check its position in queue
                 if (requestId != null) {
@@ -1158,7 +1181,11 @@ public class Builder {
         }
     }
     
-    private void validateTesterReachability(String workerIp) throws Exception {
+    /**
+     * Checks that the tester answers /health and runs in the requested execution mode: a Docker
+     * run sent to a VM tester (or the reverse) would run in the wrong environment.
+     */
+    private void validateTesterReachability(String workerIp, String executionMode) throws Exception {
         // Parse host and port from workerIp (supports "host:port" format)
         String host = workerIp;
         int port = config.getTesterPort();
@@ -1173,20 +1200,45 @@ public class Builder {
             }
         }
         
-        logger.info("Checking tester reachability at " + host + ":" + port);
-        
+        logger.info("Checking tester at " + host + ":" + port + " (execution mode " + executionMode + ")");
+
+        String testerMode;
         try {
-            try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(host, port), 5000);
-                logger.info("Tester connectivity test passed");
-                return;
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                new java.net.URL("http://" + host + ":" + port + "/health").openConnection();
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(10000);
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                throw new IOException("/health returned HTTP " + code);
             }
+            String body;
+            try (java.io.InputStream in = conn.getInputStream()) {
+                java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+                byte[] chunk = new byte[8192];
+                int n;
+                while ((n = in.read(chunk)) > 0) {
+                    buf.write(chunk, 0, n);
+                }
+                body = new String(buf.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            testerMode = new JSONObject(body).optString("executionMode", "docker");
         } catch (Exception e) {
             String errorMsg = "Tester at " + host + ":" + port + 
                             " is not reachable: " + e.getMessage();
             logger.severe(errorMsg);
             throw new IllegalArgumentException(errorMsg, e);
         }
+
+        boolean vmTester = "vm".equalsIgnoreCase(testerMode);
+        if ("vm".equals(executionMode) && !vmTester) {
+            throw new IllegalArgumentException("Tester at " + host + ":" + port + " runs in " + testerMode
+                + " mode, not vm; choose a VM tester or Docker execution");
+        }
+        if (!"vm".equals(executionMode) && vmTester) {
+            throw new IllegalArgumentException("Tester at " + host + ":" + port + " is a VM tester; select VM execution to use it");
+        }
+        logger.info("Tester at " + host + ":" + port + " is reachable (" + testerMode + " mode)");
     }
     
     private String readRequestBody(HttpExchange exchange) throws IOException {
