@@ -34,6 +34,9 @@ find "$PROJECT_ROOT/src" -name "*.class" -type f -delete 2>/dev/null || true
 
 # Set classpath
 CLASSPATH="$PROJECT_ROOT/lib/json.jar:$PROJECT_ROOT/lib/jsch-0.1.55.jar:$STAGE_DIR"
+# JMS/ActiveMQ API for consumer execution (consumer/ConsumerQueue.java), from the enclosing CTP
+CTP_ROOT="$( cd "$PROJECT_ROOT/.." && pwd )"
+CLASSPATH="$CLASSPATH:$CTP_ROOT/common/sched/lib/activemq-client-5.8.0.jar:$CTP_ROOT/common/sched/lib/geronimo-jms_1.1_spec-1.1.1.jar"
 
 # Source directory
 SRC_DIR="$PROJECT_ROOT/src"

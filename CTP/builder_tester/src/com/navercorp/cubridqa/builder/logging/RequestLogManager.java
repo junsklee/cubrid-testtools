@@ -65,9 +65,21 @@ public class RequestLogManager {
         
         // Console handler
         ConsoleHandler consoleHandler = new ConsoleHandler();
-        consoleHandler.setLevel(Level.INFO);
+        consoleHandler.setLevel(consoleLevel());
         consoleHandler.setFormatter(new SimpleFormatter());
         systemLogger.addHandler(consoleHandler);
+    }
+
+    /**
+     * Level of the console copies of the logs: INFO, or the builder_tester.console_level system
+     * property (the consumer runner keeps the QA consumer's output to warnings).
+     */
+    private static Level consoleLevel() {
+        try {
+            return Level.parse(System.getProperty("builder_tester.console_level", "INFO"));
+        } catch (IllegalArgumentException e) {
+            return Level.INFO;
+        }
     }
     
     /**
@@ -102,7 +114,7 @@ public class RequestLogManager {
         // Console handler for debugging
         ConsoleHandler consoleHandler = new ConsoleHandler();
         consoleHandler.setFormatter(new RequestLogFormatter(requestId));
-        consoleHandler.setLevel(Level.INFO);
+        consoleHandler.setLevel(consoleLevel());
         logger.addHandler(consoleHandler);
 
         logger.setLevel(Level.ALL);

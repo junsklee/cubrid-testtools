@@ -14,6 +14,15 @@ fi
 
 # Set classpath
 CLASSPATH="$PROJECT_ROOT/lib/json.jar:$PROJECT_ROOT/lib/jsch-0.1.55.jar:$PROJECT_ROOT/lib/builder-tester.jar:$PROJECT_ROOT/build"
+# ActiveMQ client for consumer execution (consumer_activemq_url), from the CTP this directory is in
+CTP_ROOT="$( cd "$PROJECT_ROOT/.." && pwd )"
+for jar in common/sched/lib/activemq-client-5.8.0.jar common/sched/lib/geronimo-jms_1.1_spec-1.1.1.jar \
+           common/sched/lib/geronimo-j2ee-management_1.1_spec-1.0.1.jar common/sched/lib/hawtbuf-1.9.jar \
+           common/lib/slf4j-api-1.7.19.jar; do
+  if [ -f "$CTP_ROOT/$jar" ]; then
+    CLASSPATH="$CLASSPATH:$CTP_ROOT/$jar"
+  fi
+done
 
 # Configuration file
 CONFIG_FILE="$PROJECT_ROOT/conf/builder.conf"

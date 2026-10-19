@@ -151,3 +151,105 @@ keep it from the node list it sent, or recognise the `vm_` log-file prefix.
   `case exit code: <n>`, `final check (do_check_more_errors)` and `result file`, after
   which the final `.result` content is printed. A timed-out case ends with
   `===== [builder-tester vm] TIMEOUT after <n>s`.
+
+## QAHome consumer VMs (`"executionMode": "consumer"`)
+
+Consumer execution runs shell cases the same way as VM mode, but on the QAHome regression VMs
+while they are idle instead of on dedicated VM testers. The Builder cannot push cases to those
+VMs: they take jobs from the QAHome ActiveMQ queues. So the Builder puts messages on its own
+queue, and a VM whose consumer listens on it runs Builder-Tester cases between regression jobs.
+
+```
+Builder ──message──▶ QUEUE_CUBRID_QA_BUILDER_TESTER_LINUX ──▶ start_consumer.sh (idle VM)
+   ▲                                                              │ run_builder_tester.sh
+   │  /consumer/lease, /consumer/heartbeat, /consumer/result      ▼
+   └──────────────────────────────────────────────────── ConsumerRunner + VM-mode tester
+```
+
+1. After the builds, the Builder publishes one message per VM it wants, up to
+   `consumer_max_parallel`. The message's properties name the Builder (`BT_BUILDER_URL`),
+   the request (`BT_REQUEST_ID`) and the message (`BT_SLOT`), plus the `BUILD_*` fields
+   `start_consumer.sh` requires. It does not go through the QAHome sender, so nothing is written
+   to the QAHome database (the consumer's start/stop update matches no `msg_sended` row).
+2. An idle consumer takes the message and runs `CTP/common/ext/run_builder_tester.sh`. The
+   script downloads the runner (the Builder's `lib/*.jar`) from the Builder each time, so it is
+   the only file deployed on the VM, and the runner is always the Builder's version.
+3. The runner starts the VM-mode tester in its own JVM on a free port on 127.0.0.1 (so only
+   the runner can reach it), using the VM's own settings. From `CTP/conf/shell_template.conf` (or the last `shell_runtime.conf`) it takes
+   the testcase checkout (the repo holding `scenario`), `testcase_timeout_in_secs`, the SSH port,
+   `large_space_dir`, `cubrid_db_charset` and `ignore_core_by_keywords`. `$CUBRID` is the install
+   directory. When `CTP/conf/common.conf` has `git_user`/`git_pwd`, it fetches testcases through
+   a temporary authenticated remote, as `run_git_update` does.
+4. It leases cases one at a time, runs each with the tester and posts the tester's response,
+   with the attempt logs and case-file bundles attached, back to the Builder. It sends a
+   heartbeat every 20 s. When no case is left, it finalizes the request (removes its testcase
+   worktree), stops the tester and exits, and the consumer goes back to its queues.
+
+The Builder parses the relayed response exactly as it parses a tester's, so `results.json`,
+the logs under `tests/`, reports and callbacks are the same as in VM mode. The request records
+`"executionMode": "consumer"`.
+
+**Sharing the VM with regression.** A consumer runs one job at a time from all of its queues,
+so a Builder-Tester run never overlaps a regression run. The runner installs the request's build
+into `$CUBRID`, and the next regression job reinstalls its own build, as it does after any job.
+Regression's `run_git_update` also resets the testcase checkout.
+
+**Failures.**
+- A VM that sends no heartbeat for `consumer_lease_timeout_seconds` (default 300) loses its
+  case. The case goes back to the queue under a new ID, so a late result is refused, and a
+  replacement message is published. If that VM was only slow, its runner is told to stop at its
+  next heartbeat and takes no more cases. After three silent VMs in a row, the case fails.
+- A runner that stops checking in between cases, and a message that left the queue without a
+  runner ever checking in (the VM could not reach the Builder or lacks the script), are replaced
+  after the same timeout. The Builder looks for its messages in the queue every minute. When VMs
+  keep taking messages without a runner checking in (more than 2 × `consumer_max_parallel` + 2),
+  the waiting cases fail with that diagnosis instead of waiting for the pickup timeout.
+- A case that no VM took within `consumer_pickup_timeout_minutes` (default 1440) fails. So does
+  every case when the broker cannot be reached.
+- Cancel: waiting cases are withdrawn, and a running case is cancelled in the VM's tester at the
+  runner's next heartbeat. Messages no VM took yet are removed from the queue.
+- When `start_consumer.sh` resumes an interrupted job (`run_builder_tester.sh YES`), the runner
+  only does what is left. A finished request's message makes the script exit without
+  downloading anything.
+
+### Setting up
+
+Builder (`conf/builder.conf`):
+
+```
+consumer_activemq_url=tcp://<QAHome broker>:61616   # the consumers' activemq_url
+consumer_activemq_user=...                          # their activemq_user / activemq_pwd
+consumer_activemq_pwd=...
+consumer_queue=QUEUE_CUBRID_QA_BUILDER_TESTER_LINUX
+consumer_max_parallel=4
+consumer_builder_url=http://<builder host>:8089     # if the VMs reach the Builder elsewhere
+```
+
+Without `consumer_builder_url` the Builder advertises its first non-loopback IPv4 address.
+`consumer_max_parallel` is capped at 16, because every idle runner holds a Builder HTTP thread while
+it waits for a case. A result (response plus logs) may be up to 128 MB.
+
+The Builder needs the ActiveMQ client jars, which `bin/start_builder.sh` and `bin/compile.sh`
+take from the enclosing CTP (`common/sched/lib`, `common/lib`).
+`consumer_tester.<key>=<value>` overrides a runner tester setting on every VM, for example
+`consumer_tester.shell_tc_dir=~/cubrid-testcases-private-ex`.
+
+Each consumer VM:
+
+1. Copy `CTP/common/ext/run_builder_tester.sh` into the VM's `~/CTP/common/ext/`. CTP's
+   self-update (`upgrade.sh`) keeps files it does not know.
+2. Restart the consumer with the Builder-Tester queue added, keeping the regression queue
+   first:
+   `start_consumer.sh -q QUEUE_CUBRID_QA_SHELL_LINUX,QUEUE_CUBRID_QA_BUILDER_TESTER_LINUX -exec run_shell,run_builder_tester`
+3. The VM needs `curl` (or `wget`) and Java 8+ (`$JAVA_HOME`), and must reach the Builder's
+   port. Its runner files live in `~/.builder_tester_consumer` (`runner.log`, request logs).
+4. Do not start that consumer with `--only-max`: it keeps one message per build version and
+   cannot read Builder-Tester build labels as versions.
+
+### Client integration
+
+Send `"executionMode": "consumer"` without `workerIps`; the request is rejected with HTTP 400
+if it names workers, is `testType=sql`, or the Builder has no consumer queue. `GET /health` on
+the Builder reports `consumerQueue` (`enabled`, `queue`, `maxParallel`, and per open request
+the counts of waiting and running cases, queued messages and runners). Fields, statuses and logs
+are as in VM mode. Expect cases to wait while the VMs run regression.

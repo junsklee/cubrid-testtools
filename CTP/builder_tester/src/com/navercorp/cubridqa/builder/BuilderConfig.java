@@ -1475,6 +1475,14 @@ public class BuilderConfig {
         return Math.max(60L, Long.parseLong(properties.getProperty("smart_scheduling_stall_timeout_minutes", "10").trim()) * 60L);
     }
 
+    /**
+     * Address the tester's HTTP server listens on; empty = every interface. The consumer runner
+     * uses 127.0.0.1, so its tester is reachable only from the runner.
+     */
+    public String getTesterBindAddress() {
+        return vmProperty("tester_bind_address", "");
+    }
+
     /** Testers running execution_mode=vm that VM-mode requests go to when they name no workers. */
     public List<String> getVmTesterNodes() {
         List<String> nodes = new ArrayList<>();
@@ -1484,6 +1492,93 @@ public class BuilderConfig {
             }
         }
         return nodes;
+    }
+
+    /**
+     * ActiveMQ broker of the QAHome consumers (tcp://host:61616). Requests with
+     * "executionMode": "consumer" put messages on consumer_queue there; empty disables the mode.
+     */
+    public String getConsumerActiveMqUrl() {
+        return vmProperty("consumer_activemq_url", "");
+    }
+
+    public String getConsumerActiveMqUser() {
+        return vmProperty("consumer_activemq_user", "");
+    }
+
+    public String getConsumerActiveMqPassword() {
+        return vmProperty("consumer_activemq_pwd", "");
+    }
+
+    public boolean isConsumerQueueEnabled() {
+        return !getConsumerActiveMqUrl().isEmpty();
+    }
+
+    /** Queue the consumer nodes listen on with -exec run_builder_tester. */
+    public String getConsumerQueue() {
+        return vmProperty("consumer_queue", "QUEUE_CUBRID_QA_BUILDER_TESTER_LINUX");
+    }
+
+    /**
+     * Most consumer VMs one request runs on at the same time (one message per VM). At most 16:
+     * every idle runner holds a Builder HTTP thread while it waits for a case.
+     */
+    public int getConsumerMaxParallel() {
+        return Math.max(1, Math.min(16, intProperty("consumer_max_parallel", 4)));
+    }
+
+    /** JMS priority of the messages (0-9; the QAHome sender's default is 4). */
+    public int getConsumerMessagePriority() {
+        return Math.max(0, Math.min(9, intProperty("consumer_message_priority", 4)));
+    }
+
+    /**
+     * URL the consumer VMs reach this Builder on. Empty = http://<this host's address>:<listen_port>,
+     * which is wrong on a multi-homed host.
+     */
+    public String getConsumerBuilderUrl() {
+        String url = vmProperty("consumer_builder_url", "");
+        while (url.endsWith("/")) {
+            url = url.substring(0, url.length() - 1);
+        }
+        return url;
+    }
+
+    /** A case nobody picked up for this long fails (no consumer free or listening). */
+    public long getConsumerPickupTimeoutMillis() {
+        return java.util.concurrent.TimeUnit.MINUTES.toMillis(Math.max(1, intProperty("consumer_pickup_timeout_minutes", 1440)));
+    }
+
+    /** A leased case whose VM sent no heartbeat for this long is handed to another VM. */
+    public long getConsumerLeaseTimeoutMillis() {
+        return java.util.concurrent.TimeUnit.SECONDS.toMillis(Math.max(30, intProperty("consumer_lease_timeout_seconds", 300)));
+    }
+
+    /**
+     * Tester settings sent to every consumer runner: consumer_tester.<key>=<value> becomes
+     * <key>=<value> in the runner's tester conf, over the runner's defaults.
+     */
+    public Map<String, String> getConsumerTesterOverrides() {
+        Map<String, String> overrides = new TreeMap<>();
+        String prefix = "consumer_tester.";
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith(prefix) && key.length() > prefix.length()) {
+                overrides.put(key.substring(prefix.length()), properties.getProperty(key).trim());
+            }
+        }
+        return overrides;
+    }
+
+    private int intProperty(String key, int defaultValue) {
+        String raw = properties.getProperty(key);
+        if (raw == null || raw.trim().isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 
     public long getSchedulingNodeStaleThresholdSeconds() {

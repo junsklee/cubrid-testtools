@@ -245,7 +245,10 @@ public class Tester {
         }
         
         // Create HTTP server
-        this.server = HttpServer.create(new InetSocketAddress(config.getTesterPort()), 0);
+        String bindAddress = config.getTesterBindAddress();
+        this.server = HttpServer.create(bindAddress.isEmpty()
+            ? new InetSocketAddress(config.getTesterPort())
+            : new InetSocketAddress(bindAddress, config.getTesterPort()), 0);
         this.server.createContext("/test", testHandler);
         this.server.createContext("/health", healthHandler);
         this.server.createContext("/score", scoreHandler);

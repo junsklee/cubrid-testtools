@@ -5,6 +5,8 @@ package com.navercorp.cubridqa.builder;
 
 import com.navercorp.cubridqa.builder.logging.RequestIds;
 import com.navercorp.cubridqa.builder.docker.DockerLabels;
+import com.navercorp.cubridqa.builder.consumer.ConsumerHandler;
+import com.navercorp.cubridqa.builder.consumer.ConsumerPool;
 import java.io.*;
 import java.net.*;
 import java.util.*;
@@ -81,6 +83,18 @@ public class Builder {
         this.server.createContext("/health", new HealthCheckHandler());
         this.server.createContext("/download/build/", new BuildDownloadHandler());
         this.server.createContext("/queue/remove", new QueueRemoveHandler());
+        // Consumer execution: the runners on QAHome consumer VMs lease cases here
+        if (config.isConsumerQueueEnabled()) {
+            String consumerUrl = consumerBuilderUrl(config);
+            // run_builder_tester.sh and the runner accept http(s)://host:port only
+            if (consumerUrl.matches("https?://[A-Za-z0-9.:_-]+")) {
+                ConsumerPool.initialize(config, consumerUrl);
+            } else {
+                logger.severe("Consumer execution disabled: VMs cannot use " + consumerUrl
+                    + " as the Builder address; set consumer_builder_url=http://<host>:<port>");
+            }
+        }
+        this.server.createContext("/consumer/", new ConsumerHandler(config));
         
         // Add report handler for viewing test results
         try {
@@ -102,6 +116,46 @@ public class Builder {
             t.setDaemon(true);
             return t;
         }));
+    }
+
+    /**
+     * How consumer VMs reach this Builder: consumer_builder_url, else this host's address. The
+     * host name often resolves to a loopback address, which the VMs cannot use; then the first
+     * non-loopback IPv4 address of an interface that is up.
+     */
+    private static String consumerBuilderUrl(BuilderConfig config) {
+        String configured = config.getConsumerBuilderUrl();
+        if (!configured.isEmpty()) {
+            return configured;
+        }
+        String host = null;
+        try {
+            InetAddress local = InetAddress.getLocalHost();
+            if (local instanceof Inet4Address && !local.isLoopbackAddress()) {
+                host = local.getHostAddress();
+            }
+        } catch (IOException ignore) {
+            // fall through to the interfaces
+        }
+        try {
+            for (NetworkInterface nic : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (host != null) {
+                    break;
+                }
+                if (!nic.isUp() || nic.isLoopback()) {
+                    continue;
+                }
+                for (InetAddress address : Collections.list(nic.getInetAddresses())) {
+                    if (address instanceof Inet4Address && !address.isLoopbackAddress() && !address.isLinkLocalAddress()) {
+                        host = address.getHostAddress();
+                        break;
+                    }
+                }
+            }
+        } catch (IOException ignore) {
+            // no usable interface
+        }
+        return "http://" + (host != null ? host : "localhost") + ":" + config.getListenPort();
     }
 
     private static boolean isAllowedShellTestPath(String t) {
@@ -283,12 +337,27 @@ public class Builder {
 
                 // Execution mode: "docker" (default) runs cases in containers on the worker nodes;
                 // "vm" runs shell cases one at a time on QA VM testers (execution_mode=vm), which
-                // the request may name in workerIps or which come from vm_tester_nodes.
+                // the request may name in workerIps or which come from vm_tester_nodes;
+                // "consumer" runs them on the QAHome consumer VMs that are idle, through
+                // consumer_queue (see ConsumerPool).
                 String executionMode = request.optString("executionMode", "docker").trim().toLowerCase(Locale.ROOT);
-                if (!"docker".equals(executionMode) && !"vm".equals(executionMode)) {
-                    throw new IllegalArgumentException("Invalid executionMode '" + executionMode + "': expected docker or vm");
+                if (!"docker".equals(executionMode) && !"vm".equals(executionMode) && !"consumer".equals(executionMode)) {
+                    throw new IllegalArgumentException("Invalid executionMode '" + executionMode + "': expected docker, vm or consumer");
                 }
                 request.put("executionMode", executionMode);
+                if ("consumer".equals(executionMode) && !request.optBoolean("buildOnly", false)) {
+                    if ("sql".equals(request.optString("testType", "shell"))) {
+                        throw new IllegalArgumentException("Consumer execution runs shell tests only");
+                    }
+                    if (ConsumerPool.get() == null) {
+                        throw new IllegalArgumentException("Consumer execution requested, but this Builder has no consumer queue "
+                            + "(consumer_activemq_url in builder.conf)");
+                    }
+                    if (request.has("workerIps") && request.getJSONArray("workerIps").length() > 0) {
+                        throw new IllegalArgumentException("Consumer execution picks its VMs from the queue; remove workerIps");
+                    }
+                    request.put("workerIps", new JSONArray().put(BuilderTask.CONSUMER_WORKER));
+                }
                 if ("vm".equals(executionMode) && !request.optBoolean("buildOnly", false)) {
                     if ("sql".equals(request.optString("testType", "shell"))) {
                         throw new IllegalArgumentException("VM execution runs shell tests only");
@@ -334,7 +403,7 @@ public class Builder {
                 String buildType = request.optString("buildType", "release");
                 
                 // Check tester reachability for all worker IPs
-                if (!buildOnly) {
+                if (!buildOnly && !"consumer".equals(executionMode)) {
                     for (int i = 0; i < workerIps.length(); i++) {
                         validateTesterReachability(workerIps.getString(i), executionMode);
                     }
@@ -546,6 +615,20 @@ public class Builder {
                     .put("dockerEnabled", config.useDocker())
                     .put("commitBuildMode", config.getCommitBuildMode())
                     .put("vmTesterNodes", new JSONArray(config.getVmTesterNodes()));
+                ConsumerPool consumerPool = ConsumerPool.get();
+                JSONObject consumerQueue = new JSONObject().put("enabled", consumerPool != null);
+                if (consumerPool != null) {
+                    consumerQueue.put("queue", config.getConsumerQueue())
+                        .put("maxParallel", consumerPool.getMaxParallel());
+                    JSONObject open = new JSONObject();
+                    for (Map.Entry<String, int[]> entry : consumerPool.snapshot().entrySet()) {
+                        int[] counts = entry.getValue();
+                        open.put(entry.getKey(), new JSONObject().put("waiting", counts[0]).put("running", counts[1])
+                            .put("queuedMessages", counts[2]).put("runners", counts[3]));
+                    }
+                    consumerQueue.put("requests", open);
+                }
+                healthResponse.put("consumerQueue", consumerQueue);
                 
                 // If requestId provided, check its position in queue
                 if (requestId != null) {

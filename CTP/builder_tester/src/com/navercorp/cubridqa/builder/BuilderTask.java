@@ -4,6 +4,7 @@
 package com.navercorp.cubridqa.builder;
 
 import com.navercorp.cubridqa.builder.logging.RequestIds;
+import com.navercorp.cubridqa.builder.consumer.ConsumerPool;
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
@@ -27,6 +28,8 @@ import com.navercorp.cubridqa.builder.transfer.SftpUploader;
  */
 public class BuilderTask {
     private static final Logger logger = Logger.getLogger(BuilderTask.class.getName());
+    /** Worker name of "executionMode": "consumer" requests: their cases go to ConsumerPool. */
+    public static final String CONSUMER_WORKER = "qa-consumers";
     
     private final String taskId;
     private final JSONObject request;
@@ -336,8 +339,16 @@ public class BuilderTask {
             Map<String, Integer> workerCapacities = new LinkedHashMap<>(); // current caps (start heavy)
             Map<String, Integer> workerPeakCaps = new LinkedHashMap<>();
             Map<String, AtomicInteger> dispatchCounts = new ConcurrentHashMap<>();
+            boolean consumerMode = workerIps.contains(CONSUMER_WORKER);
+            ConsumerPool consumerPool = consumerMode ? ConsumerPool.get() : null;
+            if (consumerMode && consumerPool == null) {
+                throw new IllegalStateException("Consumer execution requested, but this Builder has no consumer queue");
+            }
             for (String worker : workerIps) {
-                TesterCaps caps = fetchTesterCaps(worker);
+                // A consumer request runs one case per VM on up to consumer_max_parallel VMs
+                TesterCaps caps = CONSUMER_WORKER.equals(worker)
+                    ? new TesterCaps(consumerPool.getMaxParallel(), consumerPool.getMaxParallel())
+                    : fetchTesterCaps(worker);
                 workerCapacities.put(worker, caps.heavyCap);
                 workerPeakCaps.put(worker, caps.peakCap);
                 dispatchCounts.put(worker, new AtomicInteger(0));
@@ -361,7 +372,22 @@ public class BuilderTask {
             }
 
             // Choose distribution strategy
-            if (config.isSmartSchedulingEnabled()) {
+            if (consumerMode) {
+                // VMs come and go with the regression queue, so there are no tester snapshots to
+                // schedule on: cases wait in ConsumerPool for whichever VM asks first.
+                String consumerRequestId = testRequestId != null ? testRequestId : taskId;
+                taskLogger.info(String.format("Using QA consumer VMs (queue %s, up to %d VMs)",
+                    config.getConsumerQueue(), consumerPool.getMaxParallel()));
+                consumerPool.open(consumerRequestId, "bt_" + consumerRequestId);
+                try {
+                    distributeTestsLegacy(builtPackages, tests, workerCapacities, dispatchCounts, finalBuildType,
+                        testRequestId, totalTestExecutions, testersUsed);
+                } finally {
+                    consumerPool.close(consumerRequestId);
+                }
+                // Each runner finalizes the request on its own VM before it exits
+                testersUsed.remove(CONSUMER_WORKER);
+            } else if (config.isSmartSchedulingEnabled()) {
                 taskLogger.info("Using SMART SCHEDULING for test distribution");
                 distributeTestsWithSmartScheduling(
                     builtPackages,
@@ -488,6 +514,10 @@ public class BuilderTask {
             } catch (Exception ignore) {
                 // fall back below
             }
+        }
+        if (workerIps.contains(CONSUMER_WORKER)) {
+            // Consumer runners learn of the cancel from their heartbeat (ConsumerPool)
+            return Collections.emptyList();
         }
         if (workerIps.isEmpty()) {
             String workerIp = request.optString("workerIp", "localhost").trim();
@@ -1883,7 +1913,14 @@ public class BuilderTask {
             
             // Determine if this is a local or remote tester
             String buildPackageRef;
-            if (isLocalTester(host, port)) {
+            boolean consumerWorker = CONSUMER_WORKER.equals(workerIp);
+            if (consumerWorker) {
+                // QA consumer VM: download from this Builder at the address the VMs reach it on
+                File packageFile = new File(buildPackage);
+                buildPackageRef = ConsumerPool.get().getBuilderUrl() + "/download/build/"
+                    + packageFile.getParentFile().getName() + "/" + packageFile.getName();
+                taskLogger.info("Package URL for QA consumer VMs: " + buildPackageRef);
+            } else if (isLocalTester(host, port)) {
                 // Local tester - use direct file path (tester will skip if Docker image is cached)
                 buildPackageRef = buildPackage;
                 taskLogger.info("Sending package reference to local tester " + workerIp + ": " + buildPackage);
@@ -2012,14 +2049,6 @@ public class BuilderTask {
             } catch (Exception ignore) { }
 
             checkCancelled("before_test_request_send");
-            // Send HTTP request to tester
-            URL url = new URL("http://" + host + ":" + port + "/test");
-            conn = (HttpURLConnection) url.openConnection();
-            inflightConnections.add(conn);
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(5000);
             // Read timeout must cover the FULL /test request duration.
             // With retry modes (until-pass/until-fail) the tester may run up to max_runs attempts,
             // so a per-attempt timeout must be expanded to a worst-case total.
@@ -2033,18 +2062,53 @@ public class BuilderTask {
             int maxRuns = Math.max(1, Math.max(maxRunsOverride, config.getMaxRuns()));
             long readTimeoutMsLong = (long) perAttemptTimeoutMin * 60_000L * (long) (maxRuns + 1);
             int readTimeoutMs = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, readTimeoutMsLong));
-            conn.setReadTimeout(readTimeoutMs);
-            taskLogger.info("Sending test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length())) + ") to tester " + host + ":" + port);
-            
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(testRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            int httpStatus;
+            String contentType;
+            byte[] responseBody;
+            if (consumerWorker) {
+                // A runner on a QA consumer VM runs the case and relays the VM tester's response,
+                // with the attempt logs attached as multipart files.
+                taskLogger.info("Queueing test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length()))
+                    + ") for a QA consumer VM");
+                ConsumerPool.Relay relay = ConsumerPool.get().run(requestId != null ? requestId : taskId, testRequest,
+                    readTimeoutMsLong, this::isCancelRequested, taskLogger);
+                httpStatus = relay.status;
+                contentType = relay.contentType;
+                responseBody = relay.body;
+            } else {
+                // Send HTTP request to tester
+                URL url = new URL("http://" + host + ":" + port + "/test");
+                conn = (HttpURLConnection) url.openConnection();
+                inflightConnections.add(conn);
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(readTimeoutMs);
+                taskLogger.info("Sending test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length())) + ") to tester " + host + ":" + port);
+
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(testRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+
+                httpStatus = conn.getResponseCode();
+                contentType = conn.getHeaderField("Content-Type");
+                ByteArrayOutputStream bodyBuffer = new ByteArrayOutputStream();
+                try (InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream()) {
+                    if (is != null) {
+                        byte[] buffer = new byte[8192];
+                        int bytesRead;
+                        while ((bytesRead = is.read(buffer)) != -1) {
+                            bodyBuffer.write(buffer, 0, bytesRead);
+                        }
+                    }
+                }
+                responseBody = bodyBuffer.toByteArray();
             }
-            
             // Read response - check if it's multipart or JSON
-            int httpStatus = conn.getResponseCode();
-            String contentType = conn.getHeaderField("Content-Type");
-            taskLogger.info("Tester response HTTP " + httpStatus + " for '" + testName + "' on " + host + ":" + port + " (Content-Type: " + contentType + ")");
-            
+            taskLogger.info("Tester response HTTP " + httpStatus + " for '" + testName + "' on " + workerIp + " (Content-Type: " + contentType + ")");
+
             JSONObject responseJson = null;
             Map<String, byte[]> logFiles = new HashMap<>();
             
@@ -2064,48 +2128,32 @@ public class BuilderTask {
                 }
                 
                 if (boundary != null) {
-                    // Read the entire response body
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    try (InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream()) {
-                        if (is != null) {
-                            byte[] buffer = new byte[8192];
-                            int bytesRead;
-                            while ((bytesRead = is.read(buffer)) != -1) {
-                                baos.write(buffer, 0, bytesRead);
-                            }
-                        }
-                    }
-                    
                     // Parse multipart data
-                    MultipartHelper.MultipartRequest multipartData = parseMultipartResponse(baos.toByteArray(), boundary);
+                    MultipartHelper.MultipartRequest multipartData = parseMultipartResponse(responseBody, boundary);
                     
-                    // Extract JSON response
+                    // Extract JSON response (fields are parsed as ISO-8859-1 bytes; the JSON is UTF-8)
                     String jsonResponse = multipartData.getField("response");
                     if (jsonResponse != null) {
-                        responseJson = new JSONObject(jsonResponse);
+                        responseJson = new JSONObject(new String(jsonResponse.getBytes("ISO-8859-1"), java.nio.charset.StandardCharsets.UTF_8));
                     }
                     
-                    // Extract log files
+                    // Extract log files. The names become paths under the request's tests/
+                    // directory, so a name with a directory part is refused.
                     for (Map.Entry<String, MultipartHelper.MultipartRequest.FileData> entry : multipartData.getFiles().entrySet()) {
-                        String fieldName = entry.getKey();
                         MultipartHelper.MultipartRequest.FileData fileData = entry.getValue();
-                        logFiles.put(fileData.fileName, fileData.content);
+                        String name = fileData.fileName;
+                        if (!isSafeLogFileName(name)) {
+                            taskLogger.warning("Ignoring multipart log file with an unsafe name: " + name);
+                            continue;
+                        }
+                        logFiles.put(name, fileData.content);
                     }
                     
                     taskLogger.info("Received multipart response with " + logFiles.size() + " log files");
                 }
             } else {
                 // Parse regular JSON response (backward compatibility)
-                StringBuilder response = new StringBuilder();
-                InputStream is = (httpStatus >= 200 && httpStatus < 300) ? conn.getInputStream() : conn.getErrorStream();
-                if (is != null) {
-                    try (BufferedReader br = new BufferedReader(new InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = br.readLine()) != null) {
-                            response.append(line);
-                        }
-                    }
-                }
+                String response = new String(responseBody, java.nio.charset.StandardCharsets.UTF_8);
                 
                 // Log tester response payload for visibility
                 try {
@@ -2182,6 +2230,13 @@ public class BuilderTask {
                     } catch (Exception ignore) { }
                 }
             }
+            // A consumer VM sends its logs with the result; there is no host to fetch them from
+            else if (responseJson.has("attemptLogMetadata") && consumerWorker) {
+                taskLogger.warning("Consumer VM sent no log files for '" + testName + "'");
+                try {
+                    result.put("attemptLogMetadata", responseJson.getJSONArray("attemptLogMetadata"));
+                } catch (Exception ignore) { }
+            }
             // Handle attempt log metadata from JSON response - fetch actual log content from remote tester or copy from local filesystem
             else if (responseJson.has("attemptLogMetadata")) {
                 try {
@@ -2200,6 +2255,10 @@ public class BuilderTask {
                         for (int i = 0; i < metadata.length(); i++) {
                             JSONObject attemptMeta = metadata.getJSONObject(i);
                             String logFileName = attemptMeta.getString("logFileName");
+                            if (!isSafeLogFileName(logFileName)) {
+                                taskLogger.warning("Ignoring attempt log with an unsafe name: " + logFileName);
+                                continue;
+                            }
                             int attemptNum = attemptMeta.getInt("attempt");
                             String status = attemptMeta.optString("status", "unknown");
                             
@@ -2291,6 +2350,10 @@ public class BuilderTask {
                             JSONObject attemptLog = allAttemptLogs.getJSONObject(i);
                             String logContent = attemptLog.getString("logContent");
                             String logFileName = attemptLog.getString("logFileName");
+                            if (!isSafeLogFileName(logFileName)) {
+                                taskLogger.warning("Ignoring attempt log with an unsafe name: " + logFileName);
+                                continue;
+                            }
                             boolean logTruncated = attemptLog.optBoolean("logTruncated", false);
                             int attemptNum = attemptLog.getInt("attempt");
                             
@@ -2316,6 +2379,10 @@ public class BuilderTask {
             else if (responseJson.has("logContent")) {
                 String logContent = responseJson.getString("logContent");
                 String logFileName = responseJson.optString("logFileName", null);
+                if (logFileName != null && !isSafeLogFileName(logFileName)) {
+                    taskLogger.warning("Ignoring unsafe log file name: " + logFileName);
+                    logFileName = null;
+                }
                 boolean logTruncated = responseJson.optBoolean("logTruncated", false);
                 
                 // Save log to request directory
@@ -2357,7 +2424,7 @@ public class BuilderTask {
             if (isNetworkFailure) {
                 // Network failure - mark node as failed for circuit breaker
                 String nodeId = workerIp.contains(":") ? workerIp : workerIp + ":8089";
-                if (workloadDistributor != null) {
+                if (workloadDistributor != null && !CONSUMER_WORKER.equals(workerIp)) {
                     workloadDistributor.markNodeFailed(nodeId, e.getClass().getSimpleName() + ": " + e.getMessage());
                 }
                 taskLogger.log(Level.SEVERE, "Network failure testing commit " + commit +
@@ -2383,6 +2450,15 @@ public class BuilderTask {
                 }
             }
         }
+    }
+
+    /**
+     * A log name from a tester or consumer response becomes a file under the request's tests/
+     * directory: a plain file name only.
+     */
+    static boolean isSafeLogFileName(String name) {
+        return name != null && !name.isEmpty() && name.length() <= 255 && !name.startsWith(".")
+            && name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf('\0') < 0;
     }
 
     /**
