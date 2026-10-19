@@ -441,13 +441,14 @@
         const titles = {
             docker: 'Tests ran in Docker containers',
             vm: 'Tests ran on QA VMs (regression-equivalent, one case at a time)',
-            consumer: 'Tests ran on idle QAHome regression VMs through the consumer queue (regression-equivalent, one case at a time per VM)',
+            consumer: 'VM (regression): tests ran on idle QAHome regression VMs through the Builder-Tester queue (one case at a time per VM)',
             direct: 'Tests ran directly on the tester host',
             mixed: 'Tests ran on both Docker and VM testers'
         };
         if (!styles[m]) return null;
+        const labels = { consumer: 'VM (REGRESSION)' };
         const badge = document.createElement('span');
-        badge.textContent = m.toUpperCase();
+        badge.textContent = labels[m] || m.toUpperCase();
         badge.title = titles[m];
         badge.style.cssText = 'display: inline-block; margin-left: 0.35rem; padding: 0.05rem 0.4rem; ' +
             'border-radius: 0.25rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; ' + styles[m];

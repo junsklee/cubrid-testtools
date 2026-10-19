@@ -314,14 +314,14 @@
                                 <span class="baseline-choice">
                                     <input type="radio" id="executionModeVm" name="executionMode" class="baseline-radio" value="vm">
                                     <span class="baseline-label">VM</span>
-                                    <span class="info-icon" title="Runs shell cases one at a time on a QA VM tester with its own CTP, the way QAHome regression does: process reset, conf restore, core and fatal-error checks.&#10;Uses the VM testers configured on the Builder (vm_tester_nodes). Shell tests only."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                                    <span class="info-icon" title="Runs shell cases one at a time on each dedicated QA VM tester listed below, with the VM's own CTP, the way QAHome regression does: process reset, conf restore, core and fatal-error checks.&#10;Starts from the VM testers configured on the Builder (vm_tester_nodes); add or remove VM testers below. Shell tests only."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                                 </span>
                             </label>
                             <label class="baseline-option" for="executionModeConsumer">
                                 <span class="baseline-choice">
                                     <input type="radio" id="executionModeConsumer" name="executionMode" class="baseline-radio" value="consumer">
-                                    <span class="baseline-label">QA consumer VMs</span>
-                                    <span class="info-icon" title="Runs shell cases like VM mode, on QAHome regression VMs while they are idle: the request waits in the Builder-Tester queue and each VM that takes it runs cases one at a time until none are left.&#10;Cases may wait while the VMs run regression. Shell tests only."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                                    <span class="baseline-label">VM (regression)</span>
+                                    <span class="info-icon" title="Runs shell cases like VM mode, on the QAHome regression VMs while they are idle: the request waits in the Builder-Tester queue next to the regression queues, and each VM that takes it runs cases one at a time until none are left.&#10;Cases may wait while the VMs run regression. Shell tests only."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                                 </span>
                             </label>
                             </div>
@@ -330,6 +330,17 @@
                     </div>
 
                     <!-- Worker Configuration -->
+                    <!-- VM mode: the VM testers (execution_mode=vm) the cases run on -->
+                    <div class="form-group" id="vmTesterSection" style="display: none;">
+                        <label class="form-label">VM Testers</label>
+                        <div class="worker-list" id="vmTesterList"></div>
+                        <div class="worker-input-group">
+                            <input type="text" class="form-input add-worker-input" id="newVmTesterInput"
+                                placeholder="VM tester host:port (execution_mode=vm)">
+                            <button class="control-btn" onclick="addVmTester()">Add VM Tester</button>
+                        </div>
+                    </div>
+
                     <div class="form-group" id="workerSection">
                         <label class="form-label">Worker Nodes</label>
                         <div class="worker-list" id="workerList">

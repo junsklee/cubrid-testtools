@@ -347,14 +347,14 @@ public class Builder {
                 request.put("executionMode", executionMode);
                 if ("consumer".equals(executionMode) && !request.optBoolean("buildOnly", false)) {
                     if ("sql".equals(request.optString("testType", "shell"))) {
-                        throw new IllegalArgumentException("Consumer execution runs shell tests only");
+                        throw new IllegalArgumentException("VM (regression) execution runs shell tests only");
                     }
                     if (ConsumerPool.get() == null) {
-                        throw new IllegalArgumentException("Consumer execution requested, but this Builder has no consumer queue "
+                        throw new IllegalArgumentException("VM (regression) execution requested, but this Builder has no consumer queue "
                             + "(consumer_activemq_url in builder.conf)");
                     }
                     if (request.has("workerIps") && request.getJSONArray("workerIps").length() > 0) {
-                        throw new IllegalArgumentException("Consumer execution picks its VMs from the queue; remove workerIps");
+                        throw new IllegalArgumentException("VM (regression) execution takes its VMs from the regression queue; remove workerIps");
                     }
                     request.put("workerIps", new JSONArray().put(BuilderTask.CONSUMER_WORKER));
                 }

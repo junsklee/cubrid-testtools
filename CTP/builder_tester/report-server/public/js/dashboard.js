@@ -46,6 +46,10 @@
         // (consumerQueue: {enabled, queue, maxParallel}), from /api/builder/health
         let vmTesterNodes = [];
         let consumerQueue = null;
+        // VM testers a VM-mode request runs on: the Builder's vm_tester_nodes until the user
+        // adds or removes one
+        let vmTesters = [];
+        let vmTestersTouched = false;
 
         function getSelectedExecutionMode() {
             const checked = document.querySelector('input[name="executionMode"]:checked');
@@ -71,19 +75,21 @@
             const mode = getSelectedExecutionMode();
             const workerSection = document.getElementById('workerSection');
             if (workerSection) workerSection.style.display = mode === 'docker' ? '' : 'none';
+            const vmTesterSection = document.getElementById('vmTesterSection');
+            if (vmTesterSection) vmTesterSection.style.display = mode === 'vm' ? '' : 'none';
             if (note) {
                 if (mode === 'vm') {
-                    note.textContent = vmTesterNodes.length > 0
-                        ? 'Shell cases run one at a time on VM tester(s): ' + vmTesterNodes.join(', ')
-                        : 'No VM testers are configured on the Builder (vm_tester_nodes); the request will be rejected.';
+                    note.textContent = vmTesters.length > 0
+                        ? 'Shell cases run one at a time on each VM tester below, in parallel across them.'
+                        : 'Add at least one VM tester below (none are configured on the Builder in vm_tester_nodes).';
                 } else if (mode === 'consumer') {
                     note.textContent = 'Shell cases run on idle QAHome regression VMs that take the request from '
                         + consumerQueue.queue + ', one case at a time per VM, on up to ' + consumerQueue.maxParallel
                         + ' VMs. Cases wait while the VMs run regression.';
                 } else if (sql) {
-                    note.textContent = 'Cases run in Docker containers on the worker nodes. VM and consumer execution support shell tests only.';
+                    note.textContent = 'Cases run in Docker containers on the worker nodes. VM and VM (regression) execution support shell tests only.';
                 } else if (consumerRadio && !consumerEnabled) {
-                    note.textContent = 'Cases run in Docker containers on the worker nodes. QA consumer VMs: not configured on the Builder (consumer_activemq_url).';
+                    note.textContent = 'Cases run in Docker containers on the worker nodes. VM (regression): not configured on the Builder (consumer_activemq_url).';
                 } else {
                     note.textContent = 'Cases run in Docker containers on the worker nodes.';
                 }
@@ -952,6 +958,10 @@
                 const data = await response.json();
                 builderCommitBuildMode = data.commitBuildMode || null;
                 vmTesterNodes = Array.isArray(data.vmTesterNodes) ? data.vmTesterNodes : [];
+                if (!vmTestersTouched) {
+                    vmTesters = vmTesterNodes.slice();
+                    renderVmTesters();
+                }
                 consumerQueue = data.consumerQueue && typeof data.consumerQueue === 'object' ? data.consumerQueue : null;
                 updateExecutionModeState();
                 if (!baselineModeTouched && builderCommitBuildMode) {
@@ -1188,6 +1198,9 @@
                 if (data.error || data.status !== 'healthy') {
                     throw new Error('Worker health check failed');
                 }
+                if (data.executionMode === 'vm') {
+                    throw new Error('it is a VM tester; add it under Execution Mode = VM');
+                }
                 
                 workers.push(workerIp);
                 renderWorkers();
@@ -1196,6 +1209,61 @@
             } catch (error) {
                 showToast(`Cannot add worker ${workerIp}: ${error.message}`, 'error');
             }
+        }
+
+        // Add a VM tester after checking that it is up and runs execution_mode=vm
+        async function addVmTester() {
+            const input = document.getElementById('newVmTesterInput');
+            const address = input.value.trim();
+            if (!address) {
+                showToast('Please enter a VM tester address (host:port)', 'warning');
+                return;
+            }
+            if (vmTesters.includes(address)) {
+                showToast('VM tester already listed', 'warning');
+                return;
+            }
+            showToast('Checking VM tester...', 'info');
+            try {
+                const response = await fetch(`/api/tester/health?ip=${encodeURIComponent(address)}`);
+                if (!response.ok) {
+                    throw new Error('it is not responding');
+                }
+                const data = await response.json();
+                if (data.error || data.status !== 'healthy') {
+                    throw new Error('its health check failed');
+                }
+                if (data.executionMode !== 'vm') {
+                    throw new Error('it runs ' + (data.executionMode || 'docker') + ' mode, not vm');
+                }
+                vmTesters.push(address);
+                vmTestersTouched = true;
+                renderVmTesters();
+                updateExecutionModeState();
+                input.value = '';
+                showToast(`Added VM tester: ${address}`, 'success');
+            } catch (error) {
+                showToast(`Cannot add VM tester ${address}: ${error.message}`, 'error');
+            }
+        }
+
+        function removeVmTester(index) {
+            const removed = vmTesters.splice(index, 1);
+            vmTestersTouched = true;
+            renderVmTesters();
+            updateExecutionModeState();
+            if (removed.length) showToast(`Removed VM tester: ${removed[0]}`, 'info');
+        }
+
+        function renderVmTesters() {
+            const list = document.getElementById('vmTesterList');
+            if (!list) return;
+            list.innerHTML = vmTesters.map((address, i) => `
+                <div class="worker-chip">
+                    ${escapeHtml(address)}
+                    <span class="worker-remove" onclick="removeVmTester(${i})">×</span>
+                </div>
+            `).join('');
         }
 
         // Remove worker
@@ -1529,9 +1597,17 @@
                     payload[TC_REPOS[getSelectedTestType()].payloadKey] = manualTcBranch;
                 }
                 const executionMode = getSelectedExecutionMode();
-                if (executionMode === 'vm' || executionMode === 'consumer') {
-                    // The Builder picks the VMs: its VM testers, or the consumers of its queue
-                    payload.executionMode = executionMode;
+                if (executionMode === 'vm') {
+                    if (!buildOnly && vmTesters.length === 0) {
+                        throw new Error('Add at least one VM tester');
+                    }
+                    payload.executionMode = 'vm';
+                    if (!buildOnly) {
+                        payload.workerIps = vmTesters.slice();
+                    }
+                } else if (executionMode === 'consumer') {
+                    // The VMs come from the Builder's consumer queue
+                    payload.executionMode = 'consumer';
                 } else if (!buildOnly) {
                     payload.workerIps = workers;
                 }
@@ -2469,7 +2545,7 @@
                     const commit = report.firstCommit
                         ? '<code style="color: var(--text-secondary);">' + escapeHtml(report.firstCommit) + '</code>'
                         : '';
-                    const modeLabels = { docker: 'Docker', vm: 'VM', consumer: 'QA consumer VMs', direct: 'Direct', mixed: 'Docker + VM' };
+                    const modeLabels = { docker: 'Docker', vm: 'VM', consumer: 'VM (regression)', direct: 'Direct', mixed: 'Docker + VM' };
                     const modeLabel = modeLabels[(report.executionMode || '').toLowerCase()] || '';
                     const bits = [when + ' ' + time];
                     if (typeLabel) bits.push(typeLabel);

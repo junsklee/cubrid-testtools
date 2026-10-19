@@ -103,9 +103,11 @@ SQL requests (`testType=sql`) are not supported in VM mode; send them to a Docke
 The Builder API, callback and `results.json` schema are unchanged. A client that already
 drives Docker mode needs only the following.
 
-**Choosing VM nodes.** Send `"executionMode": "vm"`. Without `workerIps` the request runs
-on the Builder's `vm_tester_nodes` (`GET /health` on the Builder lists them as
-`vmTesterNodes`); with `workerIps`, on those nodes. The Builder checks each node's
+**Choosing VM nodes.** Send `"executionMode": "vm"`. With `workerIps` the request runs on
+those VM testers; without, on the Builder's `vm_tester_nodes` (`GET /health` on the Builder
+lists them as `vmTesterNodes`). Cases spread over all of them, one at a time on each. The
+dashboard starts from `vm_tester_nodes`, lets the user add or remove VM testers, and sends the
+list as `workerIps`. The Builder checks each node's
 `/health` (`"executionMode": "vm"`, `concurrency.max == 1` on a VM tester) and rejects the
 request with HTTP 400 if a node runs the other mode: Docker requests (`executionMode`
 absent or `"docker"`) cannot use VM testers, and VM requests cannot use Docker testers.
@@ -152,9 +154,10 @@ keep it from the node list it sent, or recognise the `vm_` log-file prefix.
   which the final `.result` content is printed. A timed-out case ends with
   `===== [builder-tester vm] TIMEOUT after <n>s`.
 
-## QAHome consumer VMs (`"executionMode": "consumer"`)
+## VM (regression): QAHome regression VMs (`"executionMode": "consumer"`)
 
-Consumer execution runs shell cases the same way as VM mode, but on the QAHome regression VMs
+VM (regression) execution, called consumer execution in the code and API, runs shell cases the
+same way as VM mode, but on the QAHome regression VMs
 while they are idle instead of on dedicated VM testers. The Builder cannot push cases to those
 VMs: they take jobs from the QAHome ActiveMQ queues. So the Builder puts messages on its own
 queue, and a VM whose consumer listens on it runs Builder-Tester cases between regression jobs.
