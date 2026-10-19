@@ -1336,7 +1336,7 @@
             font-size: 13px;
             font-weight: normal;
             white-space: pre-wrap;
-            max-width: 300px;
+            max-width: min(300px, calc(100vw - 32px));
             width: max-content;
             box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.10), 0 2px 4px -1px rgba(15, 23, 42, 0.07);
             border: 1px solid var(--border);
@@ -1346,9 +1346,13 @@
             pointer-events: none;
             z-index: 1000;
             line-height: 1.4;
+            /* Out of layout until shown: a hidden (visibility) tooltip still widened the page on
+               phones, giving it a horizontal scroll */
+            display: none;
         }
 
         .info-icon:hover::after {
+            display: block;
             opacity: 1;
             visibility: visible;
         }
@@ -1366,9 +1370,11 @@
             visibility: hidden;
             transition: opacity 0.2s ease, visibility 0.2s ease;
             z-index: 1001;
+            display: none;
         }
 
         .info-icon:hover::before {
+            display: block;
             opacity: 1;
             visibility: visible;
         }

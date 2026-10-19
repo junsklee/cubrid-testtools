@@ -298,22 +298,7 @@
                         </select>
                     </div>
 
-                    <!-- Worker Configuration -->
-                    <div class="form-group" id="workerSection">
-                        <label class="form-label">Worker Nodes</label>
-                        <div class="worker-list" id="workerList">
-                            <div class="worker-item">
-                                <span class="worker-ip">localhost</span>
-                                <button class="remove-worker-btn" onclick="removeWorker(this)" style="display: none;">×</button>
-                            </div>
-                        </div>
-                        <div class="worker-input-group">
-                            <input type="text" class="form-input add-worker-input" id="newWorkerInput" 
-                                placeholder="Enter worker IP or hostname">
-                            <button class="control-btn" onclick="addWorker()">Add Worker</button>
-                        </div>
-                    </div>
-
+                    <!-- Execution mode decides whether the worker list applies (Docker) or the VM testers do -->
                     <div class="form-group">
                         <label class="form-label">Execution Mode</label>
                         <div class="baseline-info" id="executionModeInfo">
@@ -333,7 +318,23 @@
                                 </span>
                             </label>
                             </div>
-                            <span class="baseline-value" id="executionModeNote">Cases run in Docker containers on the worker nodes.</span>
+                            <span class="baseline-value" id="executionModeNote" style="flex-basis: 100%;">Cases run in Docker containers on the worker nodes.</span>
+                        </div>
+                    </div>
+
+                    <!-- Worker Configuration -->
+                    <div class="form-group" id="workerSection">
+                        <label class="form-label">Worker Nodes</label>
+                        <div class="worker-list" id="workerList">
+                            <div class="worker-item">
+                                <span class="worker-ip">localhost</span>
+                                <button class="remove-worker-btn" onclick="removeWorker(this)" style="display: none;">×</button>
+                            </div>
+                        </div>
+                        <div class="worker-input-group">
+                            <input type="text" class="form-input add-worker-input" id="newWorkerInput" 
+                                placeholder="Enter worker IP or hostname">
+                            <button class="control-btn" onclick="addWorker()">Add Worker</button>
                         </div>
                     </div>
 
