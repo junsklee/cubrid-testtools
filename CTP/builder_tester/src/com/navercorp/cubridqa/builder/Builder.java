@@ -346,9 +346,6 @@ public class Builder {
                 }
                 request.put("executionMode", executionMode);
                 if ("consumer".equals(executionMode) && !request.optBoolean("buildOnly", false)) {
-                    if ("sql".equals(request.optString("testType", "shell"))) {
-                        throw new IllegalArgumentException("VM (regression) execution runs shell tests only");
-                    }
                     if (ConsumerPool.get() == null) {
                         throw new IllegalArgumentException("VM (regression) execution requested, but this Builder has no consumer queue "
                             + "(consumer_activemq_url in builder.conf)");
@@ -359,9 +356,6 @@ public class Builder {
                     request.put("workerIps", new JSONArray().put(BuilderTask.CONSUMER_WORKER));
                 }
                 if ("vm".equals(executionMode) && !request.optBoolean("buildOnly", false)) {
-                    if ("sql".equals(request.optString("testType", "shell"))) {
-                        throw new IllegalArgumentException("VM execution runs shell tests only");
-                    }
                     if (!request.has("workerIps") || request.getJSONArray("workerIps").length() == 0) {
                         List<String> vmTesters = config.getVmTesterNodes();
                         if (vmTesters.isEmpty()) {

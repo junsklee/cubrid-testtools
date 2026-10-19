@@ -1,6 +1,6 @@
 # VM mode (`execution_mode=vm`)
 
-VM mode runs shell cases on a dedicated QA VM the way QAHome regression runs them, so a
+VM mode runs shell and SQL cases on a dedicated QA VM the way QAHome regression runs them, so a
 case that passes in Builder-Tester is expected to pass in VM regression and vice versa.
 It trades the container mode's parallelism for fidelity: one case at a time per VM.
 
@@ -80,6 +80,8 @@ See `conf/tester_vm.conf`. VM-specific keys:
 | `vm_default_dbcharset` | (inherit) | Exported as `CUBRID_CHARSET` |
 | `vm_ignore_core_by_keywords` | (unset) | CTP's `ignore_core_by_keywords` (`EXCLUDED_CORES_BY_ASSERT_LINE`) |
 | `vm_keep_artifacts` | `fail` | Collect the case's files and `$CUBRID/log` after the run: `fail`, `always`, `never` |
+| `vm_sql_conf_rules` | `10.1.*,10.2.*=sql_dont_reuse_heap.conf` | SQL cases: `CTP/conf` file per build version (`patterns=conf;...`, job.conf `acceptversions` globs), as job.conf's `MKEY_CONFIG` |
+| `vm_sql_default_conf` | `sql_local.conf` | SQL cases: the conf when no rule matches (`run_sql.sh` without `MKEY_CONFIG`) |
 
 `test_read_timeout_minutes` (Builder -> Tester) must outlast one case plus an install.
 
@@ -96,7 +98,37 @@ Per attempt, under the request's `tests/` directory (also sent back to the build
   same files stays on the VM.
 - `..._runner.sh`: the exact script that ran, for reproducing by hand on the VM.
 
-SQL requests (`testType=sql`) are not supported in VM mode; send them to a Docker tester.
+## SQL cases on a VM
+
+SQL requests (`testType=sql`) run on VM testers too, the way QAHome SQL regression runs them
+(`common/ext/run_sql.sh`, then CTP's `sql/bin/run.sh`), with the VM's own CTP:
+
+1. The build is installed into `vm_cubrid_home` exactly as for shell cases (the two share it).
+2. The test DB is provisioned from a per-request copy of the VM's CTP (provisioning writes into
+   CTP: `Function_Db/<db>_qa.xml`, `local.properties`), with the SQL conf regression uses for the
+   build's version. QAHome's `job.conf` (on the message host) sends `MKEY_CONFIG=sql_dont_reuse_heap.conf`
+   with its 10.1 and 10.2 SQL jobs and no `MKEY_CONFIG` with the 11.x ones, for which `run_sql.sh`
+   uses `conf/sql_local.conf`. The tester reads the installed build's version from `cubrid_rel` and
+   picks the same file from the VM's `CTP/conf` (`vm_sql_conf_rules`, `vm_sql_default_conf`); if the
+   VM lacks it, it uses `conf/sql.conf` and says so in the case log. `run_sql.sh`'s steps are then
+   applied: keep only the parameters this build supports (`util_filter_supported_parameters.sh`)
+   and `test_mode=yes`. The VM's `conf/sql_runtime.conf` (whatever it ran last) is never used.
+   Provisioning first drops the previous test DB and restores `$CUBRID/conf` from the install
+   snapshot, then applies the conf sections, compiles the locales, creates the DB, loads the Java
+   stored procedures and starts the server and broker, as the Docker SQL executor does.
+3. Each case runs through CTP's ConsoleAgent against that DB and is compared with its
+   `answers/*.answer`.
+
+The DB stays up for the request's following cases, as in a regression run. It is provisioned
+again when the build changes, when it is no longer running (a shell case resets the VM's
+processes), after a case leaves a core file, for every retry attempt, and to re-verify a failed
+case (`sql_fresh_verify_on_fail`); Docker uses a fresh container for those. When the request ends
+(finalize or cancel), the DB is stopped.
+
+Testcases come from `sql_tc_dir` (default `~/cubrid-testcases`, the checkout regression uses),
+pinned per request like the shell checkout. Logs and artifacts are those of the Docker SQL
+executor with a `vm_sql_` prefix: `vm_sql_<commit>_<case>.log`, `vm_sql_diff_…`,
+`vm_sql_actual_…`, `vm_sql_expected_…`, `vm_sql_case_…`.
 
 ## Client integration (differences from Docker mode)
 
@@ -114,7 +146,7 @@ absent or `"docker"`) cannot use VM testers, and VM requests cannot use Docker t
 
 **Request fields.**
 - `executionMode`: `"vm"` (see above); `"docker"` is the default.
-- `testType`: `shell` (default). A VM request with `"testType": "sql"` is rejected.
+- `testType`: `shell` (default) or `sql` (see "SQL cases on a VM").
 - `tests`, `commits`, `buildType`, `shellTcBranch`, `shellTcCommit`, `runMode`, `minRuns`,
   `maxRuns`, `customShellScript`, `customAttachments`, `customScriptTestPath`: as in Docker
   mode. Each attempt starts from the case directory restored to `shellTcCommit`, then the
@@ -132,7 +164,7 @@ sum(case durations x runs) / number of VM nodes. A case is killed and failed aft
 |---|---|
 | `pass` | `.result` non-empty and no line contains `NOK` (after `do_check_more_errors`) |
 | `fail` | a `NOK` line (including `: NOK found core file ...` / `: NOK found fatal error ...`), `message: "blank result"`, or `message: "Case timeout after <n>s"` |
-| `environment_error` | CTP missing on the VM, case script not found, package download failed, unsafe `vm_cubrid_home`, or `testType=sql` |
+| `environment_error` | CTP missing on the VM (or, for SQL, its SQL tool or conf), case script not found, package download failed, unsafe `vm_cubrid_home`, or the SQL test DB could not be provisioned |
 | `build_error` | installing the build on the VM failed |
 | `flaky` | computed by the builder from mixed attempt results, as before |
 
@@ -156,7 +188,7 @@ keep it from the node list it sent, or recognise the `vm_` log-file prefix.
 
 ## VM (regression): QAHome regression VMs (`"executionMode": "consumer"`)
 
-VM (regression) execution, called consumer execution in the code and API, runs shell cases the
+VM (regression) execution, called consumer execution in the code and API, runs shell and SQL cases the
 same way as VM mode, but on the QAHome regression VMs
 while they are idle instead of on dedicated VM testers. The Builder cannot push cases to those
 VMs: they take jobs from the QAHome ActiveMQ queues. So the Builder puts messages on its own
@@ -252,7 +284,8 @@ Each consumer VM:
 ### Client integration
 
 Send `"executionMode": "consumer"` without `workerIps`; the request is rejected with HTTP 400
-if it names workers, is `testType=sql`, or the Builder has no consumer queue. `GET /health` on
+if it names workers or the Builder has no consumer queue. SQL requests run with the VM's
+`~/cubrid-testcases` (regression's `${CTP_HOME}/../cubrid-testcases`). `GET /health` on
 the Builder reports `consumerQueue` (`enabled`, `queue`, `maxParallel`, and per open request
 the counts of waiting and running cases, queued messages and runners). Fields, statuses and logs
 are as in VM mode. Expect cases to wait while the VMs run regression.

@@ -327,6 +327,7 @@ public final class ConsumerRunner {
         String userHome = System.getProperty("user.home");
         Properties conf = new Properties();
         conf.setProperty("shell_tc_dir", defaultShellTcDir(regression, userHome));
+        conf.setProperty("sql_tc_dir", defaultSqlTcDir(ctpHome, userHome));
         conf.setProperty("shell_tc_branch", "develop");
         conf.setProperty("shell_tc_preferred_remote", "upstream");
         conf.setProperty("work_dir", home.resolve("work").toString());
@@ -357,10 +358,11 @@ public final class ConsumerRunner {
         conf.setProperty("tester_port", String.valueOf(testerPort));
         // Only this runner talks to the tester: /test runs any script it is given
         conf.setProperty("tester_bind_address", "127.0.0.1");
-        // The testcase checkout belongs to regression: fetch the requested commit into it and run
-        // from a per-request worktree, but never check out, clean or reset its working tree
+        // The testcase checkouts belong to regression: fetch the requested commit into them and run
+        // from per-request worktrees, but never check out, clean or reset their working trees
         // (per_request mode fast-forwards the base checkout to the requested branch)
         conf.setProperty("shell_tc_sync_mode", "disabled");
+        conf.setProperty("sql_tc_sync_mode", "disabled");
         conf.setProperty("execution_mode", "vm");
         return conf;
     }
@@ -395,6 +397,17 @@ public final class ConsumerRunner {
             }
         }
         return userHome + "/cubrid-testcases-private-ex";
+    }
+
+    /**
+     * The SQL testcase checkout regression uses: run_sql.sh runs ${CTP_HOME}/../cubrid-testcases.
+     */
+    static String defaultSqlTcDir(Path ctpHome, String userHome) {
+        Path sibling = ctpHome.toAbsolutePath().normalize().getParent();
+        if (sibling != null && sibling.resolve("cubrid-testcases").resolve(".git").toFile().exists()) {
+            return sibling.resolve("cubrid-testcases").toString();
+        }
+        return userHome + "/cubrid-testcases";
     }
 
     static String sshPort(Properties regression) {

@@ -885,6 +885,20 @@ public class BuilderConfig {
         return vmProperty("vm_ignore_core_by_keywords", "");
     }
 
+    /**
+     * VM mode, SQL cases: which of the VM's CTP/conf files to provision with, by build version,
+     * as QAHome's job.conf picks MKEY_CONFIG for its SQL jobs: "patterns=conf;patterns=conf",
+     * patterns being job.conf acceptversions globs (10.1.*,10.2.*). Default: today's job.conf.
+     */
+    public String getVmSqlConfRules() {
+        return vmProperty("vm_sql_conf_rules", "10.1.*,10.2.*=sql_dont_reuse_heap.conf");
+    }
+
+    /** VM mode, SQL cases: the conf when no rule matches (run_sql.sh without MKEY_CONFIG). */
+    public String getVmSqlDefaultConf() {
+        return vmProperty("vm_sql_default_conf", "sql_local.conf");
+    }
+
     /** VM mode: when to archive the case directory after a run: fail (default), always or never. */
     public String getVmKeepArtifacts() {
         return vmProperty("vm_keep_artifacts", "fail").toLowerCase(Locale.ENGLISH);

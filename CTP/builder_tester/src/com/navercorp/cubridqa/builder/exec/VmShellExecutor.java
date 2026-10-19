@@ -36,7 +36,8 @@ import java.util.logging.Logger;
  */
 public class VmShellExecutor implements ExecutorStrategy {
     private static final String CUSTOM_ONLY_PATH = "custom_script_test";
-    private static final Object VM_LOCK = new Object();
+    /** ~/CUBRID, its processes and ~/.CUBRID_SHELL_FM are machine-wide: one VM case at a time (shell or SQL). */
+    static final Object VM_LOCK = new Object();
 
     private final Config config;
     private final BuildCache buildCache;
@@ -69,7 +70,7 @@ public class VmShellExecutor implements ExecutorStrategy {
         if (unsafe != null) {
             return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR).message(unsafe), metrics, startNs);
         }
-        Path ctpHome = resolveCtpHome();
+        Path ctpHome = resolveCtpHome(config);
         if (!Files.isRegularFile(ctpHome.resolve("shell/init_path/init.sh"))
                 || !Files.isRegularFile(ctpHome.resolve("shell/init_path/shell_utils.sh"))) {
             return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR)
@@ -216,7 +217,7 @@ public class VmShellExecutor implements ExecutorStrategy {
         return finish(result, metrics, startNs);
     }
 
-    private void ensureInstalled(Path pkg, String commitShort, Path cubridHome, Path ctpHome, Path workDir,
+    static void ensureInstalled(Path pkg, String commitShort, Path cubridHome, Path ctpHome, Path workDir,
                                  StringBuilder preamble, Logger testLogger) throws Exception {
         String marker = "package=" + pkg.getFileName() + " size=" + Files.size(pkg)
             + " mtime=" + Files.getLastModifiedTime(pkg).toMillis() + " commit=" + commitShort;
@@ -336,7 +337,7 @@ public class VmShellExecutor implements ExecutorStrategy {
         }
     }
 
-    private void resetProcesses(Path cubridHome, Path ctpHome, Path workDir, Logger testLogger) {
+    static void resetProcesses(Path cubridHome, Path ctpHome, Path workDir, Logger testLogger) {
         try {
             Path script = writeScript(workDir.resolve("vm_reset.sh"),
                 VmScriptFactory.createResetScript(cubridHome.toString(), ctpHome.toString()));
@@ -378,14 +379,14 @@ public class VmShellExecutor implements ExecutorStrategy {
     }
 
     /** Refuses install targets whose wipe would be destructive. */
-    private static String checkCubridHome(Path cubridHome, Path home) {
+    static String checkCubridHome(Path cubridHome, Path home) {
         if (cubridHome.getParent() == null || cubridHome.equals(home) || home.startsWith(cubridHome)) {
             return "Unsafe vm_cubrid_home: " + cubridHome;
         }
         return null;
     }
 
-    private Path resolveCtpHome() {
+    static Path resolveCtpHome(Config config) {
         String configured = config.getVmCtpHome();
         if (configured != null && !configured.isEmpty()) {
             return Paths.get(configured).toAbsolutePath().normalize();

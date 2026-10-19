@@ -74,6 +74,7 @@ public class FinalizeRequestHandler implements HttpHandler {
             if (sqlTcSync != null) {
                 sqlTcSync.cleanupRequestWorkspace(logger, requestId);
             }
+            RequestEndHooks.requestEnded(requestId, false);
 
             try {
                 RequestLogManager.getInstance().closeRequestLoggers(requestId);

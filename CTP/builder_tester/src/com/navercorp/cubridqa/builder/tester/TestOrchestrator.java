@@ -5,6 +5,7 @@ import com.navercorp.cubridqa.builder.exec.StandardDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.OptimizedDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.SqlDockerExecutor;
 import com.navercorp.cubridqa.builder.exec.VmShellExecutor;
+import com.navercorp.cubridqa.builder.exec.VmSqlExecutor;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.tester.stats.TestExecutionMetrics;
 import com.navercorp.cubridqa.builder.tester.stats.TestObservation;
@@ -37,6 +38,7 @@ public class TestOrchestrator {
     private final OptimizedDockerExecutor optimizedDockerExecutor;
     private final SqlDockerExecutor sqlDockerExecutor;
     private volatile VmShellExecutor vmShellExecutor;
+    private volatile VmSqlExecutor vmSqlExecutor;
     private final boolean useDocker;
     private final Object dockerManager; // DockerManager - using Object to avoid compile dependency
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
@@ -89,6 +91,11 @@ public class TestOrchestrator {
     /** Executor for execution_mode=vm (shell cases on a dedicated QA VM). */
     public void setVmShellExecutor(VmShellExecutor vmShellExecutor) {
         this.vmShellExecutor = vmShellExecutor;
+    }
+
+    /** Executor for SQL cases under execution_mode=vm (the VM's own CTP SQL tool). */
+    public void setVmSqlExecutor(VmSqlExecutor vmSqlExecutor) {
+        this.vmSqlExecutor = vmSqlExecutor;
     }
 
     /**
@@ -415,7 +422,15 @@ public class TestOrchestrator {
         
         boolean keepAliveRequested = testRequest.isKeepAlive();
         try {
-            // SQL testcases have a dedicated Docker execution path (no direct fallback)
+            // SQL testcases: the VM's own CTP on a VM tester, else a dedicated Docker path (no direct fallback)
+            if (testRequest.isSqlTest() && config.isVmMode()) {
+                if (vmSqlExecutor == null) {
+                    throw new IllegalStateException("execution_mode=vm but no VM SQL executor is configured");
+                }
+                testLogger.info("Using VM SQL execution (the VM's CTP SQL tool, one case at a time)");
+                TestResult result = vmSqlExecutor.execute(testRequest, workDir, testLogger);
+                return new RunOutcome(testRequest, result, convertToJSONObject(result));
+            }
             if (testRequest.isSqlTest()) {
                 if (sqlDockerExecutor == null || !useDocker || !isDockerAvailable()) {
                     TestResult result = TestResult.builder()

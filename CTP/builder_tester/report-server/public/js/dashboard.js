@@ -67,8 +67,8 @@
             if (!dockerRadio || !vmRadio) return;
             const sql = getSelectedTestType() === 'sql';
             const consumerEnabled = !!(consumerQueue && consumerQueue.enabled);
-            vmRadio.disabled = sql;
-            if (consumerRadio) consumerRadio.disabled = sql || !consumerEnabled;
+            vmRadio.disabled = false;
+            if (consumerRadio) consumerRadio.disabled = !consumerEnabled;
             if ((vmRadio.checked && vmRadio.disabled) || (consumerRadio && consumerRadio.checked && consumerRadio.disabled)) {
                 dockerRadio.checked = true;
             }
@@ -80,14 +80,13 @@
             if (note) {
                 if (mode === 'vm') {
                     note.textContent = vmTesters.length > 0
-                        ? 'Shell cases run one at a time on each VM tester below, in parallel across them.'
+                        ? (sql ? 'SQL' : 'Shell') + ' cases run one at a time on each VM tester below, in parallel across them'
+                            + (sql ? ', with the VM\'s own CTP SQL tool and SQL conf.' : '.')
                         : 'Add at least one VM tester below (none are configured on the Builder in vm_tester_nodes).';
                 } else if (mode === 'consumer') {
-                    note.textContent = 'Shell cases run on idle QAHome regression VMs that take the request from '
+                    note.textContent = (sql ? 'SQL' : 'Shell') + ' cases run on idle QAHome regression VMs that take the request from '
                         + consumerQueue.queue + ', one case at a time per VM, on up to ' + consumerQueue.maxParallel
                         + ' VMs. Cases wait while the VMs run regression.';
-                } else if (sql) {
-                    note.textContent = 'Cases run in Docker containers on the worker nodes. VM and VM (regression) execution support shell tests only.';
                 } else if (consumerRadio && !consumerEnabled) {
                     note.textContent = 'Cases run in Docker containers on the worker nodes. VM (regression): not configured on the Builder (consumer_activemq_url).';
                 } else {
