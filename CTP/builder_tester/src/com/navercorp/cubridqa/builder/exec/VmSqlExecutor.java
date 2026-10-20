@@ -110,27 +110,23 @@ public class VmSqlExecutor implements ExecutorStrategy {
                 .message("Failed to install build: " + e.getMessage()), metrics, startNs);
         }
 
+        String safeRequest = safe(request.getRequestId() == null ? "adhoc" : request.getRequestId());
+        Path workspace = Paths.get(config.getWorkDir()).toAbsolutePath().normalize().resolve("sql_vm").resolve(safeRequest);
+
         // The SQL conf regression uses for this build: job.conf's MKEY_CONFIG for the version's SQL
-        // job, else run_sql.sh's default (conf/sql_local.conf); conf/sql.conf when the VM lacks it.
+        // job, else run_sql.sh's default (conf/sql_local.conf). A shell VM's CTP usually has neither;
+        // then Builder-Tester's copy of the regression conf, and conf/sql.conf only without one.
         String buildVersion = installedVersion(cubridHome, workDir);
         String wantedConf = selectSqlConf(buildVersion, config.getVmSqlConfRules(), config.getVmSqlDefaultConf());
-        Path sqlConf = ctpHome.resolve("conf").resolve(wantedConf).normalize();
-        if (!sqlConf.startsWith(ctpHome.resolve("conf")) || !Files.isRegularFile(sqlConf)) {
-            Path fallback = ctpHome.resolve("conf").resolve("sql.conf");
-            if (!Files.isRegularFile(fallback)) {
-                return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR)
-                    .message("Neither conf/" + wantedConf + " nor conf/sql.conf is in " + ctpHome), metrics, startNs);
-            }
-            preamble.append("[builder-tester vm] WARNING: regression provisions build ").append(buildVersion)
-                .append(" with conf/").append(wantedConf).append(", which this VM's CTP lacks; using conf/sql.conf\n");
-            testLogger.warning("conf/" + wantedConf + " missing in " + ctpHome + "; using conf/sql.conf");
-            sqlConf = fallback;
+        Path sqlConf;
+        try {
+            sqlConf = resolveSqlConf(ctpHome, wantedConf, workspace, buildVersion, preamble, testLogger);
+        } catch (IOException e) {
+            return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR).message(e.getMessage()), metrics, startNs);
         }
         preamble.append("[builder-tester vm] SQL conf: ").append(sqlConf).append(" (build ").append(buildVersion).append(")\n");
 
         // 2. Testcases: the request's pinned worktree (or an empty root for an ad-hoc case)
-        String safeRequest = safe(request.getRequestId() == null ? "adhoc" : request.getRequestId());
-        Path workspace = Paths.get(config.getWorkDir()).toAbsolutePath().normalize().resolve("sql_vm").resolve(safeRequest);
         Path repoRoot;
         Path caseFile = null;
         try {
@@ -399,6 +395,42 @@ public class VmSqlExecutor implements ExecutorStrategy {
     static String parseVersion(String cubridRelOutput) {
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\((\\d+\\.\\d+\\.\\d+\\.\\d+)").matcher(cubridRelOutput);
         return m.find() ? m.group(1) : null;
+    }
+
+    /** Where Builder-Tester's copies of regression SQL confs live (jar resources). */
+    static final String BUNDLED_CONF_DIR = "vm_sql_conf/";
+
+    /**
+     * The file to provision with: the VM's CTP/conf/&lt;wanted&gt;, else Builder-Tester's copy of it
+     * (written to the request workspace), else the VM's conf/sql.conf with a warning.
+     */
+    static Path resolveSqlConf(Path ctpHome, String wanted, Path workspace, String buildVersion,
+                               StringBuilder preamble, Logger testLogger) throws IOException {
+        Path confDir = ctpHome.resolve("conf");
+        Path vmConf = confDir.resolve(wanted).normalize();
+        if (vmConf.startsWith(confDir) && Files.isRegularFile(vmConf)) {
+            return vmConf;
+        }
+        if (wanted.matches("[A-Za-z0-9_.-]+")) {
+            try (java.io.InputStream bundled = VmSqlExecutor.class.getResourceAsStream(BUNDLED_CONF_DIR + wanted)) {
+                if (bundled != null) {
+                    Path copy = workspace.resolve("regression_conf").resolve(wanted);
+                    Files.createDirectories(copy.getParent());
+                    Files.copy(bundled, copy, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    preamble.append("[builder-tester vm] this VM's CTP has no conf/").append(wanted)
+                        .append("; using Builder-Tester's copy of the regression conf (cubrid-testtools doc/sql_guide.md)\n");
+                    return copy;
+                }
+            }
+        }
+        Path fallback = confDir.resolve("sql.conf");
+        if (!Files.isRegularFile(fallback)) {
+            throw new IOException("Neither conf/" + wanted + " nor conf/sql.conf is in " + ctpHome);
+        }
+        preamble.append("[builder-tester vm] WARNING: regression provisions build ").append(buildVersion)
+            .append(" with conf/").append(wanted).append(", which neither this VM's CTP nor Builder-Tester has; using conf/sql.conf\n");
+        testLogger.warning("conf/" + wanted + " missing in " + ctpHome + " and not bundled; using conf/sql.conf");
+        return fallback;
     }
 
     /** The installed build's version, from its cubrid_rel. */

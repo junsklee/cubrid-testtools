@@ -115,8 +115,11 @@ SQL requests (`testType=sql`) run on VM testers too, the way QAHome SQL regressi
    build's version. QAHome's `job.conf` (on the message host) sends `MKEY_CONFIG=sql_dont_reuse_heap.conf`
    with its 10.1 and 10.2 SQL jobs and no `MKEY_CONFIG` with the 11.x ones, for which `run_sql.sh`
    uses `conf/sql_local.conf`. The tester reads the installed build's version from `cubrid_rel` and
-   picks the same file from the VM's `CTP/conf` (`vm_sql_conf_rules`, `vm_sql_default_conf`); if the
-   VM lacks it, it uses `conf/sql.conf` and says so in the case log. `run_sql.sh`'s steps are then
+   picks the same file from the VM's `CTP/conf` (`vm_sql_conf_rules`, `vm_sql_default_conf`). A
+   shell VM's CTP usually has no SQL regression conf: then Builder-Tester's copy is used
+   (`exec/vm_sql_conf/sql_local.conf`, the conf `doc/sql_guide.md` "3.2 Installation" has SQL VMs
+   set up), and only without a copy (`sql_dont_reuse_heap.conf`, whose content is not documented)
+   `conf/sql.conf`, with a warning in the case log. `run_sql.sh`'s steps are then
    applied: keep only the parameters this build supports (`util_filter_supported_parameters.sh`)
    and `test_mode=yes`. The VM's `conf/sql_runtime.conf` (whatever it ran last) is never used.
    Provisioning first drops the previous test DB and restores `$CUBRID/conf` from the install
