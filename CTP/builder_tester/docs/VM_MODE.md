@@ -36,7 +36,9 @@ the request are applied after the restore.
 
 ## Setting up a VM
 
-The VM is a regular QA regression VM (or one set up the same way):
+The VM is a regular QA regression VM (or one set up the same way). For a local stand-in that runs
+in a container on the Builder host, set up like the shell regression VM 192.168.2.152 (user
+`shell`, packages, locales, dblink assets), see `vm_sim/README.md`.
 
 1. A non-root user with `~/.cubrid.sh` sourced from its login profile, and the packages,
    locales and kernel settings regression uses (`core_pattern` writing `core.*` into the
