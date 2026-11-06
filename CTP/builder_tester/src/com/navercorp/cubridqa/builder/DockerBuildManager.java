@@ -179,6 +179,10 @@ public class DockerBuildManager {
             baseDockerCmd.add("CXX=ccache g++");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_DIR=/work/.ccache");
+            // ccache before 3.3 (3.1.6 in cubridci:develop) compiles the preprocessed output on a miss,
+            // which has no comments: every /* fall through */ becomes an -Werror=implicit-fallthrough error.
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_CPP2=1");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_COMPILERCHECK=" + config.getCcacheCompilerCheck());
             baseDockerCmd.add("-e");
@@ -483,6 +487,10 @@ public class DockerBuildManager {
             baseDockerCmd.add("CXX=ccache g++");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_DIR=/work/.ccache");
+            // ccache before 3.3 (3.1.6 in cubridci:develop) compiles the preprocessed output on a miss,
+            // which has no comments: every /* fall through */ becomes an -Werror=implicit-fallthrough error.
+            baseDockerCmd.add("-e");
+            baseDockerCmd.add("CCACHE_CPP2=1");
             baseDockerCmd.add("-e");
             baseDockerCmd.add("CCACHE_COMPILERCHECK=" + config.getCcacheCompilerCheck());
             baseDockerCmd.add("-e");

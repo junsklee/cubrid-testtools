@@ -195,6 +195,14 @@ A good cache hit rate is typically above 70% for incremental builds.
 2. Ensure source files aren't being modified unnecessarily
 3. Verify ccache_compilercheck setting
 
+### `this statement may fall through [-Werror=implicit-fallthrough=]`
+
+A Release build fails on a `switch` case that is marked with a `/* fall through */`
+comment. ccache before 3.3 (`cubridci/cubridci:develop` has 3.1.6) compiles the
+preprocessed output on a cache miss, and preprocessing removes comments, so GCC 8
+no longer sees the marker; the engine's `-Werror` turns the warning into an error.
+The builder sets `CCACHE_CPP2=1` so ccache compiles the original source instead.
+
 ### Cache Directory Full
 
 1. Increase max_size in configuration
@@ -232,4 +240,5 @@ These environment variables are automatically set when ccache is enabled:
 - `CCACHE_COMPILERCHECK=content`
 - `CCACHE_HARDLINK=1`
 - `CCACHE_MAXSIZE=5G`
+- `CCACHE_CPP2=1` (compile the source on a miss, not the preprocessed output; see Troubleshooting)
 - `MAKEFLAGS=-jN` (where N is the number of parallel jobs)

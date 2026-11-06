@@ -863,6 +863,8 @@ public class BuilderTask {
                 wtPb.environment().put("CC", "ccache gcc");
                 wtPb.environment().put("CXX", "ccache g++");
                 wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
+                // Compile the source, not the comment-less preprocessed output (see DockerBuildManager)
+                wtPb.environment().put("CCACHE_CPP2", "1");
                 wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
                 wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
                 wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
@@ -1000,38 +1002,39 @@ public class BuilderTask {
                     i + 1, commits.length(), normalizedShort, assignedNode));
 
                 String buildPackage = null;
-
-                // Check if assigned node is localhost
-                if (isCancelRequested()) {
-                    workloadDistributor.completeBuild(assignedNode, normalizedCommit, null);
-                    break;
-                }
-                if (workloadDistributor.isNodeLocal(assignedNode)) {
-                    // Build locally
-                    taskLogger.info("Building locally on " + assignedNode);
-                    Path workDir = Files.createTempDirectory(
-                        Paths.get(config.getWorkDir()), "build_" + normalizedShort + "_");
-                    buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit, commitBuildMode);
-                } else {
-                    // Build remotely
-                    taskLogger.info("Triggering remote build on " + assignedNode);
-                    try {
-                        JSONObject result = RemoteBuildClient.triggerRemoteBuild(
-                            assignedNode, normalizedCommit, buildType, baselineCommit, commitBuildMode);
-
-                        if ("success".equals(result.optString("status"))) {
-                            buildPackage = result.optString("packagePath");
-                            taskLogger.info("Remote build succeeded: " + buildPackage);
-                        } else {
-                            taskLogger.warning("Remote build failed: " + result.optString("message"));
-                        }
-                    } catch (IOException e) {
-                        taskLogger.log(Level.SEVERE, "Remote build request failed", e);
+                try {
+                    // Check if assigned node is localhost
+                    if (isCancelRequested()) {
+                        break;
                     }
-                }
+                    if (workloadDistributor.isNodeLocal(assignedNode)) {
+                        // Build locally
+                        taskLogger.info("Building locally on " + assignedNode);
+                        Path workDir = Files.createTempDirectory(
+                            Paths.get(config.getWorkDir()), "build_" + normalizedShort + "_");
+                        buildPackage = buildCommit(normalizedCommit, buildType, workDir.toFile(), baselineCommit, commitBuildMode);
+                    } else {
+                        // Build remotely
+                        taskLogger.info("Triggering remote build on " + assignedNode);
+                        try {
+                            JSONObject result = RemoteBuildClient.triggerRemoteBuild(
+                                assignedNode, normalizedCommit, buildType, baselineCommit, commitBuildMode);
 
-                // Mark build complete in WorkloadDistributor
-                workloadDistributor.completeBuild(assignedNode, normalizedCommit, buildPackage);
+                            if ("success".equals(result.optString("status"))) {
+                                buildPackage = result.optString("packagePath");
+                                taskLogger.info("Remote build succeeded: " + buildPackage);
+                            } else {
+                                taskLogger.warning("Remote build failed: " + result.optString("message"));
+                            }
+                        } catch (IOException e) {
+                            taskLogger.log(Level.SEVERE, "Remote build request failed", e);
+                        }
+                    }
+                } finally {
+                    // Mark build complete in WorkloadDistributor, also when buildCommit throws: a node left
+                    // BUILDING makes every later commit wait 5 minutes and fail without building
+                    workloadDistributor.completeBuild(assignedNode, normalizedCommit, buildPackage);
+                }
 
                 if (buildPackage != null && !buildPackage.isEmpty()) {
                     builtPackages.put(commit, buildPackage);
@@ -1314,6 +1317,8 @@ public class BuilderTask {
                 wtPb.environment().put("CC", "ccache gcc");
                 wtPb.environment().put("CXX", "ccache g++");
                 wtPb.environment().put("CCACHE_DIR", config.getCcacheDir());
+                // Compile the source, not the comment-less preprocessed output (see DockerBuildManager)
+                wtPb.environment().put("CCACHE_CPP2", "1");
                 wtPb.environment().put("CCACHE_COMPILERCHECK", config.getCcacheCompilerCheck());
                 wtPb.environment().put("CCACHE_HARDLINK", config.getCcacheHardlink() ? "1" : "0");
                 wtPb.environment().put("CCACHE_MAXSIZE", config.getCcacheMaxSize());
