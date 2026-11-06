@@ -203,6 +203,20 @@ preprocessed output on a cache miss, and preprocessing removes comments, so GCC 
 no longer sees the marker; the engine's `-Werror` turns the warning into an error.
 The builder sets `CCACHE_CPP2=1` so ccache compiles the original source instead.
 
+### The build image has no ccache
+
+`cubridci/cubridci:develop` dropped ccache on 2026-11-03. At startup the Builder
+checks `docker_build_image`; if it has no ccache, the Builder builds a local
+image, `cubridci-local:<tag>-ccache` (for example `cubridci-local:develop-ccache`),
+that adds it and runs builds there. On CentOS 6 that is EPEL 6's ccache 3.1.6
+from archives.fedoraproject.org, checked against the image's EPEL key, so the
+existing cache keeps hitting; on other images, `yum install ccache`. The log says
+`Builds run in <image>`. When the base image is unchanged, Docker's layer cache
+makes this instant. If the image cannot be built, the Builder logs
+`Could not add ccache` and builds compile without ccache: the build script then
+prints `[WARN] ccache is not in the build image; compiling without it` and uses
+plain `gcc`/`g++`.
+
 ### Cache Directory Full
 
 1. Increase max_size in configuration

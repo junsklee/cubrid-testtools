@@ -21,12 +21,19 @@ public class DockerBuildManager {
     private final BuilderConfig config;
     private boolean dockerAvailable;
     private boolean imageReady;
-    
+    // docker_build_image, or the local image that adds ccache to it (see ensureCcache)
+    private volatile String buildImage;
+
+    // ccache 3.1.6, as cubridci/cubridci:develop carried it until 2026-11-03
+    private static final String EL6_CCACHE_RPM =
+        "https://archives.fedoraproject.org/pub/archive/epel/6/x86_64/Packages/c/ccache-3.1.6-2.el6.x86_64.rpm";
+
     public DockerBuildManager(BuilderConfig config) {
         this.config = config;
         this.dockerAvailable = DockerUtils.isDockerAvailable();
         this.imageReady = false;
-        
+        this.buildImage = config.getDockerBuildImage();
+
         if (!dockerAvailable) {
             logger.warning("Docker is not available. Falling back to direct build.");
         }
@@ -44,8 +51,57 @@ public class DockerBuildManager {
             logger.info("Building Docker image from source");
             buildCustomImage();
         }
-        
+        if (config.isCcacheEnabled()) {
+            buildImage = ensureCcache(config.getDockerBuildImage());
+        }
+
         imageReady = true;
+    }
+
+    /**
+     * Returns an image with ccache for builds that pass CC="ccache gcc". cubridci/cubridci:develop
+     * dropped ccache on 2026-11-03; an image without it gets a local derivative that adds it back
+     * (the same 3.1.6 on CentOS 6, so the existing cache still hits). Docker's layer cache makes
+     * this instant until the base image changes. On failure the base image is used, and the build
+     * script compiles without ccache.
+     */
+    private String ensureCcache(String image) {
+        try {
+            Process check = new ProcessBuilder("docker", "run", "--rm", "--entrypoint", "/bin/sh", image,
+                                               "-c", "command -v ccache")
+                .redirectErrorStream(true).redirectOutput(new File("/dev/null")).start();
+            if (check.waitFor() == 0) {
+                return image;
+            }
+            String name = image.substring(image.lastIndexOf('/') + 1);
+            String tag = name.substring(name.lastIndexOf(':') + 1).replaceAll("[^A-Za-z0-9_.-]", "_");
+            String derived = "cubridci-local:" + tag + "-ccache";
+            logger.info(image + " has no ccache; building " + derived + " with it");
+            String dockerfile = "FROM " + image + "\n"
+                + "RUN if grep -q 'release 6' /etc/redhat-release; then"
+                + " rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-6 && curl -fsSL -o /tmp/ccache.rpm " + EL6_CCACHE_RPM
+                + " && rpm -K /tmp/ccache.rpm && rpm -i /tmp/ccache.rpm && rm -f /tmp/ccache.rpm;"
+                + " else yum install -y ccache && yum clean all; fi\n";
+            ProcessBuilder pb = new ProcessBuilder("docker", "build", "-t", derived, "-");
+            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+            Process build = pb.start();
+            try (OutputStream in = build.getOutputStream()) {
+                in.write(dockerfile.getBytes("UTF-8"));
+            }
+            if (!build.waitFor(10, java.util.concurrent.TimeUnit.MINUTES)) {
+                build.destroyForcibly();
+                throw new IOException("docker build timed out");
+            }
+            if (build.exitValue() != 0) {
+                throw new IOException("docker build exited with " + build.exitValue());
+            }
+            logger.info("Builds run in " + derived);
+            return derived;
+        } catch (Exception e) {
+            logger.warning("Could not add ccache to " + image + " (" + e.getMessage() + "); builds compile without ccache");
+            return image;
+        }
     }
     
     private void pullPrebuiltImage() throws IOException, InterruptedException {
@@ -330,7 +386,7 @@ public class DockerBuildManager {
             dockerCommand.add("--name");
             dockerCommand.add(containerName);
             DockerLabels.addRequestLabel(dockerCommand, requestId);
-            dockerCommand.add(config.getDockerBuildImage());
+            dockerCommand.add(buildImage);
             // Run build script in login shell to ensure git-worktree is available and PATH updated
             dockerCommand.add("bash");
             dockerCommand.add("-lc");
@@ -589,6 +645,10 @@ public class DockerBuildManager {
                 writer.println("  ccache -z || true");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
+                writer.println("else");
+                writer.println("  # CC=\"ccache gcc\" without ccache: cmake would find no compiler");
+                writer.println("  echo '[WARN] ccache is not in the build image; compiling without it' >&2");
+                writer.println("  export CC=gcc CXX=g++");
                 writer.println("fi");
                 writer.println();
             }
@@ -901,6 +961,10 @@ public class DockerBuildManager {
                 writer.println("  # hard_link is controlled via CCACHE_HARDLINK env; avoid unsupported ccache flags on older versions");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
+                writer.println("else");
+                writer.println("  # CC=\"ccache gcc\" without ccache: cmake would find no compiler");
+                writer.println("  echo '[WARN] ccache is not in the build image; compiling without it' >&2");
+                writer.println("  export CC=gcc CXX=g++");
                 writer.println("fi");
                 writer.println();
             }
@@ -1198,6 +1262,10 @@ public class DockerBuildManager {
                 writer.println("  ccache -z || true");
                 writer.println("  echo 'Ccache status before build:'");
                 writer.println("  ccache -s || true");
+                writer.println("else");
+                writer.println("  # CC=\"ccache gcc\" without ccache: cmake would find no compiler");
+                writer.println("  echo '[WARN] ccache is not in the build image; compiling without it' >&2");
+                writer.println("  export CC=gcc CXX=g++");
                 writer.println("fi");
                 writer.println();
             }
@@ -1950,7 +2018,7 @@ public class DockerBuildManager {
     private String resolveBuildImageId() {
         try {
             Process p = new ProcessBuilder("docker", "image", "inspect", "--format", "{{.Id}}",
-                                           config.getDockerBuildImage()).start();
+                                           buildImage).start();
             String id;
             try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                 id = r.readLine();
