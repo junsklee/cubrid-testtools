@@ -38,6 +38,7 @@ import com.navercorp.cubridqa.cqt.console.util.CubridConnection;
 import com.navercorp.cubridqa.cqt.console.util.EnvGetter;
 import com.navercorp.cubridqa.cqt.console.util.MyDataSource;
 import com.navercorp.cubridqa.cqt.console.util.MyDriverManager;
+import com.navercorp.cubridqa.cqt.console.util.PerfRecorder;
 import com.navercorp.cubridqa.cqt.console.util.StringUtil;
 import com.navercorp.cubridqa.cqt.console.util.SystemUtil;
 import com.navercorp.cubridqa.cqt.console.util.TestUtil;
@@ -482,6 +483,7 @@ public class ConsoleDAO extends Executor {
     private void executeCall(Connection conn, Sql sql) {
         CallableStatement ps = null;
         try {
+            PerfRecorder.begin(sql);
             ps = conn.prepareCall(sql.getScript());
             List<SqlParam> paramList = sql.getParamList();
             if (paramList != null) {
@@ -505,6 +507,7 @@ public class ConsoleDAO extends Executor {
 
             boolean isRs = ps.execute();
             getAllResult(ps, isRs, sql);
+            PerfRecorder.end(sql);
 
             if (paramList != null) {
                 StringBuilder sb = new StringBuilder();
@@ -531,6 +534,7 @@ public class ConsoleDAO extends Executor {
                 sb = null;
             }
         } catch (SQLException e) {
+            PerfRecorder.fail(sql, e.getErrorCode());
             this.onMessage(e.getMessage());
             sql.setResult(getExceptionMessage(e, test.isEditorExecute()));
         } finally {
@@ -556,6 +560,7 @@ public class ConsoleDAO extends Executor {
     private void executePrepareStatement(Connection conn, Sql sql, boolean isPrintQueryPlan) {
         PreparedStatement ps = null;
         try {
+            PerfRecorder.begin(sql);
             ps = conn.prepareStatement(sql.getScript());
             List<SqlParam> paramList = sql.getParamList();
             if (paramList != null) {
@@ -634,6 +639,7 @@ public class ConsoleDAO extends Executor {
               isRs = ps.execute();
             }
             getAllResult(ps, isRs, sql);
+            PerfRecorder.end(sql);
             if (((isPrintQueryPlan && script.startsWith("SELECT")) || sql.isQueryplan()) || isOnlyJoinGraph || isFullplan) {
                 Method method = ps.getClass().getMethod("getQueryplan", new Class[] {});
                 String queryPlan = (String) method.invoke(ps, new Object[] {});
@@ -651,9 +657,11 @@ public class ConsoleDAO extends Executor {
                 queryPlan = null;
             }
         } catch (SQLException e) {
+            PerfRecorder.fail(sql, e.getErrorCode());
             this.onMessage(e.getMessage());
             sql.setResult(getExceptionMessage(e, test.isEditorExecute()));
         } catch (Exception e2) {
+            PerfRecorder.fail(sql, -10000);
             this.onMessage(e2.getMessage());
             sql.setResult("Error:-" + 10000 + System.getProperty("line.separator"));
         } finally {
@@ -681,8 +689,10 @@ public class ConsoleDAO extends Executor {
         try {
             st = conn.createStatement();
             // System.out.println("sql.getScript: " + sql.getScript());
+            PerfRecorder.begin(sql);
             boolean isRs = st.execute(sql.getScript());
             getAllResult(st, isRs, sql);
+            PerfRecorder.end(sql);
             String script = sql.getScript().trim().toUpperCase();
             boolean isOnlyJoinGraph = sql.isJoingraph();
             boolean isFullplan = sql.isFullplan();
@@ -703,6 +713,7 @@ public class ConsoleDAO extends Executor {
                 queryPlan = null;
             }
         } catch (SQLException e) {
+            PerfRecorder.fail(sql, e.getErrorCode());
             sql.setResult(getExceptionMessage(e, test.isEditorExecute()));
             // e.printStackTrace();
             this.onMessage(e.getMessage());
@@ -853,6 +864,7 @@ public class ConsoleDAO extends Executor {
                 if (updateCount == -1) {
                     break;
                 } else {
+                    PerfRecorder.updateCount(sql, updateCount);
                     sql.setResult(
                             sql.getResult() + updateCount + System.getProperty("line.separator"));
                 }
@@ -872,6 +884,7 @@ public class ConsoleDAO extends Executor {
      */
     private void getResult(ResultSet rs, Sql sql) {
         StringBuilder ret = new StringBuilder();
+        long perfPausedAt = 0;
         try {
             ResultSetMetaData meta = rs.getMetaData();
             int columnCount = meta.getColumnCount();
@@ -902,6 +915,7 @@ public class ConsoleDAO extends Executor {
                 }
                 ret.append(System.getProperty("line.separator"));
             }
+            perfPausedAt = PerfRecorder.pause(sql, ret);
             this.onMessage("+++++++++++++++++++record begin++++++++++++++++++++");
             this.onMessage(ret.toString());
             this.onMessage("+++++++++++++++++++record end++++++++++++++++++++");
@@ -931,6 +945,7 @@ public class ConsoleDAO extends Executor {
         } else {
             sql.setResult(sql.getResult() + ret.toString() + System.getProperty("line.separator"));
         }
+        PerfRecorder.resume(sql, perfPausedAt);
     }
 
      private Boolean isNumeric(String str) {

@@ -44,6 +44,7 @@ import com.navercorp.cubridqa.cqt.console.util.ErrorInterruptUtil;
 import com.navercorp.cubridqa.cqt.console.util.FileUtil;
 import com.navercorp.cubridqa.cqt.console.util.JunitXmlWriter;
 import com.navercorp.cubridqa.cqt.console.util.LogUtil;
+import com.navercorp.cubridqa.cqt.console.util.PerfRecorder;
 import com.navercorp.cubridqa.cqt.console.util.RepositoryPathUtil;
 import com.navercorp.cubridqa.cqt.console.util.StringUtil;
 import com.navercorp.cubridqa.cqt.console.util.SystemUtil;
@@ -1270,6 +1271,17 @@ public class ConsoleBO extends Executor {
                         // System.out.println ("script = " + sql.getScript());
 
                         dao.execute(conn, sql, caseResult.isPrintQueryPlan());
+                        if (PerfRecorder.ENABLED) {
+                            PerfRecorder.record(
+                                    dao,
+                                    conn,
+                                    caseFile,
+                                    i,
+                                    k,
+                                    sql,
+                                    k + 1 < sqlList.size() ? (Sql) sqlList.get(k + 1) : null,
+                                    "on".equalsIgnoreCase(test.getServerMessage()));
+                        }
 
                         if (i == 0) {
                             result.append("===================================================");
@@ -1285,6 +1297,7 @@ public class ConsoleBO extends Executor {
                 long totalTime = System.currentTimeMillis() - startTime;
                 caseResult.setTotalTime(totalTime);
                 caseResult.setSiteRunTimes(1);
+                PerfRecorder.fileEnd(caseFile, i, sqlList.size(), totalTime);
             } catch (Exception e) {
                 if (i == 0) {
                     result.append(e.getMessage() + System.getProperty("line.separator"));

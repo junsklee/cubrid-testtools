@@ -57,6 +57,9 @@ public class Sql {
 
     private String connId = "";
 
+    // per-statement timing state of the sqlperf hook (PerfRecorder); null unless CQT_PERF_DIR is set
+    private Object perf;
+
     public Sql(String connId, String src, List<SqlParam> paramList, boolean isCall) {
         setConnId(connId);
         setScript(src);
@@ -149,6 +152,14 @@ public class Sql {
 
     public void setTime(long time) {
         this.time = time;
+    }
+
+    public Object getPerf() {
+        return perf;
+    }
+
+    public void setPerf(Object perf) {
+        this.perf = perf;
     }
 
     public String getConnId() {
