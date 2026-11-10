@@ -88,18 +88,26 @@ public class PerfRecorder {
     }
 
     public static void begin(Sql sql) {
-        if (!ENABLED) {
-            return;
+        try {
+            if (!ENABLED) {
+                return;
+            }
+            State s = new State();
+            sql.setPerf(s);
+            s.start = System.nanoTime();
+        } catch (Throwable t) {
+            // never let the hook change what CQT does
         }
-        State s = new State();
-        sql.setPerf(s);
-        s.start = System.nanoTime();
     }
 
     public static void end(Sql sql) {
-        State s = state(sql);
-        if (s != null && s.nanos < 0) {
-            s.nanos = System.nanoTime() - s.start - s.excluded;
+        try {
+            State s = state(sql);
+            if (s != null && s.nanos < 0) {
+                s.nanos = System.nanoTime() - s.start - s.excluded;
+            }
+        } catch (Throwable t) {
+            // never let the hook change what CQT does
         }
     }
 
@@ -108,42 +116,59 @@ public class PerfRecorder {
      * parameters) is CQT's, not the statement's, and leaves the record as it was.
      */
     public static void fail(Sql sql, int errorCode) {
-        State s = state(sql);
-        if (s != null && s.nanos < 0) {
-            end(sql);
-            s.err = errorCode == 0 ? -1 : errorCode;
+        try {
+            State s = state(sql);
+            if (s != null && s.nanos < 0) {
+                end(sql);
+                s.err = errorCode == 0 ? -1 : errorCode;
+            }
+        } catch (Throwable t) {
+            // never let the hook change what CQT does
         }
     }
 
     /** Called right after the fetch loop of a result set: rows read so far, then CQT's own work. */
     public static long pause(Sql sql, CharSequence text) {
-        State s = state(sql);
-        if (s == null) {
+        try {
+            State s = state(sql);
+            if (s == null) {
+                return 0;
+            }
+            long now = System.nanoTime();
+            String[] ls = text.toString().split("\r?\n", -1);
+            // line 0 is the column header; the last element is what follows the final line separator
+            for (int i = 1; i < ls.length - 1; i++) {
+                s.lines.add(ls[i]);
+                s.rows++;
+            }
+            s.hasRows = true;
+            return now;
+        } catch (Throwable t) {
+            // never let the hook change what CQT does
             return 0;
         }
-        long now = System.nanoTime();
-        String[] ls = text.toString().split("\r?\n", -1);
-        // line 0 is the column header; the last element is what follows the final line separator
-        for (int i = 1; i < ls.length - 1; i++) {
-            s.lines.add(ls[i]);
-            s.rows++;
-        }
-        s.hasRows = true;
-        return now;
     }
 
     /** Called when getResult returns: the time since pause() was CQT's, not the statement's. */
     public static void resume(Sql sql, long pausedAt) {
-        State s = state(sql);
-        if (s != null && pausedAt > 0) {
-            s.excluded += System.nanoTime() - pausedAt;
+        try {
+            State s = state(sql);
+            if (s != null && pausedAt > 0) {
+                s.excluded += System.nanoTime() - pausedAt;
+            }
+        } catch (Throwable t) {
+            // never let the hook change what CQT does
         }
     }
 
     public static void updateCount(Sql sql, int count) {
-        State s = state(sql);
-        if (s != null) {
-            s.lines.add("#update:" + count);
+        try {
+            State s = state(sql);
+            if (s != null) {
+                s.lines.add("#update:" + count);
+            }
+        } catch (Throwable t) {
+            // never let the hook change what CQT does
         }
     }
 
@@ -151,8 +176,6 @@ public class PerfRecorder {
         return ENABLED && sql != null ? (State) sql.getPerf() : null;
     }
 
-    private static final Pattern LITERAL_OR_COMMENT =
-            Pattern.compile("'(?:[^']|'')*'|\"(?:[^\"])*\"|--[^\\n]*|/\\*(?!\\+).*?\\*/", Pattern.DOTALL);
     private static final Pattern NOT_REPEATABLE =
             Pattern.compile(
                     "\\b(NEXTVAL|NEXT_VALUE|INCR|DECR|SLEEP|RAND|RANDOM|DRAND|DRANDOM|SYS_GUID|INTO"
@@ -162,8 +185,48 @@ public class PerfRecorder {
     private static final Pattern READS_LAST_STATEMENT =
             Pattern.compile("^\\s*SHOW\\s+TRACE\\b|\\b(ROW_COUNT|FOUND_ROWS|LAST_INSERT_ID)\\s*\\(");
 
-    private static String code(String script) {
-        return LITERAL_OR_COMMENT.matcher(script).replaceAll(" ").toUpperCase();
+    /**
+     * The statement's text with string literals, quoted identifiers and comments (not hints) replaced by a space, in
+     * upper case. A linear scan: a regular expression with a repeated group recurses once per character in Java and
+     * overflows the stack on a long literal (the test files hold statements of 60-80 KB).
+     */
+    static String code(String s) {
+        int n = s.length(), i = 0;
+        StringBuilder b = new StringBuilder(Math.min(n, 4096));
+        while (i < n) {
+            char c = s.charAt(i);
+            if (c == '\'') {
+                i++;
+                while (i < n) {
+                    if (s.charAt(i) == '\'') {
+                        if (i + 1 < n && s.charAt(i + 1) == '\'') {
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+                b.append(' ');
+            } else if (c == '"') {
+                int j = s.indexOf('"', i + 1);
+                i = j < 0 ? n : j + 1;
+                b.append(' ');
+            } else if (c == '-' && i + 1 < n && s.charAt(i + 1) == '-') {
+                int j = s.indexOf('\n', i);
+                i = j < 0 ? n : j;
+                b.append(' ');
+            } else if (c == '/' && i + 1 < n && s.charAt(i + 1) == '*' && !(i + 2 < n && s.charAt(i + 2) == '+')) {
+                int j = s.indexOf("*/", i + 2);
+                i = j < 0 ? n : j + 2;
+                b.append(' ');
+            } else {
+                b.append(c);
+                i++;
+            }
+        }
+        return b.toString().toUpperCase();
     }
 
     /**
@@ -222,6 +285,32 @@ public class PerfRecorder {
      * CQT's sql run index (sqlRunTime), ord the statement's position in the file.
      */
     public static void record(
+            ConsoleDAO dao,
+            Connection conn,
+            String caseFile,
+            int pass,
+            int ord,
+            Sql sql,
+            Sql next,
+            boolean serverMessageOn) {
+        try {
+            recordUnguarded(dao, conn, caseFile, pass, ord, sql, next, serverMessageOn);
+        } catch (Throwable t) {
+            // The hook must never change what CQT does: an error here loses this statement's record only. The
+            // record that says so keeps the file's count of records honest.
+            sql.setPerf(null);
+            hookErrors++;
+            if (hookErrors <= 5) {
+                System.err.println("[PerfRecorder] no record for " + caseFile + " #" + ord + ": " + t);
+            }
+            write("{\"file\":" + str(caseFile) + ",\"pass\":" + pass + ",\"ord\":" + ord + ",\"hook_error\":"
+                    + str(String.valueOf(t)) + "}");
+        }
+    }
+
+    private static int hookErrors = 0;
+
+    private static void recordUnguarded(
             ConsoleDAO dao,
             Connection conn,
             String caseFile,
