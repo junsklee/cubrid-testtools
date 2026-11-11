@@ -501,7 +501,13 @@ function do_create_db()
           cubrid createdb $cubrid_createdb_opts $db_name 2>&1 >> $log_filename
      fi
   
-     if [ "${scenario_full_name}" == "medium" ];then
+     if [ -n "${CQT_DB_IMAGE:-}" ] && [ -f "${CQT_DB_IMAGE}/SAVED" ];then
+          # sqlperf: replace the new database's files with a saved image (CQT_DB_IMAGE_SAVE below) made at this path;
+          # its data step (loadjava) is in the image. Unset: CTP as before.
+          echo "restore $db_name from ${CQT_DB_IMAGE}"
+          rm -rf ./* 2>&1 > /dev/null
+          cp -a "${CQT_DB_IMAGE}/db/." . 2>&1 >> $log_filename || echo "CQT_DB_IMAGE_RESTORE_FAILED"
+     elif [ "${scenario_full_name}" == "medium" ];then
           make_db_data mdb
      elif [ "${scenario_full_name}" == "site" ];then
           make_db_data ${scenario_category} 
@@ -891,6 +897,14 @@ EOF
      if [ $coreCount -ne 0 ];then
           echo "test_error=Y" >> ${resultDir}/summary_info
      else
+	  # sqlperf: keep the database the cases built as an image (restored by CQT_DB_IMAGE). Unset: CTP as before.
+	  if [ -n "${CQT_DB_IMAGE_SAVE:-}" ];then
+	       stop_db $db_name
+	       rm -rf "${CQT_DB_IMAGE_SAVE}" && mkdir -p "${CQT_DB_IMAGE_SAVE}/db" \
+	           && cp -a "${cubrid_root_dir}/databases/${db_name}/." "${CQT_DB_IMAGE_SAVE}/db/" \
+	           && { cubrid_rel | grep CUBRID > "${CQT_DB_IMAGE_SAVE}/MANIFEST"; echo "path=${cubrid_root_dir}/databases/${db_name}" >> "${CQT_DB_IMAGE_SAVE}/MANIFEST"; touch "${CQT_DB_IMAGE_SAVE}/SAVED"; } \
+	           && echo "CQT_DB_IMAGE_SAVED=${CQT_DB_IMAGE_SAVE}" || echo "CQT_DB_IMAGE_SAVE_FAILED"
+	  fi
 	  do_clean
      fi
 
