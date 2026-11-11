@@ -6,11 +6,13 @@ const https = require('https');
 const config = require('../config');
 
 /**
- * A commit SHA or a simple ref, safe to place in one URL path segment. Anything else could
- * reach other api.github.com paths with the server's token (new URL() resolves "..").
+ * A commit SHA or a ref (branch names may contain "/", e.g. release/11.2), encoded as one URL
+ * path segment ("/" becomes %2F, which GitHub accepts). Anything else could reach other
+ * api.github.com paths with the server's token (new URL() resolves "..").
  */
 function assertSafeCommitRef(sha) {
-    if (typeof sha !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(sha) || sha.includes('..')) {
+    if (typeof sha !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/.test(sha)
+        || sha.includes('..') || sha.includes('//') || sha.endsWith('/')) {
         const err = new Error('Invalid commit SHA');
         err.status = 400;
         throw err;
@@ -57,7 +59,16 @@ class GitHubService {
 
             const req = https.request(reqOptions, (res) => {
                 let data = '';
-                
+                // Decode across chunks (as proxyService): a Korean commit message or author split
+                // between two chunks became two replacement characters
+                res.setEncoding('utf8');
+                res.on('error', reject);
+                res.on('close', () => {
+                    if (!res.complete) {
+                        reject(new Error('GitHub API response was cut off'));
+                    }
+                });
+
                 res.on('data', (chunk) => {
                     data += chunk;
                 });
@@ -77,6 +88,8 @@ class GitHubService {
             });
 
             req.on('error', reject);
+            // Without a timeout a stalled api.github.com held the dashboard's request open
+            req.setTimeout(30000, () => req.destroy(new Error('GitHub API request timeout')));
             req.end();
         });
     }

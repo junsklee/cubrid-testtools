@@ -859,7 +859,9 @@ public class BuilderConfig {
     /** VM mode: per-case timeout, same meaning as CTP's testcase_timeout_in_secs. */
     public int getVmCaseTimeoutSeconds() {
         try {
-            return Math.max(60, Integer.parseInt(vmProperty("vm_testcase_timeout_in_secs", "7200")));
+            int seconds = Integer.parseInt(vmProperty("vm_testcase_timeout_in_secs", "7200"));
+            // CTP's -1 (no timeout) or 0 became 60 s, killing every case; they get the default
+            return seconds <= 0 ? 7200 : Math.max(60, seconds);
         } catch (NumberFormatException e) {
             return 7200;
         }
@@ -907,6 +909,59 @@ public class BuilderConfig {
         return Boolean.parseBoolean(vmProperty("vm_git_credentials_from_ctp", "true"));
     }
 
+    /**
+     * VM mode: give vm_ctp_home a conf/common.conf with git_user/git_pwd/git_email when it has
+     * none (keys already there are kept). CTP's run_git_update, which cases call to put
+     * ~/cubrid-testcases on their branch, exits at once without that file.
+     */
+    public boolean isVmInstallCommonConf() {
+        return Boolean.parseBoolean(vmProperty("vm_install_common_conf", "true"));
+    }
+
+    /** VM mode: git_user for an installed common.conf; empty fetches public repositories only. */
+    public String getVmGitUser() {
+        return vmProperty("vm_git_user", "");
+    }
+
+    /** VM mode: git_pwd (password or token) for an installed common.conf. */
+    public String getVmGitPwd() {
+        return vmProperty("vm_git_pwd", "");
+    }
+
+    /** VM mode: git_email for an installed common.conf. */
+    public String getVmGitEmail() {
+        return vmProperty("vm_git_email", "");
+    }
+
+    /**
+     * VM mode: testcase checkouts shell cases use in place, beside their own (cbrd_23613_6 runs
+     * SQL suites from ~/cubrid-testcases). Before each case they are put on the request's shell
+     * testcase branch, at the head it had when the request started; missing ones are skipped.
+     * They follow sql_tc_sync_mode: disabled leaves them alone. Empty = none.
+     */
+    public List<String> getVmSiblingTcDirs() {
+        String raw = properties.getProperty("vm_sibling_tc_dirs");
+        if (raw == null) {
+            raw = "~/cubrid-testcases,~/cubrid-testcases-private";
+        }
+        List<String> dirs = new ArrayList<>();
+        for (String dir : raw.split(",")) {
+            if (!dir.trim().isEmpty()) {
+                dirs.add(expandHome(dir.trim()));
+            }
+        }
+        return dirs;
+    }
+
+    /**
+     * VM mode: before a case, put the request's CTP (ctp_sql_repo at the commit the Builder pinned,
+     * as Docker cases use) into vm_ctp_home, every directory but conf, as CTP's upgrade.sh keeps
+     * a regression VM's CTP current. Off: the VM's CTP as it is.
+     */
+    public boolean isVmCtpFromRepo() {
+        return Boolean.parseBoolean(vmProperty("vm_ctp_from_repo", "true"));
+    }
+
     /** VM mode: when to archive the case directory after a run: fail (default), always or never. */
     public String getVmKeepArtifacts() {
         return vmProperty("vm_keep_artifacts", "fail").toLowerCase(Locale.ENGLISH);
@@ -920,12 +975,31 @@ public class BuilderConfig {
         return raw.trim();
     }
     
+    /**
+     * Docker shell cases run with the CTP of ctp_sql_repo/ctp_sql_ref (CUBRID/cubrid-testtools
+     * develop, pinned per request by the Builder), as regression VMs keep their CTP current, rather
+     * than with this host's ~/cubrid-testtools/CTP checkout, which falls behind: cases written for
+     * the current init.sh (wait_until) failed with "command not found".
+     */
+    public boolean isShellCtpFromRepo() {
+        return Boolean.parseBoolean(properties.getProperty("shell_ctp_from_repo", "true").trim());
+    }
+
+    /**
+     * With ccache: build every commit as version x.y.z.0000-0000000 rather than its own
+     * (commit count and hash, as regression builds report). Faster across commits (ccache direct
+     * mode), but a case that prints or checks its build string sees zeros.
+     */
+    public boolean isDeterministicBuildVersion() {
+        return Boolean.parseBoolean(properties.getProperty("deterministic_build_version", "false").trim());
+    }
+
     public String getDockerBuildImage() {
         return properties.getProperty(DOCKER_BUILD_IMAGE, "cubridci/cubridci:develop");
     }
     
     public String getDockerTestImage() {
-        return properties.getProperty(DOCKER_TEST_IMAGE, "cubridci/cubridci:test_shell");
+        return properties.getProperty(DOCKER_TEST_IMAGE, "cubridci/cubridci:test_rl8.10");
     }
     
     public int getBuildCacheSize() {

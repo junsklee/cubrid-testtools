@@ -6,8 +6,8 @@ import com.navercorp.cubridqa.builder.tester.TestRequest;
 import com.navercorp.cubridqa.builder.tester.TestResult;
 import com.navercorp.cubridqa.builder.tester.TestStatus;
 import com.navercorp.cubridqa.builder.cache.BuildCache;
+import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
-import com.navercorp.cubridqa.builder.tester.SafeIo;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
@@ -28,13 +28,16 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
     private final Config config;
     private final BuildCache buildCache;
     private final ShellTcSync shellTcSync;
+    private final CtpProvisioner ctpProvisioner;
     private final Object imageBuilder; // DockerImageBuilder - using Object to avoid compile dependency
 
-    public OptimizedDockerExecutor(Config config, BuildCache buildCache, ShellTcSync shellTcSync, Object imageBuilder) {
+    public OptimizedDockerExecutor(Config config, BuildCache buildCache, ShellTcSync shellTcSync, Object imageBuilder,
+                                   CtpProvisioner ctpProvisioner) {
         this.config = config;
         this.buildCache = buildCache;
         this.shellTcSync = shellTcSync;
         this.imageBuilder = imageBuilder;
+        this.ctpProvisioner = ctpProvisioner;
     }
 
     @Override
@@ -66,9 +69,9 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         testLogger.info("Docker work dir: " + dockerWorkDir.toString());
 
-        Path ctpSourceRoot = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP").toAbsolutePath().normalize();
+        Path ctpSourceRoot = EnvScriptFactory.shellCtpSource(config, ctpProvisioner, request, testLogger);
         Path ctpWorkRoot = dockerWorkDir.resolve("CTP");
-        stageCtpResources(ctpSourceRoot, ctpWorkRoot, testLogger);
+        EnvScriptFactory.stageCtpResources(ctpSourceRoot, ctpWorkRoot, testLogger);
         String ctpHomeInContainer = "/workspace/CTP";
 
         // Check if Docker image already exists BEFORE downloading package
@@ -76,6 +79,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         String commitShort = request.getCommitShort() != null ? request.getCommitShort() : "unknown";
         String baselineShort = request.getBaselineShort() != null ? request.getBaselineShort() : "unknown";
         // Image key: commit + baseline + build type + the build the package came from
+        // (DockerImageBuilder adds the id of the docker_test_image the image is built on)
         String imageVariant = DockerImageBuilder.imageVariant(baselineShort, request.getBuildType(), request.getBuildPackage());
         boolean imageExistsAlready = false;
 
@@ -379,8 +383,7 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         // Volume mounts
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
-        dockerCommand.add("-v");
-        dockerCommand.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
+        EnvScriptFactory.addTestcaseVolumes(dockerCommand, shellRepoRoot);
 
         // Environment variables
         dockerCommand.add("-e");
@@ -455,12 +458,18 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
             // Attempt to stop and remove the container if it's still running
             DockerCtl.safeKillAndRemove(containerName, testLogger);
             DockerStatsCollector.StatsSummary summary = stopCollector(statsCollector);
-            return finalizeResult(
-                TestResult.builder()
+            outputGobbler.join(2000);
+            Path timeoutLog = EnvScriptFactory.saveTimedOutLog(
+                generateDockerOptLogFileName(request.getCommitShort(), request.getTestName(), request.getAttemptNumber()),
+                outputGobbler.getOutput(), timeoutMinutes, testLogger);
+            TestResult.Builder timedOut = TestResult.builder()
                     .testName(request.getTestName())
                     .status(TestStatus.EXECUTION_ERROR)
-                    .message("Docker test timeout after " + timeoutMinutes + " minutes"),
-                metricsBuilder, startNs, dockerImage, dockerImageCached, summary);
+                    .message("Docker test timeout after " + timeoutMinutes + " minutes");
+            if (timeoutLog != null) {
+                timedOut.addAttemptLogFile(timeoutLog);
+            }
+            return finalizeResult(timedOut, metricsBuilder, startNs, dockerImage, dockerImageCached, summary);
         }
         
         int exitCode = process.exitValue();
@@ -619,21 +628,6 @@ public class OptimizedDockerExecutor implements ExecutorStrategy {
         }
         logger.fine("Test directory " + testDir + " is outside repository root " + repoRoot + "; using repo root.");
         return "";
-    }
-
-    private void stageCtpResources(Path sourceRoot, Path targetRoot, Logger logger) throws IOException {
-        SafeIo.deleteDirectory(targetRoot.toFile());
-        Files.createDirectories(targetRoot);
-        String[] requiredDirs = {"shell", "bin", "common", "conf"};
-        for (String dir : requiredDirs) {
-            Path sourceDir = sourceRoot.resolve(dir);
-            Path targetDir = targetRoot.resolve(dir);
-            if (Files.exists(sourceDir)) {
-                SafeIo.copyTestCaseDirectory(sourceDir, targetDir);
-            } else {
-                logger.fine("CTP component missing: " + sourceDir);
-            }
-        }
     }
     
     /**

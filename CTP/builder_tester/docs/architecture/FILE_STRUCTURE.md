@@ -315,7 +315,7 @@ Test cases:
   
 Docker images:
   cubridci/cubridci:develop                   # Build image
-  cubridci/cubridci:test_shell                # Test image
+  cubridci/cubridci:test_rl8.10               # Test image
 ```
 
 ---

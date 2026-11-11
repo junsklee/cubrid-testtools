@@ -15,6 +15,9 @@ public final class DockerLabels {
     public static final String REQUEST = "builder_tester.request";
     /** Failed-test container kept alive for debugging; removed by the next build request. */
     public static final String KEEP = "builder_tester.keep";
+    /** On a per-commit test image: the docker_test_image it was provisioned from, and that image's id. */
+    public static final String BASE_IMAGE = "builder_tester.base_image";
+    public static final String BASE_IMAGE_ID = "builder_tester.base_image_id";
 
     private DockerLabels() {}
 

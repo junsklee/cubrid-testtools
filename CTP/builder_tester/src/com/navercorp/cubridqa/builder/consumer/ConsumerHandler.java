@@ -143,13 +143,19 @@ public class ConsumerHandler implements HttpHandler {
             sendJson(exchange, 400, new JSONObject().put("error", "missing X-Tester-Status"));
             return;
         }
-        // Refuse before reading: only a leased case's runner may post a body this large
+        // Refuse without keeping the body: only a leased case's runner may post one this large. It
+        // is drained (read and discarded) first: the runner sends the whole body before reading the
+        // answer, and the server drains only 64 KB on close, so for a larger body the runner got a
+        // broken connection instead of 410/413, retried for minutes, and the case ran again on
+        // other VMs.
         if (!pool.isExpected(jobId)) {
+            drain(exchange.getRequestBody(), 2 * MAX_RESULT_BYTES);
             sendJson(exchange, 410, new JSONObject().put("accepted", false).put("error", "the case is no longer expected"));
             return;
         }
         String length = exchange.getRequestHeaders().getFirst("Content-Length");
         if (length != null && length.matches("\\d+") && Long.parseLong(length) > MAX_RESULT_BYTES) {
+            drain(exchange.getRequestBody(), 2 * MAX_RESULT_BYTES);
             sendJson(exchange, 413, new JSONObject().put("accepted", false)
                 .put("error", "result larger than " + MAX_RESULT_BYTES + " bytes"));
             return;
@@ -205,6 +211,19 @@ public class ConsumerHandler implements HttpHandler {
 
     private static String readBody(HttpExchange exchange, long limit) throws IOException {
         return new String(readBytes(exchange.getRequestBody(), limit), StandardCharsets.UTF_8);
+    }
+
+    /** Reads and discards up to limit bytes of a request body. */
+    private static void drain(InputStream in, long limit) {
+        byte[] chunk = new byte[64 * 1024];
+        long total = 0;
+        try {
+            for (int n; total < limit && (n = in.read(chunk)) > 0; ) {
+                total += n;
+            }
+        } catch (IOException ignore) {
+            // the runner gave up: nothing left to answer
+        }
     }
 
     private static byte[] readBytes(InputStream in, long limit) throws IOException {

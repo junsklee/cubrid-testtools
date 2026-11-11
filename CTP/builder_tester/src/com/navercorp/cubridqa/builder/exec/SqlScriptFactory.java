@@ -38,7 +38,7 @@ public class SqlScriptFactory {
      */
     public static class SqlEnvSettings {
         public final String dbName;
-        public final String dbCharsetOverride;    // null → sql.conf db_charset (fallback en_US.iso88591)
+        public final String dbCharsetOverride;    // null → as run.sh: en_US.utf8 on 11.5+, else sql.conf db_charset (fallback en_US.iso88591)
         public final String createdbOptsOverride; // null → sql.conf cubrid_createdb_opts
         public final boolean loadStoredProcedures;
         public final Boolean needMakeLocaleOverride; // null → sql.conf need_make_locale (default yes)
@@ -214,8 +214,24 @@ public class SqlScriptFactory {
         sc.append("  exit 2\n");
         sc.append("fi\n");
         sc.append("DB_CHARSET=\"").append(s.dbCharsetOverride == null ? "" : s.dbCharsetOverride).append("\"\n");
-        sc.append("[ -z \"$DB_CHARSET\" ] && DB_CHARSET=$(INI -s sql \"$SQL_MAIN_CONF\" db_charset 2>/dev/null || true)\n");
-        sc.append("[ -z \"$DB_CHARSET\" ] && DB_CHARSET=en_US.iso88591\n");
+        sc.append("if [ -n \"$DB_CHARSET\" ]; then\n");
+        sc.append("  DB_CHARSET_FROM=\"tester.conf sql_db_charset\"\n");
+        sc.append("else\n");
+        sc.append("  DB_CHARSET=$(INI -s sql \"$SQL_MAIN_CONF\" db_charset 2>/dev/null || true)\n");
+        sc.append("  DB_CHARSET_FROM=\"sql.conf db_charset\"\n");
+        sc.append("  [ -z \"$DB_CHARSET\" ] && DB_CHARSET=en_US.iso88591 && DB_CHARSET_FROM=\"run.sh default\"\n");
+        sc.append("  # [CUBRIDQA-1287] run.sh do_configure: from CUBRID 11.5 the SQL DB is en_US.utf8 whatever\n");
+        sc.append("  # sql.conf says (its db_charset=en_US alone means ISO-8859-1), and the answers expect utf8.\n");
+        sc.append("  CUBRID_VER=$(cubrid_rel 2>/dev/null | grep CUBRID | head -1 | awk -F'(' '{print $2}' | awk -F')' '{print $1}')\n");
+        sc.append("  CUBRID_VER_P1=$(echo \"$CUBRID_VER\" | cut -d . -f 1 | grep -oE '[0-9]+' | head -1)\n");
+        sc.append("  CUBRID_VER_P2=$(echo \"$CUBRID_VER\" | cut -d . -f 2)\n");
+        sc.append("  if [[ \"$CUBRID_VER_P1\" =~ ^[0-9]+$ ]] && [[ \"$CUBRID_VER_P2\" =~ ^[0-9]+$ ]] \\\n");
+        sc.append("     && { [ \"$CUBRID_VER_P1\" -gt 11 ] || { [ \"$CUBRID_VER_P1\" -eq 11 ] && [ \"$CUBRID_VER_P2\" -ge 5 ]; }; }; then\n");
+        sc.append("    DB_CHARSET=en_US.utf8\n");
+        sc.append("    DB_CHARSET_FROM=\"run.sh rule for CUBRID 11.5+ ($CUBRID_VER)\"\n");
+        sc.append("  fi\n");
+        sc.append("fi\n");
+        sc.append("echo \"DB charset: $DB_CHARSET ($DB_CHARSET_FROM)\"\n");
         sc.append("export CUBRID_CHARSET=\"$DB_CHARSET\"\n");
         sc.append("CREATEDB_OPTS=\"").append(s.createdbOptsOverride == null ? "" : s.createdbOptsOverride).append("\"\n");
         sc.append("[ -z \"$CREATEDB_OPTS\" ] && CREATEDB_OPTS=$(INI -s sql \"$SQL_MAIN_CONF\" cubrid_createdb_opts 2>/dev/null || true)\n");
@@ -438,6 +454,33 @@ public class SqlScriptFactory {
         sc.append("fi\n");
         sc.append("cp \"$ANSWER_FILE\" \"$OUT/expected.answer\" 2>/dev/null || true\n\n");
 
+        sc.append("# ConsoleAgent writes a scratch <case>.result next to the case, which fails on the\n");
+        sc.append("# read-only Docker testcase mount. Run such a case from a writable shadow of its path:\n");
+        sc.append("# real directories along the path holding symlinks to every other entry (answers/,\n");
+        sc.append("# sibling files and directories), and a copy of the case file itself.\n");
+        sc.append("RUN_CASE=\"$CASE_FILE\"\n");
+        sc.append("if [ ! -w \"$CASE_DIR\" ] && [ \"${REL#/}\" = \"$REL\" ]; then\n");
+        sc.append("  link_entries() {\n");
+        sc.append("    ( shopt -s nullglob dotglob; entries=(\"$1\"/*); [ ${#entries[@]} -eq 0 ] || ln -s \"${entries[@]}\" \"$2\"/ )\n");
+        sc.append("  }\n");
+        sc.append("  SHADOW=$(mktemp -d \"${TMPDIR:-/tmp}/sqlcase.XXXXXX\") \\\n");
+        sc.append("    || finish \"SQLCASE_RESULT status=error rc=0 core=0 reason=no_writable_case_dir\"\n");
+        sc.append("  trap 'rm -rf \"$SHADOW\"' EXIT\n");
+        sc.append("  SRC=\"$TESTCASE_ROOT\"; DST=\"$SHADOW\"\n");
+        sc.append("  link_entries \"$SRC\" \"$DST\"\n");
+        sc.append("  IFS='/' read -r -a PARTS <<< \"$(dirname \"$REL\")\"\n");
+        sc.append("  for PART in \"${PARTS[@]}\"; do\n");
+        sc.append("    if [ -z \"$PART\" ] || [ \"$PART\" = \".\" ]; then continue; fi\n");
+        sc.append("    rm -f \"$DST/$PART\"; mkdir \"$DST/$PART\"\n");
+        sc.append("    SRC=\"$SRC/$PART\"; DST=\"$DST/$PART\"\n");
+        sc.append("    link_entries \"$SRC\" \"$DST\"\n");
+        sc.append("  done\n");
+        sc.append("  RUN_CASE=\"$DST/$(basename \"$CASE_FILE\")\"\n");
+        sc.append("  rm -f \"$RUN_CASE\" \"$DST/${CASE_BASE}.result\"\n");
+        sc.append("  cp \"$CASE_FILE\" \"$RUN_CASE\" \\\n");
+        sc.append("    || finish \"SQLCASE_RESULT status=error rc=0 core=0 reason=no_writable_case_dir\"\n");
+        sc.append("fi\n\n");
+
         sc.append("# Built-in single-case runner: invoke CTP's ConsoleAgent directly against the\n");
         sc.append("# running DB (equivalent to the historical run_sql.sh wrapper, but self-contained).\n");
         sc.append("CPCLASSES=\"\"\n");
@@ -452,7 +495,7 @@ public class SqlScriptFactory {
           .append(" \"$JAVA_HOME/bin/java\" -classpath \"$CPCLASSES\" \\\n");
         sc.append("  com.navercorp.cubridqa.cqt.console.ConsoleAgent \\\n");
         sc.append("  runCQT sql sql 64 \"$JDBC_CONFIG_FILE\" \\\n");
-        sc.append("  \"${CASE_FILE}?db=${SQL_DB_NAME}_qa\" > \"$OUT/console.log\" 2>&1\n");
+        sc.append("  \"${RUN_CASE}?db=${SQL_DB_NAME}_qa\" > \"$OUT/console.log\" 2>&1\n");
         sc.append("RC=$?\n");
         sc.append("if [ $RC -eq 124 ] || [ $RC -eq 137 ]; then\n");
         sc.append("  finish \"SQLCASE_RESULT status=timeout rc=$RC core=0 reason=case_timeout_").append(Math.max(10, caseTimeoutSec)).append("s\"\n");
@@ -487,6 +530,11 @@ public class SqlScriptFactory {
         sc.append("  fi\n");
         sc.append("  finish \"SQLCASE_RESULT status=nok rc=$RC core=$CORE_FLAG\"\n");
         sc.append("elif [ \"$VERDICT\" = \"[OK]\" ]; then\n");
+        sc.append("  # ConsoleAgent prints [OK] even when it hit an exception (it only prints the\n");
+        sc.append("  # stack trace); such a run is an error, not a pass.\n");
+        sc.append("  if grep -qE '^[[:space:]]+at [A-Za-z0-9_$.]+\\(|^Exception in thread ' \"$OUT/console.log\"; then\n");
+        sc.append("    finish \"SQLCASE_RESULT status=error rc=$RC core=$CORE_FLAG reason=console_exception\"\n");
+        sc.append("  fi\n");
         sc.append("  finish \"SQLCASE_RESULT status=ok rc=$RC core=$CORE_FLAG\"\n");
         sc.append("else\n");
         sc.append("  finish \"SQLCASE_RESULT status=error rc=$RC core=$CORE_FLAG reason=no_verdict_in_console\"\n");

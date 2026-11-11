@@ -1,11 +1,104 @@
 package com.navercorp.cubridqa.builder.exec;
 
+import com.navercorp.cubridqa.builder.config.Config;
+import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
+import com.navercorp.cubridqa.builder.docker.DockerImageBuilder;
+import com.navercorp.cubridqa.builder.git.TcRepoSync;
 import com.navercorp.cubridqa.builder.tester.CustomAttachment;
+import com.navercorp.cubridqa.builder.tester.SafeIo;
+import com.navercorp.cubridqa.builder.tester.TestRequest;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
+import java.util.logging.Logger;
 
 public class EnvScriptFactory {
 
     public static final String TESTCASE_MOUNT = "/workspace/testcases";
+
+    /**
+     * CTP directories staged into a shell test container at /workspace/CTP. isolation holds the
+     * ctltool sources that cases build with make (bug_bts_14441/14506/22449) and the runner that
+     * cases calling `ctp.sh isolation` use (cbrd_23039); without it those cases pass on nothing.
+     */
+    public static final String[] CTP_STAGED_DIRS = {"shell", "bin", "common", "conf", "isolation"};
+
+    /**
+     * docker run volumes for the shell testcase checkout at {@link #TESTCASE_MOUNT}. A request
+     * workspace borrows the base repo's objects (TcRepoSync), which are mounted read-only at their
+     * own paths so that git works in the container: cases read their checkout's branch.
+     */
+    public static void addTestcaseVolumes(List<String> dockerCommand, Path shellRepoRoot) {
+        dockerCommand.add("-v");
+        dockerCommand.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
+        for (Path objects : TcRepoSync.borrowedObjectDirs(shellRepoRoot)) {
+            dockerCommand.add("-v");
+            dockerCommand.add(objects + ":" + objects + ":ro");
+        }
+    }
+
+    /**
+     * The CTP a Docker shell case is staged from: the request's pinned CTP of ctp_sql_repo when
+     * shell_ctp_from_repo (see BuilderConfig#isShellCtpFromRepo), else, or when it cannot be
+     * provisioned, this host's ~/cubrid-testtools/CTP.
+     */
+    public static Path shellCtpSource(Config config, CtpProvisioner provisioner, TestRequest request, Logger logger) {
+        Path local = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP").toAbsolutePath().normalize();
+        if (provisioner == null || !config.isShellCtpFromRepo()) {
+            return local;
+        }
+        try {
+            CtpProvisioner.CtpPayload payload = provisioner.preparePayload(request.getCtpSqlBaseSha(), logger);
+            logger.info("Shell case CTP: " + config.getCtpSqlRepo() + " at " + payload.fingerprint);
+            return payload.ctpDir;
+        } catch (Exception e) {
+            logger.warning("Could not provision CTP " + (request.getCtpSqlBaseSha() != null ? request.getCtpSqlBaseSha() : config.getCtpSqlRef())
+                + " (" + e.getMessage() + "); the case runs with " + local + ", which may lack what it expects of current CTP");
+            return local;
+        }
+    }
+
+    /**
+     * Saves what a timed-out case printed under the request's tests/ directory as fileName, ending
+     * with a TIMEOUT line, and returns its path (null when not saved). A timeout returned before the
+     * output was saved, so the run that most needed its log (a hang) had none.
+     */
+    public static Path saveTimedOutLog(String fileName, String output, int timeoutMinutes, Logger logger) {
+        try {
+            String requestId = com.navercorp.cubridqa.builder.logging.RequestContext.getRequestId();
+            if (requestId == null || com.navercorp.cubridqa.builder.tester.CancelledRequests.isCancelled(requestId)) {
+                return null;
+            }
+            Path testsDir = Paths.get(com.navercorp.cubridqa.builder.logging.RequestLogManager.getInstance()
+                .createRequestSubdir(requestId, "tests"));
+            Path log = testsDir.resolve(fileName);
+            String text = (output == null ? "" : output) + "\n===== TIMEOUT after " + timeoutMinutes
+                + " minutes: the container was stopped =====\n";
+            Files.write(log, text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return log;
+        } catch (Exception e) {
+            logger.warning("Could not save the timed-out case's output: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** Replaces targetRoot with a copy of the {@link #CTP_STAGED_DIRS} of the CTP at sourceRoot. */
+    public static void stageCtpResources(Path sourceRoot, Path targetRoot, Logger logger) throws IOException {
+        SafeIo.deleteDirectory(targetRoot.toFile());
+        Files.createDirectories(targetRoot);
+        for (String dir : CTP_STAGED_DIRS) {
+            Path sourceDir = sourceRoot.resolve(dir);
+            Path targetDir = targetRoot.resolve(dir);
+            if (Files.exists(sourceDir)) {
+                SafeIo.copyTestCaseDirectory(sourceDir, targetDir);
+            } else {
+                logger.fine("CTP component missing: " + sourceDir);
+            }
+        }
+    }
 
     public static String createDirectWrapperScript(String testDir, String testScript, String testName, String ctpHome,
                                                    String customShellScript, List<CustomAttachment> customAttachments) {
@@ -144,6 +237,10 @@ public class EnvScriptFactory {
         script.append("    exit 1\n");
         script.append("fi\n\n");
 
+        // As DockerImageBuilder's setup: CUBRID links lib{ncurses,form,tinfo}.so.5 to what `ldconfig -p`
+        // lists, and test_rl8.10's cache still names removed files (libtinfo.so, libform.so), which
+        // left cubrid_rel unable to load libncurses.so.5 and every test an execution error.
+        script.append("ldconfig 2>/dev/null || true\n");
         script.append("# Run setup.sh to configure CUBRID if available (non-interactive)\n");
         script.append("if [ -f \"$CUBRID_ROOT/share/scripts/setup.sh\" ]; then\n");
         script.append("    echo \"Running setup.sh...\"\n");
@@ -289,6 +386,7 @@ public class EnvScriptFactory {
         script.append("  fi\n");
         script.append("done\n\n");
 
+        script.append(DockerImageBuilder.ncurses5Snippet("$CUBRID", ""));
         script.append("# Verify installation\n");
         script.append("echo \"Verifying CUBRID installation...\"\n");
         script.append("if ! cubrid_rel; then\n");
@@ -305,7 +403,7 @@ public class EnvScriptFactory {
             script.append("# Verify build commit hash\n");
             script.append("INSTALLED_VER=$(cubrid_rel 2>/dev/null | sed -n 's/.*-\\([a-z0-9]\\{7\\}\\))/\\1/p' | head -1)\n");
             script.append("if [[ \"$INSTALLED_VER\" == *\"0000000\"* ]]; then\n");
-            script.append("    echo \"Actual build commit hash: ").append(expectedBuildVersion).append(". To guarantee your build's commit hash, please build CUBRID with ccache off.\"\n");
+            script.append("    echo \"Actual build commit hash: ").append(expectedBuildVersion).append(" (this build reports none: deterministic_build_version is set on the Builder).\"\n");
             script.append("elif [[ \"$INSTALLED_VER\" != *\"").append(expectedBuildVersion).append("\"* ]]; then\n");
             script.append("    echo \"WARNING: Expected build commit hash ").append(expectedBuildVersion);
             script.append(" not found in CUBRID build version (cubrid_rel)\"\n");
@@ -493,7 +591,7 @@ public class EnvScriptFactory {
             script.append("# Verify expected build version\n");
             script.append("INSTALLED_VER=$(cubrid_rel 2>/dev/null | sed -n 's/.*-\\([a-z0-9]\\{7\\}\\))/\\1/p' | head -1)\n");
             script.append("if [[ \"$INSTALLED_VER\" == *\"0000000\"* ]]; then\n");
-            script.append("    echo \"Actual build commit hash: ").append(expectedBuildVersion).append(". To guarantee your build's commit hash, please build CUBRID with ccache off.\"\n");
+            script.append("    echo \"Actual build commit hash: ").append(expectedBuildVersion).append(" (this build reports none: deterministic_build_version is set on the Builder).\"\n");
             script.append("elif [[ \"$INSTALLED_VER\" != *\"").append(expectedBuildVersion).append("\"* ]]; then\n");
             script.append("    echo \"WARNING: Expected build commit hash ").append(expectedBuildVersion);
             script.append(" not found in CUBRID build version (cubrid_rel)\"\n");
@@ -517,6 +615,9 @@ public class EnvScriptFactory {
     private static void appendRunAndCopyResult(StringBuilder script, String testScript, String customShellScript,
                                                List<CustomAttachment> customAttachments) {
         script.append("# Run test\n");
+        script.append("# The testcase checkout is the host user's, and git refuses a repository owned by another\n");
+        script.append("# user (root here): cases read their checkout's branch with git rev-parse\n");
+        script.append("git config --global --add safe.directory '*' >/dev/null 2>&1 || true\n");
         script.append("cd \"$TESTCASE_DIR\"\n");
 
         appendCustomAttachments(script, "$TESTCASE_DIR", customAttachments);
@@ -543,9 +644,11 @@ public class EnvScriptFactory {
 
         // Execute test script normally (whether original or custom)
         script.append("set +e\n");
+        VmScriptFactory.appendResultFileBeforeInit(script, "");
         script.append("set -x\n\n");
         script.append("sh ").append(testScript).append("\n");
         script.append("TEST_EXIT=$?\n");
+        script.append("rm -f ").append(VmScriptFactory.RESULT_FILE_BEFORE_INIT).append("\n");
         script.append("set -e\n\n");
 
         script.append("# Copy result file if generated (persist across overlay/fallback)\n");

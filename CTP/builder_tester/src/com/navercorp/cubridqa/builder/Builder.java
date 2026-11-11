@@ -52,7 +52,25 @@ public class Builder {
     private final LogRotationManager logRotationManager;
     // Guards capacity checks + queue/task transitions to prevent over-admitting tasks under concurrency
     private final Object taskDispatchLock = new Object();
-    
+    // Requests that ended without results, newest last: taken off the queue or cancelled through
+    // /queue/remove (their logs are deleted), or interrupted by a Builder restart. Without this,
+    // /status could only answer not_found for them. Kept in system/ended_requests.jsonl too.
+    private static final int MAX_ENDED_REQUESTS = 1000;
+    private final Map<String, JSONObject> endedRequests = Collections.synchronizedMap(
+        new LinkedHashMap<String, JSONObject>() {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, JSONObject> eldest) {
+                return size() > MAX_ENDED_REQUESTS;
+            }
+        });
+    // Marker files in a request's log directory while this Builder holds it, waiting for a slot or
+    // running. The queue and the running tasks live in memory only: after a restart the markers
+    // tell which requests the restart dropped (recoverRequestsOfLastRun).
+    static final String QUEUED_MARKER = ".bt_queued";
+    static final String RUNNING_MARKER = ".bt_running";
+    static final String ENDED_REQUESTS_FILE = "ended_requests.jsonl";
+    private LogConfig logConfig;
+
     public Builder(BuilderConfig config) throws IOException {
         this.config = config;
         List<String> ignoredRunKeys = config.getIgnoredRunSettingKeys();
@@ -66,7 +84,7 @@ public class Builder {
         this.dockerManager = new DockerBuildManager(config);
         
         // Initialize logging infrastructure
-        LogConfig logConfig = new LogConfig(
+        this.logConfig = new LogConfig(
             config.getMaxRequestLogs(),
             config.getMaxTarFiles(),
             System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/log",
@@ -281,12 +299,17 @@ public class Builder {
             }
         }
         
+        loadEndedRequests();
+        recoverRequestsOfLastRun();
         server.start();
         logger.info("Builder service started on port " + config.getListenPort());
+        logger.info("Code: " + BuildStamp.describe());
         logger.info("CUBRID source: " + config.getCubridSrcDir());
         logger.info("Work directory: " + config.getWorkDir());
         logger.info("Max concurrent build requests: " + MAX_CONCURRENT_REQUESTS);
         logger.info("Docker enabled: " + config.useDocker());
+        // Requests of the last run queued again by recoverRequestsOfLastRun
+        processNextQueuedRequest();
     }
     
     public void stop() {
@@ -463,6 +486,7 @@ public class Builder {
                     if (activeTasks.size() >= MAX_CONCURRENT_REQUESTS || !pendingRequests.isEmpty()) {
                         QueuedBuildRequest queuedRequest = new QueuedBuildRequest(taskId, request);
                         pendingRequests.offer(queuedRequest);
+                        markRequestState(taskId, QUEUED_MARKER);
 
                         // Calculate queue position (1-based)
                         int queuePosition = pendingRequests.size();
@@ -495,11 +519,19 @@ public class Builder {
                 sendJsonResponse(exchange, 202, response);
                 
             } catch (Exception e) {
-                logger.log(Level.SEVERE, "Error handling request", e);
+                // A request the validation refused, or a body that is not the JSON it must be, is the
+                // client's error (400). As SEVERE with a stack trace, they were every SEVERE line of a
+                // week's log; and a failure of the Builder itself was answered 400 as well.
+                boolean clientError = e instanceof IllegalArgumentException || e instanceof org.json.JSONException;
+                if (clientError) {
+                    logger.warning("Rejected build request: " + e.getMessage());
+                } else {
+                    logger.log(Level.SEVERE, "Error handling request", e);
+                }
                 JSONObject error = new JSONObject()
                     .put("status", "error")
                     .put("message", e.getMessage());
-                sendJsonResponse(exchange, 400, error);
+                sendJsonResponse(exchange, clientError ? 400 : 500, error);
             }
         }
     }
@@ -510,11 +542,13 @@ public class Builder {
     private void submitTaskLocked(String taskId, JSONObject request) {
         BuilderTask task = new BuilderTask(taskId, request, config, dockerManager);
         activeTasks.put(taskId, task);
+        markRequestState(taskId, RUNNING_MARKER);
 
         CompletableFuture.runAsync(() -> {
             try {
                 task.run();
             } finally {
+                markRequestState(taskId, null);
                 activeTasks.remove(taskId);
                 if (task.isCancelRequested() && task.shouldDeleteLogsOnCancel()) {
                     logRotationManager.deleteRequestLogDir(taskId);
@@ -550,11 +584,23 @@ public class Builder {
                 
                 if (taskId != null) {
                     BuilderTask task = activeTasks.get(taskId);
+                    int queuePosition = queuePosition(taskId);
+                    JSONObject removed = endedRequests.get(taskId);
                     if (task != null) {
                         response.put("status", "running")
                                 .put("taskId", taskId)
                                 .put("progress", task.getProgress())
                                 .put("progressSummary", task.getProgressSummary());
+                        if (task.isCancelRequested()) {
+                            response.put("cancelRequested", true);
+                        }
+                    } else if (queuePosition > 0) {
+                        // Accepted and waiting for a slot (not_found here read as a lost request)
+                        response.put("status", "queued")
+                                .put("taskId", taskId)
+                                .put("queuePosition", queuePosition);
+                    } else if (removed != null) {
+                        response = new JSONObject(removed.toString());
                     } else {
                         response.put("status", "not_found")
                                 .put("taskId", taskId);
@@ -660,9 +706,12 @@ public class Builder {
                             pos++;
                         }
                         
+                        JSONObject removed = endedRequests.get(requestId);
                         if (found) {
                             healthResponse.put("requestStatus", "queued");
                             healthResponse.put("queuePosition", position);
+                        } else if (removed != null) {
+                            healthResponse.put("requestStatus", removed.getString("status"));
                         } else {
                             healthResponse.put("requestStatus", "not_found");
                         }
@@ -707,7 +756,9 @@ public class Builder {
                     return;
                 }
 
+                int queuePosition;
                 synchronized (taskDispatchLock) {
+                    queuePosition = queuePosition(taskId);
                     runningTask = activeTasks.get(taskId);
                     if (runningTask != null) {
                         runningTask.requestCancel(true);
@@ -716,6 +767,23 @@ public class Builder {
                         removedFromQueue = removeFromPendingQueue(taskId);
                     }
                     remainingQueued = pendingRequests.size();
+                }
+
+                if (runningTask != null || removedFromQueue) {
+                    // Who asked: the request is gone from the queue, status and reports from now on
+                    String requester = describeRequester(exchange);
+                    String status = runningTask != null ? "cancelled" : "removed";
+                    logger.info("[" + taskId + "] " + (runningTask != null
+                        ? "Cancel requested (running) by " + requester
+                        : "Removed from the queue (position " + queuePosition + ") by " + requester));
+                    recordEndedRequest(taskId, new JSONObject()
+                        .put("status", status)
+                        .put("taskId", taskId)
+                        .put("removedAt", System.currentTimeMillis())
+                        .put("removedBy", requester)
+                        .put("message", runningTask != null
+                            ? "Cancelled while running through /queue/remove; its logs and report were deleted"
+                            : "Removed from the queue through /queue/remove before it started; its logs were deleted"));
                 }
 
                 if (runningTask != null) {
@@ -976,8 +1044,19 @@ public class Builder {
 
         // Custom script mode - if provided, tests can be empty. Shell requests use
         // 'customShellScript'; SQL requests use 'customSqlScript' + 'customSqlAnswer'.
-        boolean hasCustomShellScript = request.has("customShellScript") &&
+        // 'customShellScriptBase64' is the same script as exact bytes: a JSON string carries only
+        // text, and some cases' scripts are EUC-KR.
+        boolean hasScriptText = request.has("customShellScript") &&
                                   !request.getString("customShellScript").trim().isEmpty();
+        boolean hasScriptBytes = request.has("customShellScriptBase64") &&
+                                  !request.getString("customShellScriptBase64").trim().isEmpty();
+        if (hasScriptText && hasScriptBytes) {
+            throw new IllegalArgumentException("Send either 'customShellScript' or 'customShellScriptBase64', not both");
+        }
+        if (hasScriptBytes) {
+            validateCustomShellScriptBase64(request.getString("customShellScriptBase64").trim());
+        }
+        boolean hasCustomShellScript = hasScriptText || hasScriptBytes;
         boolean hasCustomSqlScript = request.has("customSqlScript") &&
                                   !request.getString("customSqlScript").trim().isEmpty();
         if (sqlMode && hasCustomShellScript) {
@@ -1208,6 +1287,22 @@ public class Builder {
         return sanitized;
     }
 
+    private void validateCustomShellScriptBase64(String scriptBase64) {
+        byte[] decoded;
+        try {
+            decoded = java.util.Base64.getDecoder().decode(scriptBase64);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("'customShellScriptBase64' is not valid base64");
+        }
+        if (decoded.length == 0) {
+            throw new IllegalArgumentException("'customShellScriptBase64' decodes to an empty script");
+        }
+        if (decoded.length > MAX_CUSTOM_ATTACHMENTS_BYTES) {
+            throw new IllegalArgumentException("'customShellScriptBase64' is " + decoded.length
+                + " bytes (max " + MAX_CUSTOM_ATTACHMENTS_BYTES + ")");
+        }
+    }
+
     private void validateCustomAttachments(JSONArray atts) {
         if (atts.length() > MAX_CUSTOM_ATTACHMENTS) {
             throw new IllegalArgumentException("Too many attachments: " + atts.length() + " (max " + MAX_CUSTOM_ATTACHMENTS + ")");
@@ -1405,6 +1500,199 @@ public class Builder {
             cmd.addAll(ids);
             new ProcessBuilder(cmd).inheritIO().start().waitFor();
         }
+    }
+
+    /** Leaves only the given marker (or none) in the request's log directory, if it has one. */
+    private void markRequestState(String requestId, String marker) {
+        try {
+            java.nio.file.Path dir = RequestIds.resolveUnder(java.nio.file.Paths.get(logConfig.getRequestsDir()), requestId);
+            if (!java.nio.file.Files.isDirectory(dir)) {
+                return;
+            }
+            java.nio.file.Files.deleteIfExists(dir.resolve(QUEUED_MARKER));
+            java.nio.file.Files.deleteIfExists(dir.resolve(RUNNING_MARKER));
+            if (marker != null) {
+                java.nio.file.Files.write(dir.resolve(marker),
+                    String.valueOf(System.currentTimeMillis()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            logger.fine("[" + requestId + "] Could not mark request state: " + e.getMessage());
+        }
+    }
+
+    /** /status answers entry for taskId from now on, also after a restart. */
+    private void recordEndedRequest(String taskId, JSONObject entry) {
+        endedRequests.put(taskId, entry);
+        try {
+            java.nio.file.Path file = java.nio.file.Paths.get(logConfig.getSystemDir(), ENDED_REQUESTS_FILE);
+            java.nio.file.Files.createDirectories(file.getParent());
+            java.nio.file.Files.write(file, (entry.toString() + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception e) {
+            logger.warning("[" + taskId + "] Could not keep the record of its end: " + e.getMessage());
+        }
+    }
+
+    /** The records of ended requests from before this start (the newest MAX_ENDED_REQUESTS). */
+    void loadEndedRequests() {
+        java.nio.file.Path file = java.nio.file.Paths.get(logConfig.getSystemDir(), ENDED_REQUESTS_FILE);
+        if (!java.nio.file.Files.isRegularFile(file)) {
+            return;
+        }
+        try {
+            List<String> lines = java.nio.file.Files.readAllLines(file, java.nio.charset.StandardCharsets.UTF_8);
+            List<String> kept = lines.subList(Math.max(0, lines.size() - MAX_ENDED_REQUESTS), lines.size());
+            for (String line : kept) {
+                try {
+                    JSONObject entry = new JSONObject(line);
+                    endedRequests.put(entry.getString("taskId"), entry);
+                } catch (Exception badLine) {
+                    // a line cut short by a crash
+                }
+            }
+            if (lines.size() > 2 * MAX_ENDED_REQUESTS) {
+                java.nio.file.Files.write(file, (String.join("\n", kept) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            logger.warning("Could not read " + file + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Requests the last Builder process held when it stopped: queued ones are queued again, in
+     * arrival order (they never started); running ones were cut off, so they are recorded as
+     * interrupted and their callback gets an error, as for a request that failed, so the client
+     * and the report see an end instead of a request that vanished.
+     */
+    void recoverRequestsOfLastRun() {
+        File[] dirs = new File(logConfig.getRequestsDir()).listFiles(File::isDirectory);
+        if (dirs == null) {
+            return;
+        }
+        Arrays.sort(dirs, Comparator.comparing(File::getName));
+        int requeued = 0;
+        for (File dir : dirs) {
+            String requestId = dir.getName();
+            boolean wasQueued = new File(dir, QUEUED_MARKER).isFile();
+            boolean wasRunning = new File(dir, RUNNING_MARKER).isFile();
+            if (!wasQueued && !wasRunning) {
+                continue;
+            }
+            markRequestState(requestId, null);
+            JSONObject request = null;
+            try {
+                request = new JSONObject(new String(java.nio.file.Files.readAllBytes(new File(dir, "request.json").toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8));
+            } catch (Exception e) {
+                logger.warning("[" + requestId + "] Cannot read the request of the last run: " + e.getMessage());
+            }
+            JSONObject upload = request != null ? request.optJSONObject("buildUpload") : null;
+            boolean secretLost = upload != null && "***".equals(upload.optString("password"));
+            if (wasQueued && request != null && !secretLost) {
+                request.put("requestId", requestId);
+                pendingRequests.offer(new QueuedBuildRequest(requestId, request));
+                markRequestState(requestId, QUEUED_MARKER);
+                requeued++;
+                logger.info("[" + requestId + "] Queued again: it was waiting when the Builder stopped");
+                continue;
+            }
+            String message = wasRunning
+                ? "The Builder restarted while this request was running; it did not finish. Send it again."
+                : "The Builder restarted while this request was queued and could not queue it again"
+                    + (secretLost ? " (its upload password is not kept on disk)" : "") + ". Send it again.";
+            logger.warning("[" + requestId + "] " + message);
+            recordEndedRequest(requestId, new JSONObject()
+                .put("status", "interrupted")
+                .put("taskId", requestId)
+                .put("removedAt", System.currentTimeMillis())
+                .put("message", message));
+            String callbackUrl = request != null ? request.optString("callbackUrl", "") : "";
+            if (!callbackUrl.isEmpty()) {
+                sendInterruptedCallback(callbackUrl, requestId, message);
+            }
+        }
+        if (requeued > 0) {
+            logger.info("Queued " + requeued + " request(s) of the last run again");
+        }
+    }
+
+    /** The error callback BuilderTask sends for a failed request, in the background with retries. */
+    private void sendInterruptedCallback(String callbackUrl, String requestId, String message) {
+        byte[] body = new JSONObject()
+            .put("requestId", requestId)
+            .put("taskId", requestId)
+            .put("status", "error")
+            .put("message", message)
+            .put("timestamp", System.currentTimeMillis())
+            .toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Thread sender = new Thread(() -> {
+            // The report server may be restarting with the Builder
+            for (int attempt = 1; attempt <= 5; attempt++) {
+                HttpURLConnection conn = null;
+                try {
+                    conn = (HttpURLConnection) new URL(callbackUrl).openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                    conn.setConnectTimeout(10_000);
+                    conn.setReadTimeout(60_000);
+                    conn.setDoOutput(true);
+                    conn.setFixedLengthStreamingMode(body.length);
+                    try (OutputStream out = conn.getOutputStream()) {
+                        out.write(body);
+                    }
+                    int code = conn.getResponseCode();
+                    if (code >= 200 && code < 300) {
+                        logger.info("[" + requestId + "] Sent the interrupted request's error callback to " + callbackUrl);
+                        return;
+                    }
+                    logger.warning("[" + requestId + "] Error callback rejected with HTTP " + code);
+                    if (code < 500) {
+                        return;
+                    }
+                } catch (IOException e) {
+                    logger.fine("[" + requestId + "] Error callback attempt " + attempt + " failed: " + e.getMessage());
+                } finally {
+                    if (conn != null) {
+                        conn.disconnect();
+                    }
+                }
+                try {
+                    Thread.sleep(attempt * 15_000L);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+            logger.warning("[" + requestId + "] The interrupted request's error callback was not delivered to " + callbackUrl);
+        }, "interrupted-callback-" + requestId);
+        sender.setDaemon(true);
+        sender.start();
+    }
+
+    /** 1-based position of requestId in the queue, or 0 when it is not queued. */
+    private int queuePosition(String requestId) {
+        int position = 1;
+        for (QueuedBuildRequest qr : pendingRequests) {
+            if (qr != null && requestId.equals(qr.getRequestId())) {
+                return position;
+            }
+            position++;
+        }
+        return 0;
+    }
+
+    /**
+     * The client behind a request: the address the dashboard gateway forwards (X-Forwarded-For)
+     * or the peer address, with its User-Agent.
+     */
+    private static String describeRequester(HttpExchange exchange) {
+        String address = exchange.getRemoteAddress() != null && exchange.getRemoteAddress().getAddress() != null
+            ? exchange.getRemoteAddress().getAddress().getHostAddress() : "unknown";
+        String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
+        if (forwarded != null && !forwarded.trim().isEmpty()) {
+            address = forwarded.split(",")[0].trim() + " (via " + address + ")";
+        }
+        String agent = exchange.getRequestHeaders().getFirst("User-Agent");
+        return agent == null || agent.trim().isEmpty() ? address : address + ", " + agent.trim();
     }
 
     private boolean removeFromPendingQueue(String requestId) {

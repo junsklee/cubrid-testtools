@@ -161,8 +161,8 @@ public class Tester {
 
         // Create execution strategies
         this.directExecutor = new DirectExecutor(config, buildCache, shellTcSync, cubridInstaller);
-        this.standardDockerExecutor = new StandardDockerExecutor(config, buildCache, shellTcSync);
-        this.optimizedDockerExecutor = new OptimizedDockerExecutor(config, buildCache, shellTcSync, imageBuilder);
+        this.standardDockerExecutor = new StandardDockerExecutor(config, buildCache, shellTcSync, ctpProvisioner);
+        this.optimizedDockerExecutor = new OptimizedDockerExecutor(config, buildCache, shellTcSync, imageBuilder, ctpProvisioner);
         this.sqlDockerExecutor = useDocker
             ? new SqlDockerExecutor(config, buildCache, sqlTcSync, imageBuilder, ctpProvisioner, sqlAgentPool)
             : null;
@@ -210,12 +210,17 @@ public class Tester {
             actualSampler
         );
         if (config.isVmMode()) {
+            if (config.isVmInstallCommonConf()) {
+                com.navercorp.cubridqa.builder.git.GitCredentials.installCommonConf(VmShellExecutor.resolveCtpHome(config),
+                    config.getVmGitUser(), config.getVmGitPwd(), config.getVmGitEmail());
+            }
             if (config.isVmGitCredentialsFromCtp()) {
                 com.navercorp.cubridqa.builder.git.GitCredentials.configureFromCtp(
                     VmShellExecutor.resolveCtpHome(config), Paths.get(config.getWorkDir(), ".git_helper"));
             }
-            testOrchestrator.setVmShellExecutor(new VmShellExecutor(config, buildCache, shellTcSync));
-            testOrchestrator.setVmSqlExecutor(new VmSqlExecutor(config, buildCache, sqlTcSync));
+            testOrchestrator.setVmShellExecutor(new VmShellExecutor(config, buildCache, shellTcSync,
+                VmShellExecutor.siblingSyncs(config, sqlTcSync), ctpProvisioner));
+            testOrchestrator.setVmSqlExecutor(new VmSqlExecutor(config, buildCache, sqlTcSync, ctpProvisioner));
             logger.info("Execution mode: vm (one case at a time, shell or SQL, CUBRID=" + config.getVmCubridHome()
                 + ", case timeout " + config.getVmCaseTimeoutSeconds() + "s)");
         }
@@ -315,6 +320,7 @@ public class Tester {
 
         server.start();
         logger.info("Tester started on port " + config.getTesterPort());
+        logger.info("Code: " + BuildStamp.describe());
         logger.info("Work directory: " + config.getWorkDir());
         logger.info("Docker mode: " + (useDocker ? "ENABLED" : "DISABLED"));
         if (useDocker) {
@@ -351,12 +357,14 @@ public class Tester {
         try {
             String configFile = args.length > 0 ? args[0] : "conf/tester.conf";
             
-            // Set system property for log directory based on config file location
-            if (args.length > 0) {
-                // Config file is absolute path from startup script
-                File configFileObj = new File(configFile).getAbsoluteFile();
-                File projectRoot = configFileObj.getParentFile().getParentFile(); // ../.. from conf/tester.conf
-                System.setProperty("tester.project.root", projectRoot.getAbsolutePath());
+            // Set system property for log directory based on config file location, but only for
+            // <root>/conf/<file>: a config kept elsewhere (e.g. ~/tmp/tester_work/tester.conf.x) would
+            // put request logs under ~/tmp/log, where the local Builder never looks for them.
+            if (args.length > 0 && System.getProperty("tester.project.root") == null) {
+                File confDir = new File(configFile).getAbsoluteFile().getParentFile();
+                if (confDir != null && "conf".equals(confDir.getName()) && confDir.getParentFile() != null) {
+                    System.setProperty("tester.project.root", confDir.getParentFile().getAbsolutePath());
+                }
             }
             
             Config config = new Config(configFile);

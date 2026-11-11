@@ -34,6 +34,20 @@ the requested testcase commit with `git checkout` + `git clean`, so repeated run
 from a fresh tree, as a regression checkout does. Custom scripts and attachments from
 the request are applied after the restore.
 
+The request's testcase checkout is on a named branch, named as CTP's `run_git_update` names
+it (`/` becomes `_`: `develop`, `release_11.4`), not a detached HEAD: cases read it with
+`git rev-parse --abbrev-ref HEAD` and turn `_` back into `/` to pick the branch of a sibling
+repository (`cbrd_23613_6` runs `run_git_update -f ~/cubrid-testcases -b <that branch>`). Each
+request gets a clone of the testcase repository that borrows its objects (`git clone --shared`),
+so concurrent requests can all be on `develop`.
+
+The sibling checkouts cases use in place (`vm_sibling_tc_dirs`: `~/cubrid-testcases`,
+`~/cubrid-testcases-private`) are put on the request's shell testcase branch before each case,
+at the head that branch had when the request's first case ran: every case of a request (all of
+its commits) sees the same tree, and what a killed case left there (`cbrd_23613_6` moves
+`sql/` aside) is undone, as `run_git_update` does (`checkout -f`, `clean -df`). A case calling
+`run_git_update` may still move it on to the current head, as in regression.
+
 ## Setting up a VM
 
 The VM is a regular QA regression VM (or one set up the same way). For a local stand-in that runs
@@ -44,12 +58,17 @@ in a container on the Builder host, set up like the shell regression VM 192.168.
    locales and kernel settings regression uses (`core_pattern` writing `core.*` into the
    working directory, `ulimit -c unlimited`).
 2. `~/CTP`: a cubrid-testtools CTP checkout (only `shell/init_path`, `bin` and
-   `common/script` are used; nothing needs building).
+   `common/script` are used; nothing needs building). The tester brings it to the request's CTP
+   commit before cases (`vm_ctp_from_repo`), keeping its `conf`.
 3. `~/cubrid-testcases-private-ex`: a clone with an `upstream` (or `origin`) remote the
    tester can fetch requested commits from. The repository is private: the tester uses
    `git_user`/`git_pwd` from `~/CTP/conf/common.conf` like regression does. On a VM shared with
    other work, set `shell_tc_sync_mode=disabled` (and `sql_tc_sync_mode`): requested commits are
-   still fetched and run from per-request worktrees, but the checkout itself is never moved.
+   still fetched and run from per-request clones, but the checkouts themselves are never moved.
+   Without a `common.conf`, the tester installs one at startup (`vm_install_common_conf`) with
+   `git_user`/`git_pwd`/`git_email` from `vm_git_user`/`vm_git_pwd`/`vm_git_email`, empty when
+   those are unset (enough for the public `cubrid-testcases`): `run_git_update`, which cases call,
+   exits at once without the file. Keys already in the file are never changed.
 4. Any regression assets the cases expect under `$HOME` (`~/dblink_mysql`, `~/dblink_mariadb`,
    `~/dblink_oracle`, `~/cubrid-testcases` for the cases that call `ctp.sh`, ...).
 5. Java 8+ and this builder_tester directory (`lib/` + `build/` or `lib/builder-tester.jar`).
@@ -90,6 +109,10 @@ See `conf/tester_vm.conf`. VM-specific keys:
 | `vm_sql_conf_rules` | `10.1.*,10.2.*=sql_dont_reuse_heap.conf` | SQL cases: `CTP/conf` file per build version (`patterns=conf;...`, job.conf `acceptversions` globs), as job.conf's `MKEY_CONFIG` |
 | `vm_sql_default_conf` | `sql_local.conf` | SQL cases: the conf when no rule matches (`run_sql.sh` without `MKEY_CONFIG`) |
 | `vm_git_credentials_from_ctp` | `true` | Fetch the testcase repositories with `git_user`/`git_pwd` from `vm_ctp_home`'s `conf/common.conf`, as CTP's `run_git_update` does (the private repo needs them). They reach git through `GIT_ASKPASS`, never a command line or `.git/config`. |
+| `vm_ctp_from_repo` | `true` | Before a case, put the request's CTP (`ctp_sql_repo` at the commit the Builder pinned for the request, the CTP Docker cases run with) into `vm_ctp_home`: every directory but `conf`, as CTP's `upgrade.sh` keeps a regression VM's CTP current. Once per CTP commit (`vm_ctp_home/.builder_tester_ctp`). A VM CTP copied once falls behind: cases written for the current `init.sh` failed with `wait_until: command not found`. Off in VM (regression) mode, whose VMs update their CTP themselves. |
+| `vm_install_common_conf` | `true` | At startup, add `git_user`/`git_pwd`/`git_email` to `vm_ctp_home`'s `conf/common.conf` where missing (the file is created, owner-only, if absent; existing keys are kept). CTP's `run_git_update` exits at once without the file. |
+| `vm_git_user`, `vm_git_pwd`, `vm_git_email` | (empty) | The values `vm_install_common_conf` writes. Empty credentials still fetch public repositories (`cubrid-testcases`); the private ones need a user and token. |
+| `vm_sibling_tc_dirs` | `~/cubrid-testcases,~/cubrid-testcases-private` | Checkouts cases use in place, put on the request's shell testcase branch before each case (missing ones are skipped). They follow `sql_tc_sync_mode`: `disabled` leaves them alone. Empty = none. |
 
 `test_read_timeout_minutes` (Builder -> Tester) must outlast one case plus an install.
 
@@ -159,9 +182,10 @@ absent or `"docker"`) cannot use VM testers, and VM requests cannot use Docker t
 - `executionMode`: `"vm"` (see above); `"docker"` is the default.
 - `testType`: `shell` (default) or `sql` (see "SQL cases on a VM").
 - `tests`, `commits`, `buildType`, `shellTcBranch`, `shellTcCommit`, `runMode`, `minRuns`,
-  `maxRuns`, `customShellScript`, `customAttachments`, `customScriptTestPath`: as in Docker
-  mode. Each attempt starts from the case directory restored to `shellTcCommit`, then the
-  custom script/attachments are applied.
+  `maxRuns`, `customShellScript`, `customShellScriptBase64`, `customAttachments`,
+  `customScriptTestPath`: as in Docker mode. Each attempt starts from the case directory
+  restored to `shellTcCommit`, then the custom script/attachments are applied.
+  `shellTcBranch` also names the branch the sibling checkouts (`~/cubrid-testcases`) are put on.
 - `keepAlive` has no effect.
 
 **Throughput and timeouts.** One case at a time per VM node, so a request takes roughly
@@ -224,12 +248,13 @@ Builder ──message──▶ QUEUE_CUBRID_QA_BUILDER_TESTER_LINUX ──▶ st
    the runner can reach it), using the VM's own settings. From `CTP/conf/shell_template.conf` (or the last `shell_runtime.conf`) it takes
    the testcase checkout (the repo holding `scenario`), `testcase_timeout_in_secs`, the SSH port,
    `large_space_dir`, `cubrid_db_charset` and `ignore_core_by_keywords`. `$CUBRID` is the install
-   directory. When `CTP/conf/common.conf` has `git_user`/`git_pwd`, it fetches testcases through
-   a temporary authenticated remote, as `run_git_update` does.
+   directory. When `CTP/conf/common.conf` has `git_user`/`git_pwd`, it fetches testcases with
+   them, as `run_git_update` does. It never moves the VM's testcase checkouts (sibling ones such
+   as `~/cubrid-testcases` included) nor writes to its `common.conf`: they belong to regression.
 4. It leases cases one at a time, runs each with the tester and posts the tester's response,
    with the attempt logs and case-file bundles attached, back to the Builder. It sends a
    heartbeat every 20 s. When no case is left, it finalizes the request (removes its testcase
-   worktree), stops the tester and exits, and the consumer goes back to its queues.
+   clone), stops the tester and exits, and the consumer goes back to its queues.
 
 The Builder parses the relayed response exactly as it parses a tester's, so `results.json`,
 the logs under `tests/`, reports and callbacks are the same as in VM mode. The request records

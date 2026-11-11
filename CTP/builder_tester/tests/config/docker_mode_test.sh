@@ -30,7 +30,7 @@ work_dir=/tmp/test_builder_work_$$
 use_docker=true
 use_prebuilt_docker_images=true
 docker_build_image=cubridci/cubridci:develop
-docker_test_image=cubridci/cubridci:test_shell
+docker_test_image=cubridci/cubridci:test_rl8.10
 EOF
     
     start_test_builder "$config"

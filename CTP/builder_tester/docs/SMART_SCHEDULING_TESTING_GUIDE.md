@@ -549,7 +549,7 @@ Expected: Elephant eventually gets aged boost, scheduled before newer mice.
 1. Verify /health endpoint includes `images.present` list
 2. Increase `scheduling_weight_image_cache` (e.g., 0.20 instead of 0.15)
 3. Ensure Optimized Docker executor is enabled
-4. Check Docker image naming matches `cubrid-test:<commit>_<baseline>` pattern
+4. Check Docker image naming matches `cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>` pattern
 
 ---
 

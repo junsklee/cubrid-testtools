@@ -175,18 +175,25 @@ public class HeavyProfilerTest {
 
         HeavyProfiler profiler = new HeavyProfiler();
 
-        List<HeavyProfiler.RawTestStats> stats = Arrays.asList(
-                new HeavyProfiler.RawTestStats("normal", 30000, 50.0, 500.0, 10.0, 200.0, 10, 60.0, 600.0, 15.0, 250.0),   // All ratios ~1.0
-                new HeavyProfiler.RawTestStats("heavy_io", 60000, 50.0, 500.0, 60.0, 200.0, 10, 55.0, 520.0, 120.0, 220.0), // IO = ~6x mean effective
-                new HeavyProfiler.RawTestStats("extreme_cpu", 90000, 250.0, 500.0, 10.0, 200.0, 10, 300.0, 520.0, 15.0, 210.0) // CPU = 5x mean
-        );
+        // Classification is on means only (peaks are stored, not blended), and a test counts in the
+        // global mean it is compared with: with a handful of tests no outlier can reach 4x (with
+        // three, x / ((x + 2a) / 3) < 3), so eight ordinary tests surround the two outliers.
+        List<HeavyProfiler.RawTestStats> stats = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            stats.add(new HeavyProfiler.RawTestStats("normal_" + i, 30000, 50.0, 500.0, 10.0, 200.0, 10, 60.0, 600.0, 15.0, 250.0));
+        }
+        // IO 30 against a mean of (8*10 + 30 + 10) / 10 = 12: 2.5x
+        stats.add(new HeavyProfiler.RawTestStats("heavy_io", 60000, 50.0, 500.0, 30.0, 200.0, 10, 55.0, 520.0, 60.0, 220.0));
+        // CPU 500 against a mean of (8*50 + 50 + 500) / 10 = 95: 5.3x
+        stats.add(new HeavyProfiler.RawTestStats("extreme_cpu", 90000, 500.0, 500.0, 10.0, 200.0, 10, 600.0, 520.0, 15.0, 210.0));
 
         Map<String, TestProfile> profiles = profiler.profileAll(stats);
 
-        assertEqual(3, profiles.size());
-        assertEqual(TestProfile.HeavyClass.NORMAL, profiles.get("normal").getHeavyClass());
-        assertEqual(TestProfile.HeavyClass.EXTREME, profiles.get("heavy_io").getHeavyClass()); // 6x >= 4.0
-        assertEqual(TestProfile.HeavyClass.EXTREME, profiles.get("extreme_cpu").getHeavyClass()); // 5x >= 4.0
+        assertEqual(10, profiles.size());
+        assertEqual(TestProfile.HeavyClass.NORMAL, profiles.get("normal_0").getHeavyClass());
+        assertEqual(TestProfile.HeavyClass.HEAVY, profiles.get("heavy_io").getHeavyClass()); // 2.0 <= 2.5x < 4.0
+        assertEqual(TestProfile.DominantDimension.IO, profiles.get("heavy_io").getDominantDim());
+        assertEqual(TestProfile.HeavyClass.EXTREME, profiles.get("extreme_cpu").getHeavyClass()); // 5.3x >= 4.0
 
         System.out.println("  PASSED");
     }

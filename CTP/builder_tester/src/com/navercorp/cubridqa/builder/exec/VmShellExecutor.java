@@ -2,7 +2,9 @@ package com.navercorp.cubridqa.builder.exec;
 
 import com.navercorp.cubridqa.builder.cache.BuildCache;
 import com.navercorp.cubridqa.builder.config.Config;
+import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
+import com.navercorp.cubridqa.builder.git.TcRepoSync;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
 import com.navercorp.cubridqa.builder.tester.CancelledRequests;
@@ -20,6 +22,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -42,11 +45,37 @@ public class VmShellExecutor implements ExecutorStrategy {
     private final Config config;
     private final BuildCache buildCache;
     private final ShellTcSync shellTcSync;
+    private final List<TcRepoSync> siblingSyncs;
+    private final CtpProvisioner ctpProvisioner;
 
-    public VmShellExecutor(Config config, BuildCache buildCache, ShellTcSync shellTcSync) {
+    public VmShellExecutor(Config config, BuildCache buildCache, ShellTcSync shellTcSync, List<TcRepoSync> siblingSyncs,
+                           CtpProvisioner ctpProvisioner) {
         this.config = config;
         this.buildCache = buildCache;
         this.shellTcSync = shellTcSync;
+        this.siblingSyncs = siblingSyncs;
+        this.ctpProvisioner = ctpProvisioner;
+    }
+
+    /**
+     * The vm_sibling_tc_dirs checkouts, with sql_tc_sync_mode. The SQL testcases checkout itself
+     * keeps its own instance: one lock for everything that moves that repository.
+     */
+    public static List<TcRepoSync> siblingSyncs(Config config, TcRepoSync sqlTcSync) {
+        List<TcRepoSync> syncs = new ArrayList<>();
+        Path sqlTcDir = Paths.get(sqlTcSync.getRepoDir()).toAbsolutePath().normalize();
+        for (String dir : config.getVmSiblingTcDirs()) {
+            Path path = Paths.get(dir).toAbsolutePath().normalize();
+            if (path.equals(sqlTcDir)) {
+                syncs.add(sqlTcSync);
+                continue;
+            }
+            syncs.add(new TcRepoSync(new TcRepoSync.RepoSpec(path.getFileName().toString(), path.toString(),
+                config.getSqlTcBranch(), config.getSqlTcPreferredRemote(), config.getSqlTcSyncMode(),
+                config.getSqlTcSyncIntervalSeconds(), Paths.get(config.getWorkDir(), "sibling_tc_requests").toString(),
+                false, path.toString())));
+        }
+        return syncs;
     }
 
     @Override
@@ -71,6 +100,8 @@ public class VmShellExecutor implements ExecutorStrategy {
             return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR).message(unsafe), metrics, startNs);
         }
         Path ctpHome = resolveCtpHome(config);
+        StringBuilder ctpNote = new StringBuilder();
+        VmCtp.ensureInstalled(config, ctpProvisioner, request, ctpHome, ctpNote, testLogger);
         if (!Files.isRegularFile(ctpHome.resolve("shell/init_path/init.sh"))
                 || !Files.isRegularFile(ctpHome.resolve("shell/init_path/shell_utils.sh"))) {
             return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR)
@@ -80,6 +111,7 @@ public class VmShellExecutor implements ExecutorStrategy {
         StringBuilder preamble = new StringBuilder();
         preamble.append("[builder-tester vm] user=").append(System.getProperty("user.name"))
             .append(" CUBRID=").append(cubridHome).append(" CTP_HOME=").append(ctpHome).append('\n');
+        preamble.append(ctpNote);
 
         // 1. Build: install once per package, like CTP's deploy step.
         Path localPackage;
@@ -102,7 +134,7 @@ public class VmShellExecutor implements ExecutorStrategy {
                 .message("Failed to install build: " + e.getMessage()), metrics, startNs);
         }
 
-        // 2. Case directory: per-request worktree under $HOME, restored to its committed state.
+        // 2. Case directory: per-request checkout under $HOME, restored to its committed state.
         Path caseDir;
         try {
             caseDir = prepareCaseDir(request, workDir, home, preamble, testLogger);
@@ -114,6 +146,15 @@ public class VmShellExecutor implements ExecutorStrategy {
         if (!Files.isRegularFile(caseDir.resolve(caseFile))) {
             return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR)
                 .message("Case script not found: " + caseDir.resolve(caseFile)), metrics, startNs);
+        }
+        // Checkouts the case may use in place follow the request's branch, as run_git_update
+        // leaves them in regression (a case calling it may still move them on)
+        for (TcRepoSync sibling : siblingSyncs) {
+            String at = sibling.checkoutBaseForRequest(testLogger, request.getRequestId(), request.getShellTcBranch());
+            if (at != null) {
+                preamble.append("[builder-tester vm] ").append(sibling.getRepoDir()).append(" at ")
+                    .append(at, 0, Math.min(10, at.length())).append('\n');
+            }
         }
 
         // 3. Run the case.
@@ -200,7 +241,12 @@ public class VmShellExecutor implements ExecutorStrategy {
         if (testsDir != null) {
             try {
                 Path resultCopy = testsDir.resolve("result_" + artifactBaseName(request, commitShort) + attemptSuffix(request) + ".result");
-                Files.write(resultCopy, resultContent.getBytes(StandardCharsets.UTF_8));
+                // The bytes as the case wrote them: an EUC-KR result decoded as UTF-8 came back mangled
+                if (Files.exists(resultPath)) {
+                    Files.copy(resultPath, resultCopy, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    Files.write(resultCopy, new byte[0]);
+                }
             } catch (Exception ignore) { }
         }
 
@@ -283,6 +329,10 @@ public class VmShellExecutor implements ExecutorStrategy {
                 Files.createDirectories(target.getParent());
                 Files.write(target, Base64.getMimeDecoder().decode(a.getContentBase64().trim()));
             }
+        }
+        if (request.getCustomShellScriptBase64() != null) {
+            // Written above, as the last attachment
+            preamble.append("[builder-tester vm] case script replaced by the request's custom script (exact bytes)\n");
         }
         String custom = request.getCustomShellScript();
         if (custom != null && !custom.isEmpty()) {

@@ -43,8 +43,16 @@ Inputs (environment variables):
 
 ## Maintain
 
+- `vm_sim/refresh_ctp.sh [name] [ref]` brings `~/CTP` up to CUBRID/cubrid-testtools `develop`,
+  as regression VMs keep their CTP current (setup copies this host's checkout, which falls
+  behind: cases written for the current `init.sh` fail with `wait_until: command not found`). The
+  container's own conf files stay. Run it between requests. Requests do not need it: the VM
+  tester installs each request's pinned CTP into `~/CTP` (all but `conf`) before its cases
+  (`vm_ctp_from_repo`, default true).
 - After `bin/compile.sh`: `vm_sim/refresh_tester.sh [name]` copies the jars in and restarts the
-  tester.
+  tester. Restarting the Builder and the local tester does not update it; a request's
+  `builder.log` warns "Tester ... runs other Builder-Tester code than this Builder" while it is
+  behind (`/health` reports each tester's code fingerprint, `code.fingerprint`).
 - VM (regression) mode tests: `vm_sim/start_consumer.sh tcp://<broker>:61616 [name]` makes the VM
   a consumer of the Builder-Tester queue on that broker.
 - To compare with a regression VM again: `rpm -qa --qf '%{NAME}\n'` on both, then check which of

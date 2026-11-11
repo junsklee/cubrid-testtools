@@ -86,6 +86,10 @@ fi
 
 # git must never wait for a password: the runner fetches testcases on its own
 export GIT_TERMINAL_PROMPT=0
+# runner.log gets every run appended and was never trimmed: past 10 MB it becomes runner.log.1
+if [ "$(stat -c %s "$runner_home/runner.log" 2>/dev/null || echo 0)" -gt 10485760 ]; then
+    mv -f "$runner_home/runner.log" "$runner_home/runner.log.1"
+fi
 log "running request $BT_REQUEST_ID for $BT_BUILDER_URL (slot ${BT_SLOT:0:8})"
 "$java" -Dfile.encoding=UTF-8 -cp "$classpath" com.navercorp.cubridqa.builder.consumer.ConsumerRunner \
     "$BT_BUILDER_URL" "$BT_REQUEST_ID" "$BT_SLOT" "$runner_home" "$CTP_HOME" 2>&1 | tee -a "$runner_home/runner.log"

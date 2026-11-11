@@ -38,7 +38,7 @@
 
 ### 2.1 Current shell pipeline (what we plug into)
 - **Builder** (`Builder.java`, port 8089): one active request at a time (`MAX_CONCURRENT_REQUESTS=1`, `Builder.java:32`), builds commits sequentially in the `cubridci/cubridci:develop` container, packages `cubrid_<sha7>.tar.gz`, then distributes `(commit × test)` units to tester nodes over HTTP `POST /test` — either smart scheduling (`BuilderTask.distributeTestsWithSmartScheduling`) or a legacy work queue.
-- **Tester** (`Tester.java`, port 8090): `TestOrchestrator` handles admission (reservations, headroom, circuit breaker) and retry/flaky logic; execution strategies live in `exec/` (`DirectExecutor`, `StandardDockerExecutor`, `OptimizedDockerExecutor`). The optimized path bakes a **per-commit image** `cubrid-test:<commit>_<baseline>` (CUBRID pre-installed at `/opt/cubrid`) via `DockerImageBuilder` (`docker commit`, LRU-evicted), stages host CTP into `/workspace/CTP`, and runs a generated `run_test.sh`.
+- **Tester** (`Tester.java`, port 8090): `TestOrchestrator` handles admission (reservations, headroom, circuit breaker) and retry/flaky logic; execution strategies live in `exec/` (`DirectExecutor`, `StandardDockerExecutor`, `OptimizedDockerExecutor`). The optimized path bakes a **per-commit image** `cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>` (CUBRID pre-installed at `/opt/cubrid`) via `DockerImageBuilder` (`docker commit`, LRU-evicted), stages host CTP into `/workspace/CTP`, and runs a generated `run_test.sh`.
 - **Test-type coupling today**: paths must start with `shell/`, `shell_heavy/`, `shell_perf/` and end `.sh` (`ALLOWED_SHELL_TEST_ROOTS`, `Builder.java:35`; `validateRequest`, `Builder.java:788-814`). `TestRequest.java` has no type field. Result parsing greps `<base>.result` for `OK|NOK` (`OptimizedDockerExecutor.java:525-566`).
 - **Report server** (`report-server/`, Node/Express, port 8091): file-based, everything under `log/requests/req_*/` (`results.json`, `request.json`, `tests/*.log`, `report.html`). Verdicts (`Regression introduced`, `Pre-existing failure`, `Flaky`, …) computed in `reportService.analyzeVerdict` from the per-test × per-commit status matrix — already test-type-agnostic.
 
@@ -164,14 +164,14 @@ The host clone of `cubrid-testtools` is on a working branch (`builder_tester_ref
 - The payload is staged into the per-request workspace as `<workDir>/CTP` and mounted at `/workspace/CTP` — the same staging seam `OptimizedDockerExecutor.stageCtpResources` uses today, minus the host-checkout source. Shell requests keep their current staging untouched.
 - LRU-evict old `payload_*` dirs (reuse the `build_cache_size` pattern).
 
-**Why merge at the builder, not bake into the image:** CTP is mounted, not baked, so per-commit Docker images (`cubrid-test:<commit>_<baseline>`) stay valid when CTP develop moves or PR 757 evolves — no image-cache invalidation.
+**Why merge at the builder, not bake into the image:** CTP is mounted, not baked, so per-commit Docker images (`cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>`) stay valid when CTP develop moves or PR 757 evolves — no image-cache invalidation.
 
 ---
 
 ## 7. Docker execution design
 
 ### 7.1 Image strategy — reuse per-commit images unchanged
-`DockerImageBuilder` already produces exactly what SQL needs: `cubrid-test:<commit>_<baseline>` with the built CUBRID extracted to `/opt/cubrid` and env preset, derived from `cubridci/cubridci:test_shell` (which ships the JDK CTP requires — the shell path already runs CTP from it). SQL adds **zero** image-build work; both test types share the image cache for the same commit.
+`DockerImageBuilder` already produces exactly what SQL needs: `cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>` with the built CUBRID extracted to `/opt/cubrid` and env preset, derived from `docker_test_image` (`cubridci/cubridci:test_rl8.10`, which ships the JDK CTP requires — the shell path already runs CTP from it). SQL adds **zero** image-build work; both test types share the image cache for the same commit.
 
 Fallback tier mirrors shell: if `optimized_docker_enabled=false` or image build fails, a `StandardSqlDockerExecutor` variant extracts `build.tar.gz` at container start (same pattern as `StandardDockerExecutor`).
 
@@ -203,7 +203,7 @@ Two generated artifacts per agent, following the existing "scripts are emitted a
 **`sql_env_setup.sh` — provision once per container** (replicates the relevant `CTP/sql/bin/run.sh` steps, using CTP's own `bin/ini.sh` for conf edits):
 1. Env: `CUBRID=/opt/cubrid`, `CUBRID_DATABASES=$CUBRID/databases`, extend `PATH`/`LD_LIBRARY_PATH`, verify `java -version` works, `export CTP_HOME TZ LC_ALL`.
 2. `cubrid.conf` overrides (the shipped `[sql/cubrid.conf]` defaults): `java_stored_procedure=yes`, `test_mode=yes`, `max_plan_cache_entries=1000`, `unicode_input_normalization=no`, `lock_timeout=10sec`, `ha_mode=no` (single-node SQL run; HA answer parity is a non-goal). Broker conf: `%query_editor SERVICE=OFF`, `%BROKER1 BROKER_PORT=33000 APPL_SERVER_SHM_ID=33000`.
-3. `cubrid createdb ${sql_createdb_opts:---db-volume-size=512M} basic ${sql_db_charset:-en_US.iso88591}`.
+3. `cubrid createdb ${sql_createdb_opts:---db-volume-size=512M} basic <charset>`, where `<charset>` is `sql_db_charset` when set, else `en_US.utf8` for CUBRID 11.5+ (run.sh, CUBRIDQA-1287), else `sql.conf`'s `db_charset` (`en_US` = ISO-8859-1), else `en_US.iso88591`.
 4. Stored procedures: `javac` + `loadjava` everything under `$CTP_HOME/sql/function/stored_procedure/src` (needed by `_08_javasp` and others; skip-able via `sql_load_stored_procedures=false` for speed when the request touches none — default **on** for correctness).
 5. Start: `cubrid server start basic`, `cubrid broker start`; wait-loop until the broker answers on 33000.
 6. Sanity-write the dburl into `$CTP_HOME/sql/configuration/Function_Db/basic_qa.xml` (same `sed` run.sh performs) — defensive vs. a stale port in the payload; also refresh `sql/configuration/local.properties` `dbversion`/`dbbuildnumber` from `cubrid_rel` so the result-dir name is truthful (PR 757 never updates it).
@@ -389,7 +389,7 @@ Milestone 3 ships a usable feature (correctness-first, isolation-maximal); 5 del
 
 - **PR #757 drift / merge conflict**: mitigated by `ctp_sql_pin` and fail-fast in `CtpProvisioner` with an actionable error. If #757 merges into develop, `ctp_sql_prs` becomes a no-op (fetch of a merged PR head still resolves; provisioner should detect ancestor-of-develop and skip the merge).
 - **JDK in `test_shell` image vs CTP jars**: the shell path already runs CTP's common jar in this image, and `cubridqa-cqt.jar` targets the same era of Java — verify once in milestone 3; if a newer JDK is ever required, bake it via `DockerImageBuilder.createSetupScript` (one-line change).
-- **Answer variants** (`.answer_D_utf8_C_utf8_bin`, …): selected by CTP from `jdbc_config_file` run-modes. v1 pins `test_default.xml` + `en_US.iso88591` (matches upstream daily regression). A future `sql_jdbc_config_file`/`sql_db_charset` pairing unlocks charset suites — config-only change.
+- **Answer variants** (`.answer_D_utf8_C_utf8_bin`, …): selected by CTP from `jdbc_config_file` run-modes. v1 pins `test_default.xml`, with `en_US.utf8` on 11.5+ and `sql.conf`'s `en_US` (ISO-8859-1) before it, as upstream run.sh does. A future `sql_jdbc_config_file`/`sql_db_charset` pairing unlocks charset suites — config-only change.
 - **Cross-case DB contamination in pool mode**: bounded by fresh-verify (§8.3); residual risk is a *pass* that should have failed (masked by leftover state) — accepted for CI purposes, `per_case` mode exists for forensic runs, and `sql_agent_max_cases` bounds drift.
 - **Stored-procedure load time** dominates provisioning for requests that never touch javasp — `sql_load_stored_procedures=false` is the escape hatch; auto-detection (case path under `_08_javasp`/plcsql suites) is a possible refinement.
 - **Mixed shell+SQL requests**: schema supports it later (per-test `testType`); deferred to keep scheduling profiles and report legend simple.

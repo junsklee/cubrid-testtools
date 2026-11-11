@@ -282,16 +282,19 @@ public class ProductionHardeningTest {
     }
 
     private static void testTestHandlerHasNodeCapacity() {
-        System.out.println("[Test 9] TestHandler constructor includes NodeCapacity...");
+        // Admission (capacity checks against NodeCapacity) moved from TestHandler to TestOrchestrator
+        System.out.println("[Test 9] TestOrchestrator constructor includes NodeCapacity...");
 
         try {
-            Class<?> testHandlerClass = Class.forName("com.navercorp.cubridqa.builder.tester.TestHandler");
-            testHandlerClass.getConstructor(
-                Class.forName("com.navercorp.cubridqa.builder.config.Config"),
-                Class.forName("com.navercorp.cubridqa.builder.tester.TestOrchestrator"),
-                Class.forName("com.navercorp.cubridqa.builder.tester.NodeCapacity"),
-                java.util.logging.Logger.class
-            );
+            Class<?> orchestratorClass = Class.forName("com.navercorp.cubridqa.builder.tester.TestOrchestrator");
+            Class<?> nodeCapacityClass = Class.forName("com.navercorp.cubridqa.builder.tester.NodeCapacity");
+            boolean found = false;
+            for (java.lang.reflect.Constructor<?> ctor : orchestratorClass.getConstructors()) {
+                found |= java.util.Arrays.asList(ctor.getParameterTypes()).contains(nodeCapacityClass);
+            }
+            if (!found) {
+                throw new NoSuchMethodException("no TestOrchestrator constructor takes a NodeCapacity");
+            }
 
             testsPassed++;
             System.out.println("  ✓ PASSED\n");

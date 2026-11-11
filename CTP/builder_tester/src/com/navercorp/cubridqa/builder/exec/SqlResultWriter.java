@@ -132,6 +132,9 @@ final class SqlResultWriter {
         } else if (SqlResultParser.STATUS_TIMEOUT.equals(outcome.status)) {
             resultBuilder.status(TestStatus.EXECUTION_ERROR)
                 .message("Case timed out after " + caseTimeoutSec + "s");
+        } else if ("console_exception".equals(outcome.reason)) {
+            resultBuilder.status(TestStatus.EXECUTION_ERROR)
+                .message("CTP reported [OK] but its console shows a Java exception (see console log)");
         } else {
             resultBuilder.status(TestStatus.EXECUTION_ERROR)
                 .message("SQL case execution error" + (outcome.reason != null ? ": " + outcome.reason : ""));

@@ -43,19 +43,26 @@ if (config.app.environment !== 'test') {
 // Rate limiting
 // Default limiter protects API endpoints, but the dashboard does high-frequency reads (queue/status + log metadata).
 // Make those endpoints more lenient to avoid 429s during normal UI usage.
-const defaultLimiter = rateLimit(config.security.rateLimit);
-const highFreqLimiter = rateLimit({
+// Separate budgets (each limiter keeps its own counts): reads are polled (a client watching a
+// request polls /api/reports and /api/builder/health), and when they shared the 100-request
+// budget with writes, the polling used it up and the client's next POST /api/builder/build
+// was refused with 429. GitHub lookups keep the strict budget: each one spends GitHub API quota.
+const writeLimiter = rateLimit(config.security.rateLimit);
+const githubLimiter = rateLimit(config.security.rateLimit);
+const readLimiter = rateLimit({
     ...config.security.rateLimit,
     max: Math.max(config.security.rateLimit.max || 0, 2000)
 });
 
 app.use('/api/', (req, res, next) => {
     const p = req.path || '';
-    // High-frequency dashboard reads
-    if (p === '/builder/status' || p.startsWith('/log-root/') || p.startsWith('/log/') || p.startsWith('/logs/')) {
-        return highFreqLimiter(req, res, next);
+    if (p.startsWith('/github/')) {
+        return githubLimiter(req, res, next);
     }
-    return defaultLimiter(req, res, next);
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return writeLimiter(req, res, next);
+    }
+    return readLimiter(req, res, next);
 });
 
 // CORS and cross-site write protection (before body parsing, so refused writes are not parsed)

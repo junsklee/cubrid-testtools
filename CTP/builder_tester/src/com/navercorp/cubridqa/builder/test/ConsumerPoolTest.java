@@ -80,6 +80,7 @@ public class ConsumerPoolTest {
         runnerDiesBetweenCases();
         messageTakenButRunnerNeverChecksIn();
         lostMessagesFailTheRequest();
+        runnersDyingBeforeFirstCaseFailTheRequest();
         heartbeatAndResultAfterRequeueRefused();
         multipartRoundTrip();
         System.out.println("\n=== All ConsumerPoolTest tests passed! ===");
@@ -291,10 +292,47 @@ public class ConsumerPoolTest {
             pool.run("req_k", new JSONObject(), 60_000, () -> false, LOG);
             check(false, "should give up");
         } catch (IOException e) {
-            check(e.getMessage().contains("no runner checked in"), "gives up with a diagnosis: " + e.getMessage());
+            check(e.getMessage().contains("no runner ran a case"), "gives up with a diagnosis: " + e.getMessage());
         }
         check(queue.published.size() <= 6, "bounded republishing: " + queue.published.size());
         pool.close("req_k");
+    }
+
+    /**
+     * Runners that claim their message and die before their first case (no Java 8 on the VM, a
+     * failed jar download) count like lost messages: the waiting cases fail with the diagnosis
+     * soon, instead of a replacement message every lease timeout until the 24h pickup timeout.
+     */
+    static void runnersDyingBeforeFirstCaseFailTheRequest() throws Exception {
+        FakeQueue queue = new FakeQueue();
+        ConsumerPool pool = new ConsumerPool(queue, "http://b:1", 1, 60_000, 300);
+        pool.open("req_n", "bt_req_n");
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread claimer = new Thread(() -> {
+            int claimed = 0;
+            while (!stop.get()) {
+                if (queue.published.size() > claimed) {
+                    pool.claim("req_n", queue.slot(claimed++));  // checks in, then dies before leasing
+                }
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        });
+        claimer.start();
+        try {
+            pool.run("req_n", new JSONObject(), 60_000, () -> false, LOG);
+            check(false, "should give up");
+        } catch (IOException e) {
+            check(e.getMessage().contains("no runner ran a case"), "runners dying at start fail the request: " + e.getMessage());
+        } finally {
+            stop.set(true);
+            claimer.join(2000);
+        }
+        check(queue.published.size() <= 6, "bounded republishing: " + queue.published.size());
+        pool.close("req_n");
     }
 
     static void heartbeatAndResultAfterRequeueRefused() throws Exception {

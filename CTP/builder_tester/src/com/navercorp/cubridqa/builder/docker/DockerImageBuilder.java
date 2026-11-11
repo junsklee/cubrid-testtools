@@ -30,7 +30,18 @@ public class DockerImageBuilder {
     private final int maxCachedImages;
     private final Object buildLock = new Object();
     private final ThreadLocal<Boolean> lastOperationCacheHit = ThreadLocal.withInitial(() -> Boolean.FALSE);
-    
+
+    // The base image id only changes when something pulls the tag, so it is re-read at most this
+    // often rather than with a docker subprocess per call.
+    private static final long BASE_IMAGE_ID_TTL_MS = 30_000L;
+    private volatile String baseImageId = "";
+    private volatile long baseImageIdResolvedAt;
+    private final Object pullLock = new Object();
+    // The image hasImage last found on this thread. An executor skips the package download when
+    // hasImage says yes, so getOrBuildImage must be able to return that image even if the base
+    // id moved in between and the current key names nothing.
+    private final ThreadLocal<String> lastFoundImage = new ThreadLocal<>();
+
     public DockerImageBuilder(BuilderConfig config) {
         this.config = config;
         this.workDir = Paths.get(config.getWorkDir()).resolve("docker_images");
@@ -96,15 +107,131 @@ public class DockerImageBuilder {
     }
 
     /**
+     * Shell lines that install ncurses 5 (ncurses-compat-libs) when the build at cubridHome needs
+     * it and the image has none. 11.0 and older builds link libncurses.so.5 / libtinfo.so.5 (11.5's
+     * cubrid.sh links those names to ncurses 6 itself); neither test image ships ncurses 5, so their
+     * cubrid_rel could not start and every test was an execution error. Regression VMs have the
+     * package. The install takes about a minute, once per per-commit image.
+     */
+    public static String ncurses5Snippet(String cubridHome, String indent) {
+        String ldd = "LD_LIBRARY_PATH=" + cubridHome + "/lib:" + cubridHome + "/cci/lib:${LD_LIBRARY_PATH:-} ldd "
+            + cubridHome + "/bin/cubrid_rel 2>/dev/null";
+        return indent + "if " + ldd + " | grep -Eq 'lib(ncurses|tinfo|form)\\.so\\.5 => not found'; then\n"
+            + indent + "  echo \"This build needs ncurses 5; installing ncurses-compat-libs\"\n"
+            + indent + "  (dnf install -y -q ncurses-compat-libs || yum install -y -q ncurses-compat-libs) >/dev/null 2>&1 \\\n"
+            + indent + "    || echo \"WARNING: ncurses-compat-libs could not be installed\"\n"
+            + indent + "fi\n";
+    }
+
+    /**
+     * Docker tag of a per-commit image: commit, variant, and the base image it was provisioned
+     * from. docker_test_image is a moving tag - cubridci republishes it, and pointing the setting at
+     * another image moves it altogether - so an image provisioned on one base must never be found
+     * under a name that another base also produces.
+     */
+    public static String imageKey(String commitHash, String variant, String baseImageId) {
+        String base = baseImageId == null ? "" : baseImageId.trim();
+        int colon = base.indexOf(':');
+        if (colon >= 0) {
+            base = base.substring(colon + 1);
+        }
+        base = base.replaceAll("[^A-Za-z0-9]", "");
+        if (base.isEmpty()) {
+            throw new IllegalArgumentException("base image id is required");
+        }
+        return commitHash + "_" + variant + "_" + base.substring(0, Math.min(12, base.length()));
+    }
+
+    /**
+     * Id of docker_test_image as Docker resolves the tag now, or "" when it is not present
+     * locally. Reused for {@link #BASE_IMAGE_ID_TTL_MS}.
+     */
+    private String resolveBaseImageId() {
+        long now = System.currentTimeMillis();
+        String cached = baseImageId;
+        if (!cached.isEmpty() && now - baseImageIdResolvedAt < BASE_IMAGE_ID_TTL_MS) {
+            return cached;
+        }
+        String id = "";
+        try {
+            Process p = new ProcessBuilder("docker", "image", "inspect", "--format", "{{.Id}}",
+                                           config.getDockerTestImage()).redirectErrorStream(true).start();
+            String line;
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                line = r.readLine();
+                while (r.readLine() != null) {
+                    // drain
+                }
+            }
+            if (p.waitFor() == 0 && line != null && line.trim().startsWith("sha256:")) {
+                id = line.trim();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            logger.warning("Could not resolve test image id: " + e.getMessage());
+        }
+        if (!id.isEmpty()) {
+            if (!id.equals(cached)) {
+                logger.info("Test image " + config.getDockerTestImage() + " is " + id);
+            }
+            baseImageId = id;
+            baseImageIdResolvedAt = now;
+        }
+        return id;
+    }
+
+    /**
+     * As {@link #resolveBaseImageId()}, pulling the test image first if it is not present. One
+     * pull at a time: tests that all find it missing wait for the first one's pull.
+     */
+    private String requireBaseImageId() throws IOException {
+        String id = resolveBaseImageId();
+        if (!id.isEmpty()) {
+            return id;
+        }
+        synchronized (pullLock) {
+            id = resolveBaseImageId();
+            if (!id.isEmpty()) {
+                return id;
+            }
+            try {
+                DockerUtils.pullImage(config.getDockerTestImage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted pulling test image " + config.getDockerTestImage(), e);
+            }
+            id = resolveBaseImageId();
+        }
+        if (id.isEmpty()) {
+            throw new IOException("Test image " + config.getDockerTestImage() + " is not available");
+        }
+        return id;
+    }
+
+    /**
      * Get or build a Docker image for the given commit built on the given baseline.
      * This method first extracts the build package, then builds a Docker image.
-     * The image name includes both commit and baseline to prevent incorrect reuse.
+     * The image name includes commit, baseline and base image to prevent incorrect reuse.
      */
     public String getOrBuildImage(String commitHash, String baselineHash, Path buildPackage) throws IOException {
-        String imageKey = commitHash + "_" + baselineHash;
+        String found = lastFoundImage.get();
+        lastFoundImage.remove();
+        String baseId = requireBaseImageId();
+        String imageKey = imageKey(commitHash, baselineHash, baseId);
         String imageName = "cubrid-test:" + imageKey;
         lastOperationCacheHit.set(Boolean.FALSE);
-        
+
+        // The caller skipped the download because hasImage found an image; if the base id moved
+        // since, run on that image rather than fail the test (the next one rebuilds on the new base).
+        if (buildPackage == null && found != null && !found.equals(imageName)
+                && found.startsWith("cubrid-test:" + commitHash + "_" + baselineHash + "_")
+                && !imageExists(imageName) && imageExists(found)) {
+            logger.warning("Test image changed after " + found + " was chosen; using it for this test");
+            lastOperationCacheHit.set(Boolean.TRUE);
+            return found;
+        }
+
         // Check if image already exists
         if (imageExists(imageName)) {
             logger.info("Using existing Docker image: " + imageName);
@@ -112,7 +239,7 @@ public class DockerImageBuilder {
             lastOperationCacheHit.set(Boolean.TRUE);
             return imageName;
         }
-        
+
         // Build new image under lock to prevent concurrent builds of same image
         synchronized (buildLock) {
             // Double-check after acquiring lock
@@ -121,9 +248,14 @@ public class DockerImageBuilder {
                 lastOperationCacheHit.set(Boolean.TRUE);
                 return imageName;
             }
-            
+
+            // Only when the image hasImage found is gone as well (evicted) is there nothing to build from
+            if (buildPackage == null) {
+                throw new IOException("No Docker image " + imageName + " and no build package to build it from");
+            }
+
             logger.info("Building Docker image for commit " + commitHash + " on baseline " + baselineHash);
-            buildImageFromPackage(imageKey, buildPackage);
+            buildImageFromPackage(imageKey, buildPackage, baseId);
             lastOperationCacheHit.set(Boolean.FALSE);
             
             // Clean old images if needed
@@ -148,7 +280,7 @@ public class DockerImageBuilder {
     /**
      * Build Docker image directly from the tar.gz package
      */
-    private void buildImageFromPackage(String imageKey, Path buildPackage) throws IOException {
+    private void buildImageFromPackage(String imageKey, Path buildPackage, String baseId) throws IOException {
         String imageName = "cubrid-test:" + imageKey;
         String sanitizedKey = sanitizeName(imageKey);
         Path stagingDir = workDir.resolve(sanitizedKey + "_setup");
@@ -169,12 +301,16 @@ public class DockerImageBuilder {
         runCommand.add(setupScript.toAbsolutePath().toString() + ":/mnt/setup.sh:ro");
         runCommand.add("--entrypoint");
         runCommand.add("/bin/bash");
-        runCommand.add(config.getDockerTestImage());
+        // By id, not tag: the image name records this id, so the tag moving now must not matter
+        runCommand.add(baseId);
         runCommand.add("/mnt/setup.sh");
-        
+
         List<String> commitCommand = new ArrayList<>();
         commitCommand.add("docker");
         commitCommand.add("commit");
+        commitCommand.add("--change");
+        commitCommand.add("LABEL " + DockerLabels.BASE_IMAGE + "=" + config.getDockerTestImage()
+            + " " + DockerLabels.BASE_IMAGE_ID + "=" + baseId);
         commitCommand.add("--change");
         commitCommand.add("ENV CUBRID=/opt/cubrid");
         commitCommand.add("--change");
@@ -301,6 +437,10 @@ public class DockerImageBuilder {
         script.append("CONF_SNAPSHOT=$(snapshot_tree /opt/cubrid/conf)\n");
         script.append("DB_SNAPSHOT=$(snapshot_tree /opt/cubrid/databases)\n");
         script.append("log \"Final CUBRID_DIR=$CUBRID_DIR\"\n");
+        // CUBRID's cubrid.sh links lib{ncurses,form,tinfo}.so.5 to what `ldconfig -p` lists; a base
+        // image whose cache still names removed files (test_rl8.10: libform.so, libtinfo.so of an
+        // uninstalled ncurses-devel) would get links to nothing and a cubrid_rel that cannot start.
+        script.append("ldconfig 2>/dev/null || true\n");
         script.append("if [[ -f /opt/cubrid/share/scripts/setup.sh ]]; then\n");
         script.append("  log \"Running share/scripts/setup.sh\"\n");
         script.append("  (cd /opt/cubrid && printf 'y\\n' | sh share/scripts/setup.sh /opt/cubrid) || true\n");
@@ -323,7 +463,13 @@ public class DockerImageBuilder {
         script.append("  printf '0.0.0.0\\t\\tyour-hostname\\n' >> \"$HOSTS_CONF\"\n");
         script.append("fi\n");
         script.append("ls -la /opt/cubrid/bin/ || true\n");
-        script.append("/opt/cubrid/bin/cubrid_rel || log \"WARNING: cubrid_rel check failed\"\n");
+        script.append(ncurses5Snippet("/opt/cubrid", ""));
+        // The base image's LD_LIBRARY_PATH names $CUBRID=/home/CUBRID, not this install. Every test
+        // script stops when cubrid_rel fails, so an image where it does is never committed (cached).
+        script.append("if ! LD_LIBRARY_PATH=/opt/cubrid/lib:/opt/cubrid/cci/lib:${LD_LIBRARY_PATH:-} /opt/cubrid/bin/cubrid_rel; then\n");
+        script.append("  log \"ERROR: cubrid_rel does not run in this image; not committing it\"\n");
+        script.append("  exit 1\n");
+        script.append("fi\n");
         return script.toString();
     }
     
@@ -582,9 +728,17 @@ public class DockerImageBuilder {
      * @return true if the image exists in Docker, false otherwise
      */
     public boolean hasImage(String commitHash, String baselineHash) {
-        String imageKey = commitHash + "_" + baselineHash;
-        String imageName = "cubrid-test:" + imageKey;
-        return imageExists(imageName);
+        lastFoundImage.remove();
+        String baseId = resolveBaseImageId();
+        if (baseId.isEmpty()) {
+            return false;
+        }
+        String imageName = "cubrid-test:" + imageKey(commitHash, baselineHash, baseId);
+        if (!imageExists(imageName)) {
+            return false;
+        }
+        lastFoundImage.set(imageName);
+        return true;
     }
 
     public boolean wasLastOperationCacheHit() {

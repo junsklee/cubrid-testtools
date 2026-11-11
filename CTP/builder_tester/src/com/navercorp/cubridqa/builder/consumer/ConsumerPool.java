@@ -78,12 +78,17 @@ public class ConsumerPool {
 
     private enum SlotState { QUEUED, CLAIMED, DONE }
 
+    /** How often a waiting case tries to publish a message when its request has no slot. */
+    private static final long SLOT_RETRY_MS = 30_000L;
+
     private static final class Slot {
         final String id;
         volatile SlotState state = SlotState.QUEUED;
         volatile long lastSeen = System.currentTimeMillis();
         /** When a QUEUED slot was first found missing from the queue; 0 while it is there. */
         volatile long missingSince;
+        /** Whether its runner ever leased a case. */
+        volatile boolean leasedAny;
 
         Slot(String id) {
             this.id = id;
@@ -272,6 +277,7 @@ public class ConsumerPool {
         state.pending.add(job);
         try {
             ensureSlots(state, log);
+            long lastSlotRetry = System.currentTimeMillis();
             while (true) {
                 try {
                     return job.result.get(1, TimeUnit.SECONDS);
@@ -330,8 +336,16 @@ public class ConsumerPool {
                             + TimeUnit.MILLISECONDS.toMinutes(runTimeoutMs) + " minutes");
                     }
                 }
-                // Outside the job's lock: publishing talks to the broker
-                if (reapSlots(state, now, log) || requeued) {
+                // Outside the job's lock: publishing talks to the broker. A waiting case with no slot
+                // working for its request also tries again: when publishing a replacement failed,
+                // only the case that tried it failed, and the others waited out the pickup timeout.
+                boolean noSlot;
+                synchronized (state) {
+                    noSlot = job.slot == null && state.liveSlots() == 0;
+                }
+                boolean retrySlot = noSlot && now - lastSlotRetry > SLOT_RETRY_MS;
+                if (reapSlots(state, now, log) || requeued || retrySlot) {
+                    lastSlotRetry = now;
                     ensureSlots(state, log);
                 }
             }
@@ -389,6 +403,7 @@ public class ConsumerPool {
                 }
                 long now = System.currentTimeMillis();
                 job.slot = slot;
+                slot.leasedAny = true;
                 job.runner = runner;
                 job.leasedAt = now;
                 job.lastHeartbeat = now;
@@ -505,7 +520,14 @@ public class ConsumerPool {
                 if (slot.state == SlotState.CLAIMED && now - slot.lastSeen > leaseTimeoutMs && !holdsCase(state, slot)) {
                     slot.state = SlotState.DONE;
                     retired = true;
-                    log.warning("Consumer runner of slot " + slot.id.substring(0, 8) + " stopped checking in; replacing it");
+                    if (!slot.leasedAny) {
+                        // The runner claimed the message and died before its first case (jar download,
+                        // no Java 8, a port it could not bind): as lost as a message nobody claimed,
+                        // which fails the waiting cases soon instead of at the 24h pickup timeout
+                        state.lostMessages++;
+                    }
+                    log.warning("Consumer runner of slot " + slot.id.substring(0, 8) + " stopped checking in"
+                        + (slot.leasedAny ? "" : " before its first case") + "; replacing it");
                 } else if (slot.state == SlotState.QUEUED && queued != null) {
                     if (queued.contains(slot.id)) {
                         slot.missingSince = 0;
@@ -523,8 +545,9 @@ public class ConsumerPool {
                 }
             }
             if (state.lostMessages > 2 * maxParallel + 2 && state.failure == null) {
-                state.failure = "QA consumer VMs took " + state.lostMessages + " messages but no runner checked in: "
-                    + "check that the VMs reach " + builderUrl + " and have common/ext/run_builder_tester.sh";
+                state.failure = "QA consumer VMs took " + state.lostMessages + " messages but no runner ran a case: "
+                    + "check that the VMs reach " + builderUrl + ", have common/ext/run_builder_tester.sh and Java 8+, "
+                    + "and see runner.log in the runner's home on a VM";
                 log.severe(state.failure);
                 return false;
             }

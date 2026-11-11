@@ -29,6 +29,7 @@ public class TestRequest {
     private final String buildType;
     private final PredictedDemand predictedDemand;  // Resource predictions for enforcement
     private final String customShellScript;  // Custom script contents to execute instead of test
+    private final String customShellScriptBase64; // The same as exact bytes (an EUC-KR case is not UTF-8 text)
     private final List<CustomAttachment> customAttachments; // Additional files for custom script mode
     private final String shellTcBranch; // Request-scoped testcase branch selection
     private final String shellTcCommit; // Exact testcase commit resolved by Builder
@@ -58,8 +59,11 @@ public class TestRequest {
         this.containerName = json.optString("containerName", null);
         this.attemptNumber = json.optInt("attemptNumber", 1);
         this.buildType = json.optString("buildType", "release");
-        this.customShellScript = json.optString("customShellScript", null);
-        this.customAttachments = parseCustomAttachments(json);
+        String scriptBase64 = json.optString("customShellScriptBase64", "").trim();
+        this.customShellScriptBase64 = scriptBase64.isEmpty() ? null : scriptBase64;
+        // The Builder refuses a request with both; the exact bytes would win here
+        this.customShellScript = customShellScriptBase64 != null ? null : json.optString("customShellScript", null);
+        this.customAttachments = withEntryScript(parseCustomAttachments(json), testScript, customShellScriptBase64);
         this.shellTcBranch = json.optString("shellTcBranch", null);
         this.shellTcCommit = json.optString("shellTcCommit", null);
         this.testType = json.optString("testType", "shell");
@@ -108,6 +112,20 @@ public class TestRequest {
             return Collections.emptyList();
         }
     }
+
+    /**
+     * customShellScriptBase64 becomes the last attachment, over the entry script: executors write
+     * attachments byte for byte (and before a text custom script), so the case gets the bytes as sent.
+     */
+    private static List<CustomAttachment> withEntryScript(List<CustomAttachment> attachments, String testScript,
+                                                          String scriptBase64) {
+        if (scriptBase64 == null || testScript == null || testScript.trim().isEmpty()) {
+            return attachments;
+        }
+        List<CustomAttachment> out = new ArrayList<>(attachments);
+        out.add(new CustomAttachment(testScript.trim(), scriptBase64));
+        return Collections.unmodifiableList(out);
+    }
     
     public String getTestPath() { return testPath; }
     public String getBuildPackage() { return buildPackage; }
@@ -130,7 +148,11 @@ public class TestRequest {
     public String getBuildType() { return buildType; }
     public PredictedDemand getPredictedDemand() { return predictedDemand; }
     public String getCustomShellScript() { return customShellScript; }
-    public boolean hasCustomShellScript() { return customShellScript != null && !customShellScript.isEmpty(); }
+    public boolean hasCustomShellScript() {
+        return (customShellScript != null && !customShellScript.isEmpty()) || customShellScriptBase64 != null;
+    }
+    /** The entry script as base64 (also the last of getCustomAttachments), or null. */
+    public String getCustomShellScriptBase64() { return customShellScriptBase64; }
     public List<CustomAttachment> getCustomAttachments() { return customAttachments; }
     public boolean hasCustomAttachments() { return customAttachments != null && !customAttachments.isEmpty(); }
     public String getShellTcBranch() { return shellTcBranch; }

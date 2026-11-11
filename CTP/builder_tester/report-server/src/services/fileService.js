@@ -6,6 +6,22 @@ const fs = require('fs').promises;
 const path = require('path');
 const config = require('../config');
 
+/**
+ * Length of buf[0..n) without a trailing incomplete UTF-8 sequence: n when the last character is
+ * whole, else the index of its first byte (never 0, so a reader always moves on).
+ */
+function completeUtf8Length(buf, n) {
+    for (let i = n - 1; i >= 0 && i >= n - 4; i--) {
+        const b = buf[i];
+        if ((b & 0xC0) === 0x80) {
+            continue;  // continuation byte: keep looking for the lead byte
+        }
+        const need = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
+        return (n - i < need && i > 0) ? i : n;
+    }
+    return n;
+}
+
 class FileService {
     /**
      * Ensure required directories exist
@@ -33,7 +49,10 @@ class FileService {
         try {
             return await fs.readFile(filePath, encoding);
         } catch (err) {
-            throw new Error(`Failed to read file ${filePath}: ${err.message}`);
+            // Keep the code: callers answer a missing file (ENOENT) with 404, anything else with 500
+            const wrapped = new Error(`Failed to read file ${filePath}: ${err.message}`);
+            wrapped.code = err.code;
+            throw wrapped;
         }
     }
 
@@ -95,8 +114,12 @@ class FileService {
         try {
             fileHandle = await fs.open(filePath, 'r');
             const buffer = Buffer.alloc(length);
-            const { bytesRead } = await fileHandle.read(buffer, 0, length, start);
-            
+            const { bytesRead: read } = await fileHandle.read(buffer, 0, length, start);
+            // A range ending inside a multi-byte character decoded it as replacement characters
+            // here and again at the start of the next range: end at the character's first byte
+            // instead (bytesRead is what the caller advances its offset by)
+            const bytesRead = read === length ? completeUtf8Length(buffer, read) : read;
+
             // Convert to string, assuming UTF-8 for log files
             return {
                 data: buffer.toString('utf8', 0, bytesRead),
@@ -578,3 +601,4 @@ class FileService {
 }
 
 module.exports = new FileService();
+module.exports.completeUtf8Length = completeUtf8Length;

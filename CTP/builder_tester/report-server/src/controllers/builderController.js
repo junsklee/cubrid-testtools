@@ -89,9 +89,19 @@ class BuilderController {
             }
 
             const builderUrl = `${config.builder.protocol}://${config.builder.host}:${config.builder.port}/queue/remove`;
+            // The Builder logs who removed or cancelled a request and reports it in /status
+            const peer = req.socket && req.socket.remoteAddress ? req.socket.remoteAddress.replace(/^::ffff:/, '') : '';
+            const forwarded = req.headers['x-forwarded-for'];
+            const headers = { 'Content-Type': 'application/json' };
+            if (forwarded || peer) {
+                headers['X-Forwarded-For'] = forwarded ? `${forwarded}, ${peer}` : peer;
+            }
+            if (req.headers['user-agent']) {
+                headers['User-Agent'] = req.headers['user-agent'];
+            }
             const result = await proxyService.requestJson(builderUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({ taskId })
             });
 

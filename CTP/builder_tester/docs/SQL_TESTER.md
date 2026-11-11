@@ -90,7 +90,7 @@ Test Type = SQL, or post these fields:
      worktree of `sql_tc_dir` pinned to `sqlTcCommit`, mounted read-only at
      `/workspace/testcases`.
    - `SqlDockerExecutor` runs the case in the same per-commit image the shell
-     path uses (`cubrid-test:<commit>_<baseline>`, CUBRID pre-installed at
+     path uses (`cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>`, CUBRID pre-installed at
      `/opt/cubrid`); CTP is mounted, not baked, so images stay cached when CTP
      moves.
 
@@ -100,7 +100,11 @@ replicating `CTP/sql/bin/run.sh`. All provisioning settings (`db_charset`,
 `[sql/cubrid.conf]`, `[sql/cubrid_ha.conf]` and broker sections) are read **at
 runtime from the CTP payload's own `conf/sql.conf`** via CTP's `ini.sh` — so
 configuration defaults always track latest develop, not a hardcoded snapshot;
-`sql_*` keys in tester.conf act as explicit overrides only. The script then
+`sql_*` keys in tester.conf act as explicit overrides only. The DB charset
+follows `run.sh do_configure`: `sql.conf`'s `db_charset` (`en_US`, which CUBRID
+reads as `en_US.iso88591`), replaced by `en_US.utf8` for CUBRID 11.5 and later
+(CUBRIDQA-1287), which is what regression answers expect; the chosen value is
+logged as `DB charset: ...`. The script then
 compiles locales, runs `cubrid createdb`, loads Java stored procedures, starts
 server/broker/javasp, and rewrites the `Function_Db/basic_qa.xml` dburl. Fixed
 ports/shm-ids are safe because every container has its own network and IPC

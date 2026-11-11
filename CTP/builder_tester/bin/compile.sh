@@ -71,6 +71,11 @@ find "$SRC_DIR" -type f ! -name "*.java" | while IFS= read -r file; do
     cp "$file" "$dest_dir/"
 done
 
+# Which code this is (BuildStamp.java): the Builder warns when a tester runs other code than its own
+FINGERPRINT=$(cd "$SRC_DIR" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-12)
+printf 'fingerprint=%s\nbuilt=%s\n' "$FINGERPRINT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > "$STAGE_DIR/com/navercorp/cubridqa/builder/build_stamp.properties"
+
 # Create JAR file
 echo "Creating JAR file..."
 (cd "$STAGE_DIR" && jar cf "$STAGE_JAR" com/) || {

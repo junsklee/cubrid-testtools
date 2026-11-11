@@ -2,6 +2,7 @@ package com.navercorp.cubridqa.builder.tester;
 
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
+import com.navercorp.cubridqa.builder.BuildStamp;
 import com.navercorp.cubridqa.builder.BuilderConfig;
 import com.navercorp.cubridqa.builder.tester.demand.UtilizationSnapshot;
 import org.json.JSONObject;
@@ -65,6 +66,8 @@ public class HealthHandler implements HttpHandler {
         response.put("executionMode", config.getExecutionMode());
         response.put("ts", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
         response.put("status", "healthy");
+        response.put("code", new JSONObject().put("fingerprint", BuildStamp.fingerprint())
+            .put("built", BuildStamp.built()).put("startedAt", BuildStamp.startedAt()));
 
         // Concurrency
         int runningTests = testOrchestrator != null ? testOrchestrator.getRunningTestCount() : 0;

@@ -62,6 +62,11 @@ public class FinalizeRequestHandler implements HttpHandler {
             }
 
             logger.info("Received finalize request for: " + requestId);
+            // The Builder finalizes once it has every result or has given up on the rest: a test
+            // of this request still waiting here for capacity (up to 24h) or between attempts is
+            // an orphan. Ended, it stops at its next check instead of running for nobody and
+            // re-creating the testcase workspace removed below.
+            CancelledRequests.cancel(requestId);
 
             // Flush the request journal
             testStatsStore.flushRequestJournal(requestId);

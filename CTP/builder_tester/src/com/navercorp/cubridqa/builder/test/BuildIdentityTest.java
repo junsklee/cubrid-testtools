@@ -29,6 +29,26 @@ public class BuildIdentityTest {
         check(a.matches("[A-Za-z0-9_.-]+"), "variant is a valid docker tag fragment");
         check(DockerImageBuilder.buildDirectoryOf("/x/cubrid.tar.gz") == null, "no build dir -> null");
 
+        // The base image is part of the image's identity: switching docker_test_image (or the tag
+        // being republished) must not reuse an image provisioned on the previous base.
+        String shellBase = "sha256:c4d9a0986b60aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        String rl810Base = "sha256:017c06130cebbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        String k1 = DockerImageBuilder.imageKey("abc1234", a, shellBase);
+        String k2 = DockerImageBuilder.imageKey("abc1234", a, rl810Base);
+        check(!k1.equals(k2), "another base image gets its own image: " + k2);
+        check(k1.equals(DockerImageBuilder.imageKey("abc1234", a, shellBase)), "same base, same image");
+        check(k2.equals("abc1234_" + a + "_017c06130ceb"), "key ends with the base image id: " + k2);
+        check(!k1.equals("abc1234_" + a), "never the pre-base-id name an old image may still carry");
+        check(k1.matches("[A-Za-z0-9_.-]+") && k1.length() <= 128, "key is a valid docker tag");
+        check(DockerImageBuilder.imageKey("abc1234", a, "017c06130ceb").equals(k2), "bare id without the sha256: prefix");
+        boolean refused = false;
+        try {
+            DockerImageBuilder.imageKey("abc1234", a, "");
+        } catch (IllegalArgumentException e) {
+            refused = true;
+        }
+        check(refused, "no base id -> refused, never a name without one");
+
         String n1 = BuildCache.localFileName(new URL(remote));
         String n2 = BuildCache.localFileName(new URL(debug));
         check(n1.equals("build_abc1234_1700000000000__cubrid_abc1234.tar.gz"), "cache name includes build dir: " + n1);

@@ -18,8 +18,8 @@ import java.util.logging.Logger;
  * Generic git-based testcase repository synchronizer.
  *
  * Keeps a base clone fast-forwarded to a configured branch and materializes
- * per-request pinned worktrees so every test in a request sees the exact same
- * testcase tree. Repository location/branch/remote/sync-mode are supplied via
+ * per-request pinned checkouts (clones on a named branch) so every test in a
+ * request sees the exact same testcase tree. Repository location/branch/remote/sync-mode are supplied via
  * {@link RepoSpec}, so the same machinery serves both the shell testcases repo
  * ({@link ShellTcSync}) and the SQL testcases repo ({@link SqlTcSync}).
  *
@@ -197,6 +197,84 @@ public class TcRepoSync {
     // fetching different branches could each read the other's FETCH_HEAD and pin the wrong commit.
     private final Object baseRepoLock = new Object();
 
+    // requestId -> {local branch, commit} the base checkout is held at for that request
+    private final ConcurrentHashMap<String, String[]> baseCheckouts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> baseCheckoutTimes = new ConcurrentHashMap<>();
+
+    /**
+     * Puts the base checkout itself on the head of branch, as CTP's run_git_update leaves a
+     * checkout: a local branch named CTP style tracking the remote branch, the working tree forced
+     * to it and cleaned (-df, as run_git_update). Shell cases use sibling checkouts in place
+     * (cbrd_23613_6 copies and moves ~/cubrid-testcases/sql), so they must follow the request's
+     * branch instead of staying wherever they were cloned.
+     *
+     * <p>The head is resolved once per request, so every case of a request (all of its commits)
+     * sees the same tree; each call restores the tree to it, undoing what a killed case left.
+     * Nothing happens when sync is disabled (the checkout belongs to someone else) or the branch
+     * is on no remote.
+     *
+     * @return the commit the checkout is on, or null when it was left as it was
+     */
+    public String checkoutBaseForRequest(Logger log, String requestId, String requestedBranch)
+            throws InterruptedException {
+        if (spec.syncMode == SyncMode.DISABLED) {
+            return null;
+        }
+        Path base = getBaseRepoRoot();
+        if (!Files.isDirectory(base.resolve(".git"))) {
+            log.fine(label() + " checkout " + base + " does not exist; nothing to update");
+            return null;
+        }
+        String branch = normalizeRequestedBranch(requestedBranch);
+        String key = sanitizeRequestId(requestId) + "\n" + branch;
+        ProcessBuilder pb = new ProcessBuilder();
+        pb.directory(base.toFile());
+        synchronized (baseRepoLock) {
+            long cutoff = System.currentTimeMillis() - REQUEST_TTL_MS;
+            baseCheckoutTimes.entrySet().removeIf(e -> {
+                if (e.getValue() < cutoff) {
+                    baseCheckouts.remove(e.getKey());
+                    return true;
+                }
+                return false;
+            });
+            String[] target = baseCheckouts.get(key);
+            if (target == null) {
+                // Resolved once per request, whether or not it works: a branch this repository does
+                // not have is not looked up again at every case
+                target = new String[0];
+                try {
+                    String remote = selectRemoteForBranch(pb, branch);
+                    ProcessIO.runOrThrow(pb, new String[]{"git", "fetch", remote, branch});
+                    String head = runAndGetOutput(pb, "git", "rev-parse", "FETCH_HEAD").trim();
+                    target = new String[]{localBranchName(branch), head, remote + "/" + branch};
+                    log.info(label() + " checkout " + base + " follows " + branch + " at " + abbreviateCommit(head)
+                        + " for request " + requestId);
+                } catch (IOException e) {
+                    log.warning(label() + " checkout " + base + " left as it was: branch '" + branch
+                        + "' could not be fetched: " + e.getMessage());
+                }
+                baseCheckouts.put(key, target);
+                baseCheckoutTimes.put(key, System.currentTimeMillis());
+            }
+            if (target.length == 0) {
+                return null;
+            }
+            try {
+                ProcessIO.runOrThrow(pb, new String[]{"git", "checkout", "--quiet", "-f", "-B", target[0], target[1]});
+                ProcessIO.runOrThrow(pb, new String[]{"git", "reset", "--quiet", "--hard", target[1]});
+                ProcessIO.runAndExitCode(pb, new String[]{"git", "clean", "-dfq"});
+                if (ProcessIO.runAndExitCode(pb, new String[]{"git", "rev-parse", "--verify", "--quiet", target[2]}) == 0) {
+                    ProcessIO.runAndExitCode(pb, new String[]{"git", "branch", "--quiet", "--set-upstream-to=" + target[2], target[0]});
+                }
+                return target[1];
+            } catch (IOException e) {
+                log.warning(label() + " checkout " + base + " left as it was for branch '" + branch + "': " + e.getMessage());
+                return null;
+            }
+        }
+    }
+
     private Path prepareRequestWorkspaceLocked(Logger log, String safeRequestId, String branch, String commit)
             throws IOException, InterruptedException {
         {
@@ -215,7 +293,7 @@ public class TcRepoSync {
 
             Path requestRoot = getRequestWorkspaceRoot(safeRequestId);
             Path repoRoot = requestRoot.resolve("repo");
-            if (isReusableRequestWorkspace(repoRoot, commit)) {
+            if (isReusableRequestWorkspace(repoRoot, commit, localBranchName(branch))) {
                 syncedRequests.put(safeRequestId, System.currentTimeMillis());
                 log.fine("Reusing " + label() + " workspace for request " + safeRequestId + ": " + repoRoot);
                 return repoRoot;
@@ -341,11 +419,12 @@ public class TcRepoSync {
         return Paths.get(spec.repoDir).toAbsolutePath().normalize();
     }
 
-    private boolean isReusableRequestWorkspace(Path repoRoot, String commit) {
+    private boolean isReusableRequestWorkspace(Path repoRoot, String commit, String localBranch) {
         if (repoRoot == null || commit == null || commit.trim().isEmpty()) {
             return false;
         }
-        if (!Files.exists(repoRoot) || !Files.exists(repoRoot.resolve(".git"))) {
+        if (!Files.exists(repoRoot) || !Files.isDirectory(repoRoot.resolve(".git"))) {
+            // A .git file is a worktree of the base repo (detached HEAD) from before named branches
             return false;
         }
         try {
@@ -355,10 +434,46 @@ public class TcRepoSync {
                 return false;
             }
             String head = runAndGetOutput(pb, "git", "rev-parse", "HEAD").trim();
-            return commit.equals(head);
+            String headBranch = runAndGetOutput(pb, "git", "rev-parse", "--abbrev-ref", "HEAD").trim();
+            return commit.equals(head) && localBranch.equals(headBranch);
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * The local branch a checkout of branch is named in regression, as CTP's run_git_update names
+     * it: '/' becomes '_' (release/11.4 -> release_11.4). Cases turn it back with _ -> /.
+     */
+    public static String localBranchName(String branch) {
+        return branch.trim().replace('/', '_');
+    }
+
+    /**
+     * Object directories a request workspace borrows from the base repo (its objects/info/alternates).
+     * A container that runs git in the workspace needs them mounted at the same paths.
+     */
+    public static List<Path> borrowedObjectDirs(Path repoRoot) {
+        List<Path> dirs = new ArrayList<>();
+        Path objects = repoRoot.resolve(".git").resolve("objects");
+        Path alternates = objects.resolve("info").resolve("alternates");
+        if (!Files.isRegularFile(alternates)) {
+            return dirs;
+        }
+        try {
+            for (String line : Files.readAllLines(alternates)) {
+                String entry = line.trim();
+                if (entry.isEmpty() || entry.startsWith("#")) {
+                    continue;
+                }
+                Path dir = objects.resolve(entry).toAbsolutePath().normalize();
+                if (Files.isDirectory(dir)) {
+                    dirs.add(dir);
+                }
+            }
+        } catch (IOException ignore) {
+        }
+        return dirs;
     }
 
     private void createRequestWorkspace(Logger log, String safeRequestId, String branch, String commit)
@@ -368,15 +483,34 @@ public class TcRepoSync {
         Path baseRepoRoot = getBaseRepoRoot();
         Files.createDirectories(requestRoot);
 
-        ProcessBuilder basePb = new ProcessBuilder();
-        basePb.directory(baseRepoRoot.toFile());
-        ProcessIO.runAndExitCode(basePb, new String[]{"git", "worktree", "prune"});
-        ProcessIO.runOrThrow(basePb, new String[]{"git", "worktree", "add", "--force", "--detach", repoRoot.toString(), commit});
+        // A clone rather than a worktree: worktrees share the base repo's branches, and a branch can
+        // be checked out in only one of them, so two requests could not both be on "develop".
+        // --shared borrows the base repo's objects instead of copying them; base repo gc keeps
+        // unreachable objects for two weeks, and a workspace lives only as long as its request.
+        ProcessBuilder rootPb = new ProcessBuilder();
+        rootPb.directory(requestRoot.toFile());
+        ProcessIO.runOrThrow(rootPb, new String[]{"git", "clone", "--quiet", "--shared", "--no-checkout",
+            baseRepoRoot.toString(), repoRoot.toString()});
 
         ProcessBuilder wtPb = new ProcessBuilder();
         wtPb.directory(repoRoot.toFile());
+        // Cases name a sibling repository's branch after their own checkout's
+        // (git rev-parse --abbrev-ref HEAD, then _ -> /), so HEAD is a named branch, as in regression.
+        ProcessIO.runOrThrow(wtPb, new String[]{"git", "checkout", "--quiet", "-f", "-B", localBranchName(branch), commit});
         ProcessIO.runOrThrow(wtPb, new String[]{"git", "reset", "--hard", commit});
         ProcessIO.runOrThrow(wtPb, new String[]{"git", "clean", "-fdx"});
+        // The remotes a worktree showed (it shared the base repo's config): origin is what CTP's
+        // convert_to_git_url.sh and run_git_update read
+        ProcessBuilder basePb = new ProcessBuilder();
+        basePb.directory(baseRepoRoot.toFile());
+        try {
+            String originUrl = runAndGetOutput(basePb, "git", "remote", "get-url", "origin").trim();
+            if (!originUrl.isEmpty()) {
+                ProcessIO.runAndExitCode(wtPb, new String[]{"git", "remote", "set-url", "origin", originUrl});
+            }
+        } catch (IOException noOrigin) {
+            log.fine(label() + " base repo has no origin remote: " + noOrigin.getMessage());
+        }
         try {
             ProcessIO.runOrThrow(wtPb, new String[]{"git", "submodule", "sync", "--recursive"});
             ProcessIO.runOrThrow(wtPb, new String[]{"git", "submodule", "update", "--init", "--recursive", "--checkout", "--force"});

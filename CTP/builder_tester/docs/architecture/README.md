@@ -26,7 +26,7 @@
 
 - Docker (default):
   - Build image: `cubridci/cubridci:develop`
-  - Test image: `cubridci/cubridci:test_shell`
+  - Test image: `cubridci/cubridci:test_rl8.10`
   - Images are pulled automatically when Docker is available
 - Direct fallback:
   - Used when Docker is unavailable; builds/tests execute on the host

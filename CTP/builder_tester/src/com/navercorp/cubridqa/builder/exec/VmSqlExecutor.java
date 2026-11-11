@@ -2,6 +2,7 @@ package com.navercorp.cubridqa.builder.exec;
 
 import com.navercorp.cubridqa.builder.cache.BuildCache;
 import com.navercorp.cubridqa.builder.config.Config;
+import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
 import com.navercorp.cubridqa.builder.git.SqlTcSync;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
@@ -41,15 +42,17 @@ public class VmSqlExecutor implements ExecutorStrategy {
     private final Config config;
     private final BuildCache buildCache;
     private final SqlTcSync sqlTcSync;
+    private final CtpProvisioner ctpProvisioner;
 
     /** What the running test DB was provisioned for, and where; guarded by VM_LOCK. */
     private String provisionedKey;
-    private String provisionedRequest;
+    private volatile String provisionedRequest;
 
-    public VmSqlExecutor(Config config, BuildCache buildCache, SqlTcSync sqlTcSync) {
+    public VmSqlExecutor(Config config, BuildCache buildCache, SqlTcSync sqlTcSync, CtpProvisioner ctpProvisioner) {
         this.config = config;
         this.buildCache = buildCache;
         this.sqlTcSync = sqlTcSync;
+        this.ctpProvisioner = ctpProvisioner;
         RequestEndHooks.register(this::requestEnded);
     }
 
@@ -80,6 +83,8 @@ public class VmSqlExecutor implements ExecutorStrategy {
             return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR).message(unsafe), metrics, startNs);
         }
         Path ctpHome = VmShellExecutor.resolveCtpHome(config);
+        StringBuilder ctpNote = new StringBuilder();
+        VmCtp.ensureInstalled(config, ctpProvisioner, request, ctpHome, ctpNote, Logger.getLogger(VmSqlExecutor.class.getName()));
         if (!Files.isDirectory(ctpHome.resolve("sql/lib")) || !Files.isRegularFile(ctpHome.resolve("bin/ini.sh"))) {
             return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR)
                 .message("CTP at " + ctpHome + " has no SQL tool (sql/lib, bin/ini.sh); set vm_ctp_home"), metrics, startNs);
@@ -88,6 +93,7 @@ public class VmSqlExecutor implements ExecutorStrategy {
         StringBuilder preamble = new StringBuilder();
         preamble.append("[builder-tester vm] user=").append(System.getProperty("user.name"))
             .append(" CUBRID=").append(cubridHome).append(" CTP_HOME=").append(ctpHome).append('\n');
+        preamble.append(ctpNote);
 
         // 1. Build: installed once per package, shared with shell cases
         Path localPackage;
@@ -339,9 +345,15 @@ public class VmSqlExecutor implements ExecutorStrategy {
 
     /** Request finished or cancelled: stop the DB it provisioned and drop its workspace. */
     private void requestEnded(String requestId, boolean cancelled) {
+        Path workspace = Paths.get(config.getWorkDir()).toAbsolutePath().normalize()
+            .resolve("sql_vm").resolve(safe(requestId));
+        // A request that never provisioned the SQL DB here (every shell-only request) has nothing to
+        // undo: taking VM_LOCK made its finalize wait behind a running case, up to its 2h timeout,
+        // while the Builder's finalize call gave up after 10s
+        if (!requestId.equals(provisionedRequest) && !Files.isDirectory(workspace)) {
+            return;
+        }
         synchronized (VmShellExecutor.VM_LOCK) {
-            Path workspace = Paths.get(config.getWorkDir()).toAbsolutePath().normalize()
-                .resolve("sql_vm").resolve(safe(requestId));
             if (requestId.equals(provisionedRequest)) {
                 Logger log = Logger.getLogger(VmSqlExecutor.class.getName());
                 Path cubridHome = Paths.get(config.getVmCubridHome()).toAbsolutePath().normalize();

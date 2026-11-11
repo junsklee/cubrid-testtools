@@ -25,6 +25,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.Instant;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.PriorityBlockingQueue;
@@ -177,7 +178,22 @@ public class TestOrchestrator {
             JSONObject requestWithAttempt = new JSONObject(request.toString());
             requestWithAttempt.put("attemptNumber", attempt);
 
-            RunOutcome outcome = runTest(requestWithAttempt, testLogger);
+            RunOutcome outcome;
+            try {
+                outcome = runTest(requestWithAttempt, testLogger);
+            } catch (Exception e) {
+                if (lastResponse == null) {
+                    throw e;  // nothing to keep: TestHandler answers execution_error, as before
+                }
+                // A later attempt that could not run (disk full staging CTP, a cancel deleting the
+                // request's tests/ directory) threw past the attempts before it, whose verdicts
+                // and logs were then lost with the HTTP 500
+                testLogger.log(Level.WARNING, "Attempt " + attempt + " could not run", e);
+                JSONObject failed = new JSONObject(lastResponse.toString());
+                failed.put("status", CancelledRequests.isCancelled(requestId) ? "cancelled" : TestStatus.EXECUTION_ERROR.getValue());
+                failed.put("message", "Attempt " + attempt + " could not run: " + e.getMessage());
+                outcome = new RunOutcome(null, null, failed);
+            }
             JSONObject attemptResponse = outcome.response;
             lastResponse = attemptResponse;
             String status = attemptResponse.optString("status", "");
@@ -213,11 +229,15 @@ public class TestOrchestrator {
 
             // Track failures and passes to decide flakiness later
             boolean isPass = TestStatus.PASS.getValue().equalsIgnoreCase(status);
-            boolean isFailLike = TestStatus.FAIL.getValue().equalsIgnoreCase(status) ||
-                                  TestStatus.EXECUTION_ERROR.getValue().equalsIgnoreCase(status) ||
-                                  TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status) ||
+            // Only verdicts on the case count toward flakiness. An attempt that never ran it (no
+            // package, no environment, an install that failed, a cancel) says nothing about it: a
+            // package download failure then a pass was reported flaky, and in until-fail mode
+            // environment errors alone counted as a reproduced failure. execution_error stays:
+            // it includes timeouts, which CTP fails like any NOK.
+            boolean couldNotRun = TestStatus.ENVIRONMENT_ERROR.getValue().equalsIgnoreCase(status) ||
                                   TestStatus.BUILD_ERROR.getValue().equalsIgnoreCase(status) ||
-                                  (!isPass && !status.equalsIgnoreCase("started"));  // Treat unknown statuses as fail-like, except "started"
+                                  "cancelled".equalsIgnoreCase(status);
+            boolean isFailLike = !isPass && !couldNotRun && !status.equalsIgnoreCase("started");  // unknown statuses are fail-like
             
             if (isFailLike) {
                 sawFailure = true;
@@ -295,6 +315,11 @@ public class TestOrchestrator {
             }
 
             // fixed-runs ignores early exits 3) & 4), continue to next attempt
+        }
+
+        // A cancel during the last attempt: the request is over, not flaky or failed
+        if (CancelledRequests.isCancelled(requestId)) {
+            return cancelledResponse(requestId, "Request cancelled");
         }
 
         // Completed due to maxRuns or time budget

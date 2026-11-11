@@ -39,8 +39,11 @@ fi
 # Start in background
 # UTF-8 regardless of the login locale: under LC_ALL=en_US the JVM default is ISO-8859-1,
 # which mangles non-Latin-1 text (Korean in custom scripts, test output) in files and HTTP bodies.
+# tester.project.root: request logs go to $PROJECT_ROOT/log even when the config file lives
+# outside $PROJECT_ROOT/conf (the Builder reads a local tester's logs from there).
 nohup java -cp "$CLASSPATH" \
   -Dfile.encoding=UTF-8 \
+  -Dtester.project.root="$PROJECT_ROOT" \
   -Djava.util.logging.SimpleFormatter.format='%1$tY-%1$tm-%1$td %1$tH:%1$tM:%1$tS %4$s %2$s %5$s%6$s%n' \
   com.navercorp.cubridqa.builder.Tester "$CONFIG_FILE" \
   >> "$LOG_FILE" 2>&1 &

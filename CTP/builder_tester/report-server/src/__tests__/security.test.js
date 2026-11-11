@@ -102,6 +102,17 @@ describe('/api/github/commit/:sha', () => {
         const res = await request(app).get('/api/github/commit/..%2F..%2F..%2Fuser%2Frepos');
         expect(res.status).toBe(400);
     });
+
+    test('accepts branch names with "/" and keeps them in one encoded path segment', () => {
+        const { assertSafeCommitRef } = require('../services/githubService');
+        const encoded = assertSafeCommitRef('release/11.2');
+        expect(encoded).toBe('release%2F11.2');
+        expect(new URL('https://api.github.com/repos/CUBRID/cubrid/commits/' + encoded).pathname)
+            .toBe('/repos/CUBRID/cubrid/commits/release%2F11.2');
+        for (const bad of ['/release', 'release/', 'release//11.2', 'release/../x', 'a b']) {
+            expect(() => assertSafeCommitRef(bad)).toThrow('Invalid commit SHA');
+        }
+    });
 });
 
 describe('/api/tester/health', () => {

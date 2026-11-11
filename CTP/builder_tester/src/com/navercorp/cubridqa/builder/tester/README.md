@@ -98,7 +98,7 @@ Tests are automatically marked as flaky when mixed PASS and FAIL results occur a
 ### Execution Strategies
 
 #### Standard Docker Execution
-- **Image**: `cubridci/cubridci:test_shell`
+- **Image**: `cubridci/cubridci:test_rl8.10`
 - **Process**: Extracts build package, installs CUBRID, runs test
 - **Isolation**: Complete containerized environment
 
@@ -248,7 +248,7 @@ tester.maxConcurrentTests=4
 
 # Docker Settings  
 docker.enabled=true
-docker.testImage=cubridci/cubridci:test_shell
+docker.testImage=cubridci/cubridci:test_rl8.10
 docker.optimizedEnabled=true
 docker.keepFailedContainers=false
 

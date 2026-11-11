@@ -256,8 +256,21 @@ Possible responses:
 
 ```json
 { "status": "running", "taskId": "req_...", "progress": { "<commit_sha>": 0|20|100|-1 } }
+{ "status": "queued", "taskId": "req_...", "queuePosition": 2 }
+{ "status": "removed", "taskId": "req_...", "removedAt": 1792571925207, "removedBy": "172.31.1.59 (via 127.0.0.1), Mozilla/5.0 ...", "message": "..." }
+{ "status": "cancelled", "taskId": "req_...", "removedAt": ..., "removedBy": "...", "message": "..." }
+{ "status": "interrupted", "taskId": "req_...", "removedAt": ..., "message": "The Builder restarted while this request was running; ..." }
 { "status": "not_found", "taskId": "req_..." }
 ```
+
+`queued`: accepted, waiting for a free slot. `removed` / `cancelled`: taken off the queue, or
+stopped while running, through `POST /queue/remove` (the dashboard's remove button); the
+request's logs and report are deleted, and `removedBy` is the client that asked (the dashboard
+gateway forwards the browser's address). `interrupted`: the Builder restarted while the request
+was running (or queued, when it could not be queued again); its callback also gets an error,
+so a report says so. Queued requests are queued again after a restart, in arrival order. The
+Builder keeps the last 1000 of these records in `log/system/ended_requests.jsonl`, across
+restarts. A running request being cancelled reports `"cancelRequested": true`.
 
 Progress map semantics:
 - Keys: full commit SHA

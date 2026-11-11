@@ -88,6 +88,7 @@ public class SqlDockerExecutor implements ExecutorStrategy {
         String commitShort = request.getCommitShort() != null ? request.getCommitShort() : "unknown";
         String baselineShort = request.getBaselineShort() != null ? request.getBaselineShort() : "unknown";
         // Image key: commit + baseline + build type + the build the package came from
+        // (DockerImageBuilder adds the id of the docker_test_image the image is built on)
         String imageVariant = DockerImageBuilder.imageVariant(baselineShort, request.getBuildType(), request.getBuildPackage());
 
         // 1) Per-commit Docker image (CUBRID pre-installed), same cache as the shell path
@@ -427,6 +428,9 @@ public class SqlDockerExecutor implements ExecutorStrategy {
                 process.destroyForcibly();
                 DockerCtl.safeKillAndRemove(containerName, testLogger);
                 run.failureMessage = "SQL Docker test timeout after " + timeoutMinutes + " minutes";
+                // What it printed until then goes to the attempt log (it was dropped)
+                reader.join(2000);
+                run.containerConsole = reader.getOutput() + "\n===== TIMEOUT after " + timeoutMinutes + " minutes =====\n";
                 return run;
             }
             reader.join(2000);

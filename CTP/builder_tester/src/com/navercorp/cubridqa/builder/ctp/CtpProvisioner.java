@@ -32,10 +32,11 @@ import java.util.logging.Logger;
  * Payloads are cached under {@code <work_dir>/ctp_sql/payload_<sha7>/} so a
  * payload is rebuilt only when the resolved ref moves. Each payload contains
  * only the CTP components a test container needs: {@code CTP/{bin,common,conf,sql}}
- * (~16MB, prebuilt jars included — no compilation required).
+ * for SQL cases, and {@code shell}, {@code isolation} for shell cases in Docker
+ * (~21MB, prebuilt jars included — no compilation required).
  */
 public class CtpProvisioner {
-    private static final String[] PAYLOAD_DIRS = {"bin", "common", "conf", "sql"};
+    private static final String[] PAYLOAD_DIRS = {"bin", "common", "conf", "sql", "shell", "isolation"};
 
     private final BuilderConfig config;
     private final Object lock = new Object();
@@ -136,7 +137,7 @@ public class CtpProvisioner {
             String fingerprint = shortSha(baseSha);
             Path payloadDir = root.resolve("payload_" + fingerprint);
             Path ctpDir = payloadDir.resolve("CTP");
-            if (Files.exists(payloadDir.resolve(".complete")) && Files.isDirectory(ctpDir)) {
+            if (Files.exists(payloadDir.resolve(".complete")) && hasAllPayloadDirs(ctpDir)) {
                 log.fine("Reusing cached CTP payload: " + payloadDir);
                 touch(payloadDir);
                 return new CtpPayload(ctpDir, baseSha, fingerprint);
@@ -147,6 +148,16 @@ public class CtpProvisioner {
             evictOldPayloads(root, log);
             return new CtpPayload(ctpDir, baseSha, fingerprint);
         }
+    }
+
+    /** A payload cached before shell and isolation were part of it lacks them: it is built again. */
+    private static boolean hasAllPayloadDirs(Path ctpDir) {
+        for (String dir : PAYLOAD_DIRS) {
+            if (!Files.isDirectory(ctpDir.resolve(dir))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void ensureRepo(Path repoDir, Logger log) throws IOException, InterruptedException {

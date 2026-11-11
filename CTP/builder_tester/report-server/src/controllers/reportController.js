@@ -95,8 +95,16 @@ class ReportController {
 
             res.send(this.applyReportTheme(reportHtml));
         } catch (err) {
+            // A running request has no report yet, and the dashboard probes for it (HEAD) every few
+            // seconds: not an error worth a log line. Any other failure is not "not found".
+            if (err.status === 400) {
+                return res.status(400).send('<h1>Invalid report ID</h1>');
+            }
+            if (err.code === 'ENOENT') {
+                return res.status(404).send('<h1>Report not found</h1>');
+            }
             console.error('Error viewing report:', err);
-            res.status(404).send('<h1>Report not found</h1>');
+            res.status(500).send('<h1>Error loading report</h1>');
         }
     }
 
@@ -116,8 +124,14 @@ class ReportController {
             
             res.type('text/plain').send(logContent);
         } catch (err) {
+            if (err.status === 400) {
+                return res.status(400).send('Invalid request ID or file name');
+            }
+            if (err.code === 'ENOENT') {
+                return res.status(404).send('Log file not found');
+            }
             console.error('Error getting test log:', err);
-            res.status(404).send('Log file not found');
+            res.status(500).send('Error reading log file');
         }
     }
 

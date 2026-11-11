@@ -336,6 +336,11 @@ public final class ConsumerRunner {
         conf.setProperty("vm_cubrid_home", cubrid != null && !cubrid.trim().isEmpty() ? cubrid.trim() : userHome + "/CUBRID");
         conf.setProperty("vm_ctp_home", ctpHome.toString());
         int timeout = parseInt(regression.getProperty("testcase_timeout_in_secs"), 7200);
+        if (timeout <= 0) {
+            // CTP's -1 is "no timeout"; passed on, the tester clamped it to 60 s and killed every case.
+            // The Builder bounds a case anyway, so it gets the default of a VM without the setting.
+            timeout = 7200;
+        }
         conf.setProperty("vm_testcase_timeout_in_secs", String.valueOf(timeout));
         conf.setProperty("test_read_timeout_minutes", String.valueOf(timeout / 60 + 10));
         conf.setProperty("vm_ssh_port", sshPort(regression));
@@ -363,6 +368,12 @@ public final class ConsumerRunner {
         // (per_request mode fast-forwards the base checkout to the requested branch)
         conf.setProperty("shell_tc_sync_mode", "disabled");
         conf.setProperty("sql_tc_sync_mode", "disabled");
+        // Nor its sibling checkouts (cases' run_git_update still updates them, as in regression),
+        // nor its CTP's common.conf
+        conf.setProperty("vm_sibling_tc_dirs", "");
+        conf.setProperty("vm_install_common_conf", "false");
+        // ...nor its CTP: regression keeps it current itself (upgrade.sh)
+        conf.setProperty("vm_ctp_from_repo", "false");
         conf.setProperty("execution_mode", "vm");
         return conf;
     }

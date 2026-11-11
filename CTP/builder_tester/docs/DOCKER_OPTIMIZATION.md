@@ -26,8 +26,8 @@ The Builder-Tester system now includes advanced Docker optimization that dramati
 
 ### 1. Docker Image Building
 When a test request arrives for a commit:
-1. System checks if a Docker image exists for that commit/baseline pair (`cubrid-test:<commit>_<baseline>`)
-2. If not, launches the baseline test image with the build tarball mounted, runs an in-container provisioning script to extract/configure CUBRID (only the `_install/CUBRID` payload is shipped), and commits the live container as the new image
+1. System checks if a Docker image exists for that build on the current test image (`cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>`, see [Image Naming Convention](#image-naming-convention))
+2. If not, launches the test image (`docker_test_image`, by image id) with the build tarball mounted, runs an in-container provisioning script to extract/configure CUBRID (only the `_install/CUBRID` payload is shipped), and commits the live container as the new image
 3. Caches the image for future tests on the same commit
 
 ### 2. Optimized Test Execution
@@ -111,7 +111,15 @@ docker rmi $(docker images -q "cubrid-test:*")
 
 Remove specific image:
 ```bash
-docker rmi cubrid-test:<commit>_<baseline>
+docker rmi cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>
+```
+
+Remove images provisioned before the test image id became part of the name (they are never reused,
+and otherwise only leave as `build_cache_size` evicts them). Run it after the Tester restarted on the new code:
+```bash
+docker images --format '{{.Repository}}:{{.Tag}}' 'cubrid-test' | while read -r img; do
+  [ -z "$(docker image inspect --format '{{index .Config.Labels "builder_tester.base_image_id"}}' "$img")" ] && docker rmi "$img"
+done
 ```
 
 ## Remote Server Compatibility
@@ -232,12 +240,23 @@ build_cache_size=50
 ## Implementation Details
 
 ### Image Naming Convention
-- Format: `cubrid-test:<commit>_<baseline>`
-- Example: `cubrid-test:6ea587e_4b045a6` (baseline may be `unknown`)
+- Format: `cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>`
+- Example: `cubrid-test:1dceac8_history_release_02be7b09_017c06130ceb` (baseline may be `unknown`)
+- `<build dir hash>` tells two builds of one commit apart (release/debug, other baselines); the same
+  build reached as a local path or a download URL shares it.
+- `<test image id>` is the first 12 hex digits of the image id `docker_test_image` resolves to.
+  `docker_test_image` is a moving tag: cubridci republishes it, and pointing the key at another
+  image moves it altogether. An image provisioned on one base is never found under a name another
+  base produces, so a republished or switched test image rebuilds per-commit images (about 15 s each)
+  instead of silently testing on the old one. Images named without it (before this change) are never
+  reused and age out through `build_cache_size`.
+- Each image carries the labels `builder_tester.base_image` (the `docker_test_image` value) and
+  `builder_tester.base_image_id`:
+  `docker image inspect --format '{{json .Config.Labels}}' cubrid-test:<...>`
 
 ### Image Contents
 Each image contains:
-- Base test image (`cubridci/cubridci:test_shell`)
+- Base test image (`docker_test_image`, default `cubridci/cubridci:test_rl8.10`)
 - Pre-extracted CUBRID build in `/opt/cubrid`
 - Configured environment variables
 - Clean database directory
@@ -278,10 +297,10 @@ Quick reference:
 
 ### Build Process
 1. Generates a provisioning script on the host
-2. Launches the base tester image with the build tarball and script mounted (`docker run`)
+2. Launches the test image by id with the build tarball and script mounted (`docker run`)
 3. Extracts and installs CUBRID inside the running container
 4. Runs setup steps within the container
-5. Commits the container as `cubrid-test:<commit>_<baseline>` and cleans up temporary artifacts
+5. Commits the container as `cubrid-test:<commit>_<baseline>_<build type>_<build dir hash>_<test image id>` and cleans up temporary artifacts
 
 ### Build Artifact Packaging
 - Builder packaging now includes only `_install/CUBRID` plus its descendants, trimming archive size and download time

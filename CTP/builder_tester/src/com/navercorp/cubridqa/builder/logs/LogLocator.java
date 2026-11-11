@@ -31,16 +31,29 @@ public class LogLocator {
             return null;
         }
         if (RequestIds.isValid(requestId)) {
+            // Only this request's directory, under each log root: the name-only search returned the
+            // newest file of that name anywhere, i.e. an earlier request's log of the same commit and
+            // test (docker_opt_<commit>_<test>.log) when this one had none - silently the wrong log.
+            List<Path> requestDirs = new ArrayList<>();
             try {
-                Path requestLogDir = RequestLogManager.getInstance().getRequestLogDirectory(requestId);
+                requestDirs.add(RequestLogManager.getInstance().getRequestLogDirectory(requestId));
+            } catch (Exception e) {
+                logger.fine("No request log directory for " + requestId + ": " + e.getMessage());
+            }
+            String projectRoot = System.getProperty("tester.project.root");
+            if (projectRoot != null && !projectRoot.trim().isEmpty()) {
+                requestDirs.add(Paths.get(projectRoot, "log", "requests", requestId));
+            }
+            requestDirs.add(Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP", "builder_tester",
+                "log", "requests", requestId));
+            for (Path requestLogDir : requestDirs) {
                 for (Path candidate : new Path[] {requestLogDir.resolve("tests").resolve(filename), requestLogDir.resolve(filename)}) {
                     if (Files.isRegularFile(candidate)) {
                         return candidate;
                     }
                 }
-            } catch (Exception e) {
-                logger.warning("Failed to look up " + filename + " for request " + requestId + ": " + e.getMessage());
             }
+            return null;
         }
         return findLogFile(filename);
     }

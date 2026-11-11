@@ -29,7 +29,18 @@ class ProxyService {
 
             const req = client.request(reqOptions, (res) => {
                 let data = '';
-                
+                // Decode across chunks: a multi-byte character split between two chunks
+                // (Korean text) became two replacement characters with per-chunk decoding
+                res.setEncoding('utf8');
+                // A connection dropped mid-body (a Builder restart) emitted neither 'end' nor a
+                // request error: the call never settled and the browser waited for server.timeout
+                res.on('error', reject);
+                res.on('close', () => {
+                    if (!res.complete) {
+                        reject(new Error('Response was cut off'));
+                    }
+                });
+
                 res.on('data', (chunk) => {
                     data += chunk;
                 });

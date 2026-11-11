@@ -672,11 +672,13 @@
                 const message = `This will delete ${data.count} report(s). Do you want to proceed?`;
                 const preview = data.targetIds.join(', ');
 
+                // Delete exactly what was previewed: running the query again on confirm deleted a
+                // report finished in between ("newest N"), or one more than shown ("keep last N")
                 showModalWithPreview(
                     'Confirm Bulk Delete',
                     message,
                     preview,
-                    () => performBulkDelete(mode, { ...options, dryRun: false })
+                    () => performBulkDelete('selected', { ids: data.targetIds, dryRun: false })
                 );
             } else {
                 const { summary } = data;

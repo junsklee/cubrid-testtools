@@ -5,8 +5,8 @@ import com.navercorp.cubridqa.builder.tester.TestRequest;
 import com.navercorp.cubridqa.builder.tester.TestResult;
 import com.navercorp.cubridqa.builder.tester.TestStatus;
 import com.navercorp.cubridqa.builder.cache.BuildCache;
+import com.navercorp.cubridqa.builder.ctp.CtpProvisioner;
 import com.navercorp.cubridqa.builder.git.ShellTcSync;
-import com.navercorp.cubridqa.builder.tester.SafeIo;
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.logging.RequestContext;
 import com.navercorp.cubridqa.builder.logging.RequestLogManager;
@@ -27,11 +27,14 @@ public class StandardDockerExecutor implements ExecutorStrategy {
     private final Config config;
     private final BuildCache buildCache;
     private final ShellTcSync shellTcSync;
+    private final CtpProvisioner ctpProvisioner;
 
-    public StandardDockerExecutor(Config config, BuildCache buildCache, ShellTcSync shellTcSync) {
+    public StandardDockerExecutor(Config config, BuildCache buildCache, ShellTcSync shellTcSync,
+                                  CtpProvisioner ctpProvisioner) {
         this.config = config;
         this.buildCache = buildCache;
         this.shellTcSync = shellTcSync;
+        this.ctpProvisioner = ctpProvisioner;
     }
 
     @Override
@@ -53,9 +56,9 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         Path dockerWorkDir = Files.createTempDirectory(workDir, "docker_");
         testLogger.info("Docker work dir: " + dockerWorkDir.toString());
 
-        Path ctpSourceRoot = Paths.get(System.getProperty("user.home"), "cubrid-testtools", "CTP").toAbsolutePath().normalize();
+        Path ctpSourceRoot = EnvScriptFactory.shellCtpSource(config, ctpProvisioner, request, testLogger);
         Path ctpWorkRoot = dockerWorkDir.resolve("CTP");
-        stageCtpResources(ctpSourceRoot, ctpWorkRoot, testLogger);
+        EnvScriptFactory.stageCtpResources(ctpSourceRoot, ctpWorkRoot, testLogger);
         String ctpHomeInContainer = "/workspace/CTP";
         
         // Download build package if it's a URL (use shared cache dir to avoid per-test races)
@@ -314,8 +317,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         dockerCommand.add("apparmor=unconfined");
         dockerCommand.add("-v");
         dockerCommand.add(dockerWorkDir.toString() + ":/workspace");
-        dockerCommand.add("-v");
-        dockerCommand.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
+        EnvScriptFactory.addTestcaseVolumes(dockerCommand, shellRepoRoot);
         dockerCommand.add("-e");
         dockerCommand.add("CTP_HOME=" + ctpHomeInContainer);
         dockerCommand.add("-e");
@@ -393,12 +395,20 @@ public class StandardDockerExecutor implements ExecutorStrategy {
             // Attempt to stop and remove the container if it's still running
             DockerCtl.safeKillAndRemove(containerName, testLogger);
             DockerStatsCollector.StatsSummary summary = stopCollector(statsCollector);
-            return finalizeResult(
-                TestResult.builder()
+            outputGobbler.join(2000);
+            String safeName = request.getTestName().replaceAll("[^a-zA-Z0-9_.-]", "_");
+            Path timeoutLog = EnvScriptFactory.saveTimedOutLog(request.getAttemptNumber() == 1
+                    ? String.format("docker_%s_%s.log", request.getCommitShort(), safeName)
+                    : String.format("docker_%s_%s.%d.log", request.getCommitShort(), safeName, request.getAttemptNumber()),
+                outputGobbler.getOutput(), timeoutMinutes, testLogger);
+            TestResult.Builder timedOut = TestResult.builder()
                     .testName(request.getTestName())
                     .status(TestStatus.EXECUTION_ERROR)
-                    .message("Docker test timeout after " + timeoutMinutes + " minutes"),
-                metricsBuilder, startNs, "docker", summary);
+                    .message("Docker test timeout after " + timeoutMinutes + " minutes");
+            if (timeoutLog != null) {
+                timedOut.addAttemptLogFile(timeoutLog);
+            }
+            return finalizeResult(timedOut, metricsBuilder, startNs, "docker", summary);
         }
         int exitCode = process.exitValue();
         outputGobbler.join(2000);
@@ -534,7 +544,7 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 keepCmd.add("--cap-add"); keepCmd.add("SYS_ADMIN");
                 keepCmd.add("--security-opt"); keepCmd.add("apparmor=unconfined");
                 keepCmd.add("-v"); keepCmd.add(dockerWorkDir.toString() + ":/workspace");
-                keepCmd.add("-v"); keepCmd.add(shellRepoRoot.toString() + ":" + TESTCASE_MOUNT + ":rw");
+                EnvScriptFactory.addTestcaseVolumes(keepCmd, shellRepoRoot);
                 keepCmd.add("-e"); keepCmd.add("CTP_HOME=" + ctpHomeInContainer);
                 keepCmd.add("-e"); keepCmd.add("init_path=" + ctpHomeInContainer + "/shell/init_path");
                 keepCmd.add("-e"); keepCmd.add("HOST_UID=" + getHostUid());
@@ -547,30 +557,37 @@ public class StandardDockerExecutor implements ExecutorStrategy {
                 testLogger.info("Failure container kept for debugging: " + containerName + "_kept");
                 String execCmd = "docker exec -it " + containerName + "_kept bash";
                 
-                return finalizeResult(
-                    TestResult.builder()
+                TestResult.Builder kept = TestResult.builder()
                         .testName(request.getTestName())
                         .status(TestStatus.EXECUTION_ERROR)
-                        .message("Docker test execution failed; container kept for debugging")
+                        .message("Docker test execution failed (container exited with code " + exitCode
+                            + "); container kept for debugging")
                         .commit(request.getCommit() != null ? request.getCommit() : "unknown")
                         .commitShort(request.getCommitShort())
                         .containerName(containerName + "_kept")
                         .execCommand(execCmd)
                         .workspace(dockerWorkDir.toString())
-                        .timestamp(System.currentTimeMillis()),
-                    metricsBuilder, startNs, "docker", statsSummary);
+                        .timestamp(System.currentTimeMillis());
+                if (logFilePath != null) {
+                    kept.addAttemptLogFile(logFilePath);
+                }
+                return finalizeResult(kept, metricsBuilder, startNs, "docker", statsSummary);
             }
             
-            return finalizeResult(
-                TestResult.builder()
+            // With the log: it holds why (e.g. cubrid_rel unable to load a library), and the
+            // result listed no log at all, so the report had nothing to show for the failure
+            TestResult.Builder failed = TestResult.builder()
                     .testName(request.getTestName())
                     .status(TestStatus.EXECUTION_ERROR)
-                    .message("Docker test execution failed")
+                    .message("Docker test execution failed (container exited with code " + exitCode + ")")
                     .commit(request.getCommit() != null ? request.getCommit() : "unknown")
                     .commitShort(request.getCommitShort())
                     .exitCode(exitCode)
-                    .timestamp(System.currentTimeMillis()),
-                metricsBuilder, startNs, "docker", statsSummary);
+                    .timestamp(System.currentTimeMillis());
+            if (logFilePath != null) {
+                failed.addAttemptLogFile(logFilePath);
+            }
+            return finalizeResult(failed, metricsBuilder, startNs, "docker", statsSummary);
         }
 
         TestResult.Builder missingResultBuilder = TestResult.builder()
@@ -615,21 +632,6 @@ public class StandardDockerExecutor implements ExecutorStrategy {
         }
         logger.fine("Test directory " + testDir + " is outside repository root " + repoRoot + "; using repo root.");
         return "";
-    }
-
-    private void stageCtpResources(Path sourceRoot, Path targetRoot, Logger logger) throws IOException {
-        SafeIo.deleteDirectory(targetRoot.toFile());
-        Files.createDirectories(targetRoot);
-        String[] requiredDirs = {"shell", "bin", "common", "conf"};
-        for (String dir : requiredDirs) {
-            Path sourceDir = sourceRoot.resolve(dir);
-            Path targetDir = targetRoot.resolve(dir);
-            if (Files.exists(sourceDir)) {
-                SafeIo.copyTestCaseDirectory(sourceDir, targetDir);
-            } else {
-                logger.fine("CTP component missing: " + sourceDir);
-            }
-        }
     }
     
     /**

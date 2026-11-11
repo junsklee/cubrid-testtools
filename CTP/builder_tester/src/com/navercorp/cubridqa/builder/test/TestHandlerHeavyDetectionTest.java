@@ -2,7 +2,6 @@ package com.navercorp.cubridqa.builder.test;
 
 import com.navercorp.cubridqa.builder.config.Config;
 import com.navercorp.cubridqa.builder.tester.NodeCapacity;
-import com.navercorp.cubridqa.builder.tester.TestHandler;
 import com.navercorp.cubridqa.builder.tester.TestOrchestrator;
 import com.navercorp.cubridqa.builder.tester.demand.PredictedDemand;
 import org.json.JSONObject;
@@ -10,7 +9,6 @@ import org.json.JSONObject;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.logging.Logger;
 
 /**
  * Lightweight smoke test to verify heavy detection on the tester:
@@ -39,10 +37,8 @@ public class TestHandlerHeavyDetectionTest {
         NodeCapacity capacity = NodeCapacity.measure(config.getWorkDir(), config);
         TestOrchestrator orchestrator = new TestOrchestrator(
                 config, null, null, null, false, null, null, null, null, capacity, null);
-        Logger logger = Logger.getLogger(TestHandlerHeavyDetectionTest.class.getName());
-        TestHandler handler = new TestHandler(config, orchestrator, logger);
-
-        Method isHeavy = TestHandler.class.getDeclaredMethod("isHeavyTest", PredictedDemand.class);
+        // Heavy detection moved from TestHandler to TestOrchestrator, which admits the test
+        Method isHeavy = TestOrchestrator.class.getDeclaredMethod("isHeavyTest", PredictedDemand.class);
         isHeavy.setAccessible(true);
 
         // Heavy candidate: 40s duration, 30 MB/s total IO
@@ -51,7 +47,7 @@ public class TestHandlerHeavyDetectionTest {
                         .put("durationMs", 40_000)
                         .put("ioReadBytesPerSec", 15L * 1024 * 1024)
                         .put("ioWriteBytesPerSec", 15L * 1024 * 1024));
-        boolean heavy = (boolean) isHeavy.invoke(handler, PredictedDemand.fromRequest(heavyReq, null));
+        boolean heavy = (boolean) isHeavy.invoke(orchestrator, PredictedDemand.fromRequest(heavyReq, null));
         if (!heavy) {
             throw new IllegalStateException("Expected heavy test to be detected (40s, 30MB/s total IO)");
         }
@@ -62,7 +58,7 @@ public class TestHandlerHeavyDetectionTest {
                         .put("durationMs", 40_000)
                         .put("ioReadBytesPerSec", 5L * 1024 * 1024)
                         .put("ioWriteBytesPerSec", 5L * 1024 * 1024));
-        boolean light = (boolean) isHeavy.invoke(handler, PredictedDemand.fromRequest(lightReq, null));
+        boolean light = (boolean) isHeavy.invoke(orchestrator, PredictedDemand.fromRequest(lightReq, null));
         if (light) {
             throw new IllegalStateException("Did not expect heavy for low IO (10MB/s total)");
         }
@@ -73,7 +69,7 @@ public class TestHandlerHeavyDetectionTest {
                         .put("durationMs", 10_000)
                         .put("ioReadBytesPerSec", 30L * 1024 * 1024)
                         .put("ioWriteBytesPerSec", 30L * 1024 * 1024));
-        boolean shortHeavy = (boolean) isHeavy.invoke(handler, PredictedDemand.fromRequest(shortReq, null));
+        boolean shortHeavy = (boolean) isHeavy.invoke(orchestrator, PredictedDemand.fromRequest(shortReq, null));
         if (shortHeavy) {
             throw new IllegalStateException("Did not expect heavy for short duration (10s) even with high IO");
         }

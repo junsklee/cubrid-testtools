@@ -421,6 +421,7 @@ public class DockerBuildManager {
             watchdog.start();
 
             List<String> phases = new ArrayList<>();
+            BuildFailureSigns signs = new BuildFailureSigns();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                  java.io.BufferedWriter logWriter = Files.newBufferedWriter(perBuildLog, java.nio.charset.StandardCharsets.UTF_8,
                      java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)) {
@@ -430,6 +431,7 @@ public class DockerBuildManager {
                     if (phase != null) {
                         phases.add(phase);
                     }
+                    signs.observe(line);
                     logger.info("DOCKER[" + commitShort + "]: " + line);
                     try {
                         logWriter.write(line);
@@ -455,6 +457,12 @@ public class DockerBuildManager {
                 throw new IOException(label + " cancelled");
             }
             lastError = new IOException(label + " failed with exit code: " + exitCode + " (log: " + perBuildLog.toString() + ")");
+            if (signs.deterministic()) {
+                // The same sources fail the same way: a second build only doubled the wait for the result
+                logger.warning(label + " [" + commitShort + "] attempt " + attempt + " failed (exit=" + exitCode + "): "
+                    + signs.reason() + "; not retrying");
+                throw lastError;
+            }
             logger.warning(label + " [" + commitShort + "] attempt " + attempt + " failed (exit=" + exitCode + ")." +
                            (attempt < 2 ? " Retrying..." : " No more retries."));
             if (attempt < 2) {
@@ -462,6 +470,44 @@ public class DockerBuildManager {
             }
         }
         throw lastError;
+    }
+
+    /**
+     * What a failed build's output says about retrying it. A compiler or CMake error, or a commit
+     * the clone does not have, comes back on every attempt; one that also shows signs of running out
+     * of memory or disk, or of the network, may not, and is retried as before.
+     */
+    public static final class BuildFailureSigns {
+        private static final java.util.regex.Pattern DETERMINISTIC = java.util.regex.Pattern.compile(
+            "^FAILED: |: error: |^CMake Error|fatal: reference is not a tree|fatal: bad object|"
+                + "error: could not apply|Both cherry-pick and format-patch failed");
+        private static final java.util.regex.Pattern TRANSIENT = java.util.regex.Pattern.compile(
+            "Killed signal terminated program|virtual memory exhausted|Cannot allocate memory|No space left on device|"
+                + "internal compiler error|Could not resolve host|Connection (timed out|reset|refused)|"
+                // TLS/SSL failures by their git/curl messages: a bare SSL matches "openssl" in every build log
+                + "Failed to connect|SSL_ERROR|SSL_connect|SSL certificate|SSL connect error|TLS connect error|gnutls_handshake|"
+                + "RPC failed|early EOF|unable to access|Temporary failure|"
+                // cmake/curl downloads of 3rdparty archives (FAILED: 3rdparty/Stamp/<lib>/<lib>-download)
+                + "-download\\b|downloading .* failed|Couldn't (resolve|connect)|Timeout was reached|Operation timed out",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+        private String firstDeterministic;
+        private boolean transientSeen;
+
+        public void observe(String line) {
+            if (TRANSIENT.matcher(line).find()) {
+                transientSeen = true;
+            } else if (firstDeterministic == null && DETERMINISTIC.matcher(line).find()) {
+                firstDeterministic = line.trim();
+            }
+        }
+
+        public boolean deterministic() {
+            return firstDeterministic != null && !transientSeen;
+        }
+
+        public String reason() {
+            return firstDeterministic == null ? "" : firstDeterministic.substring(0, Math.min(200, firstDeterministic.length()));
+        }
     }
 
     public String buildPullRequest(String prBranch, String headSha, File workDir, String buildType, String baselineCommit)
@@ -772,30 +818,7 @@ public class DockerBuildManager {
             writer.println("bt_phase seed");
             writer.println();
 
-            // Add git shim for deterministic version if ccache is enabled
-            if (config.isCcacheEnabled()) {
-                writer.println("# Create git shim for deterministic version (ccache optimization)");
-                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim\"");
-                writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
-                writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
-                writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
-                writer.println("export REAL_GIT_BIN");
-                writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
-                writer.println("#!/usr/bin/env bash");
-                writer.println("# Intercept version queries and return deterministic values");
-                writer.println("if [[ \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ]]; then");
-                writer.println("  echo \"0000000\"");
-                writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
-                writer.println("  echo \"0\"");
-                writer.println("else");
-                writer.println("  exec \"$REAL_GIT_BIN\" \"$@\"");
-                writer.println("fi");
-                writer.println("GITSHIMEOF");
-                writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
-                writer.println("export PATH=\"$GIT_SHIM_DIR:$PATH\"");
-                writer.println("echo \"Git shim active for deterministic version\"");
-                writer.println();
-            }
+            writeVersionShim(writer);
 
             writePerlPrerequisite(writer);
             writer.println("# Build CUBRID");
@@ -812,12 +835,8 @@ public class DockerBuildManager {
             writer.println("bt_save_3rdparty " + config.getBuildDir(buildType));
             writer.println();
 
-            // Cleanup git shim if it was created
-            if (config.isCcacheEnabled()) {
-                writer.println("# Cleanup git shim");
-                writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
-                writer.println();
-            }
+            writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
+            writer.println();
 
             if (config.isCcacheEnabled()) {
                 writer.println("# Report ccache statistics after build");
@@ -1148,30 +1167,7 @@ public class DockerBuildManager {
             writer.println("bt_phase seed");
             writer.println();
 
-            // Add git shim for deterministic version if ccache is enabled
-            if (config.isCcacheEnabled()) {
-                writer.println("# Create git shim for deterministic version (ccache optimization)");
-                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim\"");
-                writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
-                writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
-                writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
-                writer.println("export REAL_GIT_BIN");
-                writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
-                writer.println("#!/usr/bin/env bash");
-                writer.println("# Intercept version queries and return deterministic values");
-                writer.println("if [[ \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ]]; then");
-                writer.println("  echo \"0000000\"");
-                writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
-                writer.println("  echo \"0\"");
-                writer.println("else");
-                writer.println("  exec \"$REAL_GIT_BIN\" \"$@\"");
-                writer.println("fi");
-                writer.println("GITSHIMEOF");
-                writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
-                writer.println("export PATH=\"$GIT_SHIM_DIR:$PATH\"");
-                writer.println("echo \"Git shim active for deterministic version\"");
-                writer.println();
-            }
+            writeVersionShim(writer);
 
             writePerlPrerequisite(writer);
             writer.println("# Build CUBRID");
@@ -1191,12 +1187,8 @@ public class DockerBuildManager {
             writer.println("bt_save_3rdparty " + config.getBuildDir(buildType));
             writer.println();
 
-            // Cleanup git shim if it was created
-            if (config.isCcacheEnabled()) {
-                writer.println("# Cleanup git shim");
-                writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
-                writer.println();
-            }
+            writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
+            writer.println();
 
             // Report ccache statistics after build
             if (config.isCcacheEnabled()) {
@@ -1375,28 +1367,7 @@ public class DockerBuildManager {
             writer.println("bt_phase seed");
             writer.println();
 
-            if (config.isCcacheEnabled()) {
-                writer.println("# Create git shim for deterministic version (ccache optimization)");
-                writer.println("GIT_SHIM_DIR=\"/tmp/git-shim\"");
-                writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
-                writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
-                writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
-                writer.println("export REAL_GIT_BIN");
-                writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
-                writer.println("#!/usr/bin/env bash");
-                writer.println("if [[ \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ]]; then");
-                writer.println("  echo \"0000000\"");
-                writer.println("elif [[ \"$1\" == \"rev-list\" ]]; then");
-                writer.println("  echo \"0\"");
-                writer.println("else");
-                writer.println("  exec \"$REAL_GIT_BIN\" \"$@\"");
-                writer.println("fi");
-                writer.println("GITSHIMEOF");
-                writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
-                writer.println("export PATH=\"$GIT_SHIM_DIR:$PATH\"");
-                writer.println("echo \"Git shim active for deterministic version\"");
-                writer.println();
-            }
+            writeVersionShim(writer);
 
             writePerlPrerequisite(writer);
             writer.println("# Build CUBRID");
@@ -1413,11 +1384,8 @@ public class DockerBuildManager {
             writer.println("bt_save_3rdparty " + config.getBuildDir(buildType));
             writer.println();
 
-            if (config.isCcacheEnabled()) {
-                writer.println("# Cleanup git shim");
-                writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
-                writer.println();
-            }
+            writer.println("rm -rf \"$GIT_SHIM_DIR\" 2>/dev/null || true");
+            writer.println();
 
             if (config.isCcacheEnabled()) {
                 writer.println("# Report ccache statistics after build");
@@ -2115,6 +2083,53 @@ public class DockerBuildManager {
             }
         }
         return (name == null || seconds == null) ? null : name + "=" + seconds + "s";
+    }
+
+    /**
+     * Emit the git shim CUBRID's CMake runs for the build version, from the repo root. CMake asks
+     * for HEAD's commit count (rev-list --count --after <date> HEAD) and short hash (rev-parse
+     * --short=7 HEAD); the shim answers for COMMIT_HASH, the requested commit, so the build reports
+     * what a regression build of it does (11.5.0.1234-604c504): a cherry-picked build's HEAD is a
+     * commit of its own. Submodules (CCI, JDBC) get their own real versions.
+     *
+     * <p>The version is in version.h, which config.h includes: a new version per commit turns
+     * ccache's direct-mode hits into preprocessed-mode hits (a preprocessor run per file), and only
+     * the files that print the version recompile. deterministic_build_version=true (with ccache)
+     * keeps the version at 0000-0000000 instead, for direct-mode hits across commits.
+     */
+    private void writeVersionShim(PrintWriter writer) {
+        boolean deterministic = config.isCcacheEnabled() && config.isDeterministicBuildVersion();
+        writer.println(deterministic
+            ? "# Git shim: deterministic build version (ccache direct-mode hits across commits)"
+            : "# Git shim: build version of the requested commit, not of HEAD");
+        writer.println("GIT_SHIM_DIR=\"/tmp/git-shim\"");
+        writer.println("mkdir -p \"$GIT_SHIM_DIR\"");
+        writer.println("REAL_GIT_BIN=\"$(command -v git || true)\"");
+        writer.println("if [ -z \"$REAL_GIT_BIN\" ]; then echo '[FATAL] git not found for shim'; exit 1; fi");
+        writer.println("BT_VERSION_REPO=\"$(\"$REAL_GIT_BIN\" rev-parse --show-toplevel)\"");
+        writer.println("BT_VERSION_COMMIT=\"$(\"$REAL_GIT_BIN\" rev-parse --verify --quiet \"${COMMIT_HASH}^{commit}\" || \"$REAL_GIT_BIN\" rev-parse HEAD)\"");
+        writer.println("export REAL_GIT_BIN BT_VERSION_REPO BT_VERSION_COMMIT");
+        writer.println("cat > \"$GIT_SHIM_DIR/git\" << 'GITSHIMEOF'");
+        writer.println("#!/usr/bin/env bash");
+        writer.println("if [[ ( \"$1\" == \"rev-parse\" && \"$2\" == \"--short=7\" ) || \"$1\" == \"rev-list\" ]] \\");
+        writer.println("    && [[ \"$(\"$REAL_GIT_BIN\" rev-parse --show-toplevel 2>/dev/null)\" == \"$BT_VERSION_REPO\" ]]; then");
+        if (deterministic) {
+            writer.println("  if [[ \"$1\" == \"rev-list\" ]]; then echo \"0\"; else echo \"0000000\"; fi");
+            writer.println("  exit 0");
+        } else {
+            writer.println("  args=()");
+            writer.println("  for a in \"$@\"; do if [[ \"$a\" == \"HEAD\" ]]; then args+=(\"$BT_VERSION_COMMIT\"); else args+=(\"$a\"); fi; done");
+            writer.println("  exec \"$REAL_GIT_BIN\" \"${args[@]}\"");
+        }
+        writer.println("fi");
+        writer.println("exec \"$REAL_GIT_BIN\" \"$@\"");
+        writer.println("GITSHIMEOF");
+        writer.println("chmod +x \"$GIT_SHIM_DIR/git\"");
+        writer.println("export PATH=\"$GIT_SHIM_DIR:$PATH\"");
+        writer.println(deterministic
+            ? "echo \"Git shim active for deterministic version\""
+            : "echo \"Git shim: build version of ${BT_VERSION_COMMIT:0:7}\"");
+        writer.println();
     }
 
     /**

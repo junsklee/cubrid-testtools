@@ -52,6 +52,9 @@ public class BuilderTask {
     private static final String COMMIT_BUILD_MODE_CHECKOUT = "checkout";
     private static final String CHECKOUT_BASELINE_KEY = "history";
     private static final String DEFAULT_CUBRID_BRANCH = "develop";
+    // How long a test waits for a tester that refuses connections (restarting) before it is an error
+    private static final long TESTER_CONNECT_RETRY_MS = 5 * 60_000L;
+    private static final long TESTER_CONNECT_RETRY_INTERVAL_MS = 10_000L;
 
     private static boolean isValidCommitBuildMode(String value) {
         return COMMIT_BUILD_MODE_BASELINE_CHERRYPICK.equals(value) || COMMIT_BUILD_MODE_CHECKOUT.equals(value);
@@ -145,8 +148,8 @@ public class BuilderTask {
             JSONArray tests = buildOnly ? new JSONArray() : request.getJSONArray("tests");
             duplicateShellBasenames = findDuplicateShellBasenames(tests);
             String buildType = request.optString("buildType", "release");
-            boolean hasCustomShellScript = request.has("customShellScript") &&
-                                           !request.optString("customShellScript", "").trim().isEmpty();
+            boolean hasCustomShellScript = !request.optString("customShellScript", "").trim().isEmpty()
+                || !request.optString("customShellScriptBase64", "").trim().isEmpty();
 
             // Initialize progress totals
             this.buildsTotal = request.has("prNumber") ? 1 : commits.length();
@@ -197,6 +200,9 @@ public class BuilderTask {
                     sqlTcResolution.branch,
                     sqlTcResolution.commit.substring(0, Math.min(12, sqlTcResolution.commit.length())),
                     sqlTcResolution.remote));
+            }
+            if (!buildOnly) {
+                // SQL cases and Docker shell cases run with this CTP (testers provision it)
                 resolveCtpSqlProvenance();
             }
 
@@ -1142,6 +1148,7 @@ public class BuilderTask {
                     }
                 }
                 JSONObject json = new JSONObject(response.toString());
+                warnIfOtherCode(workerIp, json.optJSONObject("code"));
                 if (json.has("concurrency")) {
                     JSONObject concurrency = json.getJSONObject("concurrency");
 
@@ -1180,6 +1187,23 @@ public class BuilderTask {
         }
         // Fallback to a sane default if tester does not report or on error
         return new TesterCaps(4, 4);
+    }
+
+    /** A tester left on older code (not redeployed after bin/compile.sh) runs cases without the fixes the Builder has. */
+    private void warnIfOtherCode(String workerIp, JSONObject testerCode) {
+        String own = BuildStamp.fingerprint();
+        if (BuildStamp.UNKNOWN.equals(own)) {
+            return;
+        }
+        if (testerCode == null) {
+            taskLogger.warning("Tester " + workerIp + " runs Builder-Tester code older than this Builder's " + BuildStamp.describe()
+                + " (its /health reports no code fingerprint): redeploy it (the VM tester: vm_sim/refresh_tester.sh)");
+        } else if (!own.equals(testerCode.optString("fingerprint", BuildStamp.UNKNOWN))) {
+            taskLogger.warning("Tester " + workerIp + " runs other Builder-Tester code than this Builder: tester "
+                + testerCode.optString("fingerprint", BuildStamp.UNKNOWN) + " (built " + testerCode.optString("built", BuildStamp.UNKNOWN)
+                + ", started " + testerCode.optString("startedAt", BuildStamp.UNKNOWN) + "), Builder " + BuildStamp.describe()
+                + ": redeploy the one that is behind (the VM tester: vm_sim/refresh_tester.sh)");
+        }
     }
     
     private String buildCommit(String commit, String buildType, File workDir, String baselineCommit, String commitBuildMode) 
@@ -1857,6 +1881,10 @@ public class BuilderTask {
             
             // Extract custom script from build request if present
             String customShellScript = request.optString("customShellScript", null);
+            // The same script as exact bytes (validated by the Builder; never sent with customShellScript)
+            String customShellScriptBase64 = request.optString("customShellScriptBase64", "").trim();
+            boolean hasCustomShellScript = (customShellScript != null && !customShellScript.isEmpty())
+                || !customShellScriptBase64.isEmpty();
             String customScriptTestPath = request.optString("customScriptTestPath", null);
             String shellTcBranch = request.optString("shellTcBranch", null);
             String shellTcCommit = request.optString("shellTcCommit", null);
@@ -1902,7 +1930,7 @@ public class BuilderTask {
                 String safeTestName = testName.replaceAll("[^a-zA-Z0-9_.-]", "_");
                 testDir = "/tmp/custom_test_execution/" + safeReqId + "/" + safeTestName;
                 testScript = "custom_script.sh";
-            } else if (customShellScript != null && customScriptTestPath != null && !customScriptTestPath.isEmpty()) {
+            } else if (hasCustomShellScript && customScriptTestPath != null && !customScriptTestPath.isEmpty()) {
                 // Custom script with test path provided - use that for environment setup
                 testDir = config.getShellTcDir() + "/" +
                          customScriptTestPath.substring(0, customScriptTestPath.lastIndexOf("/"));
@@ -2007,7 +2035,9 @@ public class BuilderTask {
             testRequest.put("containerName", containerName);
 
             // Add custom shell script if provided
-            if (customShellScript != null && !customShellScript.isEmpty()) {
+            if (!customShellScriptBase64.isEmpty()) {
+                testRequest.put("customShellScriptBase64", customShellScriptBase64);
+            } else if (customShellScript != null && !customShellScript.isEmpty()) {
                 testRequest.put("customShellScript", customShellScript);
             }
             // Add custom attachments (base64 payloads) if provided
@@ -2021,6 +2051,11 @@ public class BuilderTask {
                 testRequest.put("shellTcCommit", shellTcCommit);
             }
             testRequest.put("testType", sqlTest ? "sql" : "shell");
+            // The CTP the case runs with: SQL cases, and shell cases in Docker (shell_ctp_from_repo)
+            String ctpBase = request.optString("ctpSqlBaseSha", null);
+            if (ctpBase != null && !ctpBase.trim().isEmpty()) {
+                testRequest.put("ctpSqlBaseSha", ctpBase);
+            }
             if (sqlTest) {
                 String sqlTcBranch = request.optString("sqlTcBranch", null);
                 String sqlTcCommit = request.optString("sqlTcCommit", null);
@@ -2029,10 +2064,6 @@ public class BuilderTask {
                 }
                 if (sqlTcCommit != null && !sqlTcCommit.trim().isEmpty()) {
                     testRequest.put("sqlTcCommit", sqlTcCommit);
-                }
-                String ctpBase = request.optString("ctpSqlBaseSha", null);
-                if (ctpBase != null && !ctpBase.trim().isEmpty()) {
-                    testRequest.put("ctpSqlBaseSha", ctpBase);
                 }
                 // Ad-hoc SQL case (custom SQL mode)
                 String customSqlScript = request.optString("customSqlScript", null);
@@ -2084,14 +2115,37 @@ public class BuilderTask {
             } else {
                 // Send HTTP request to tester
                 URL url = new URL("http://" + host + ":" + port + "/test");
-                conn = (HttpURLConnection) url.openConnection();
-                inflightConnections.add(conn);
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
-                conn.setConnectTimeout(5000);
-                conn.setReadTimeout(readTimeoutMs);
                 taskLogger.info("Sending test '" + testName + "' (commit " + commit.substring(0, Math.min(7, commit.length())) + ") to tester " + host + ":" + port);
+                // A connection that cannot even be opened means the test never reached the tester:
+                // it is restarting (a deploy) or briefly down. Wait for it rather than report every
+                // test sent meanwhile as an error (a restart once cost a request 29 of them).
+                long connectDeadline = System.currentTimeMillis() + TESTER_CONNECT_RETRY_MS;
+                while (true) {
+                    conn = (HttpURLConnection) url.openConnection();
+                    inflightConnections.add(conn);
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setDoOutput(true);
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(readTimeoutMs);
+                    try {
+                        conn.connect();
+                        break;
+                    } catch (java.net.ConnectException | java.net.SocketTimeoutException notConnected) {
+                        inflightConnections.remove(conn);
+                        conn.disconnect();
+                        if (isCancelRequested()) {
+                            throw new CancelledException("cancelled");
+                        }
+                        if (System.currentTimeMillis() + TESTER_CONNECT_RETRY_INTERVAL_MS > connectDeadline) {
+                            throw notConnected;
+                        }
+                        taskLogger.warning("Tester " + host + ":" + port + " is not accepting connections ("
+                            + notConnected.getMessage() + "); retrying '" + testName + "' in "
+                            + TESTER_CONNECT_RETRY_INTERVAL_MS / 1000 + "s");
+                        Thread.sleep(TESTER_CONNECT_RETRY_INTERVAL_MS);
+                    }
+                }
 
                 try (OutputStream os = conn.getOutputStream()) {
                     os.write(testRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -2220,8 +2274,11 @@ public class BuilderTask {
                             taskLogger.info("Saved log file: " + logFile.toString() + " (" + content.length + " bytes)");
                         }
                         
-                        // Set logPath to the last log file for backward compatibility
-                        if (lastLogPath != null) {
+                        // logPath: the final attempt's run log (the map's last entry is arbitrary)
+                        String finalLog = finalAttemptLogName(responseJson.optJSONArray("attemptLogMetadata"));
+                        if (finalLog != null && logFiles.containsKey(finalLog)) {
+                            result.put("logPath", Paths.get(testsDir, finalLog).toString());
+                        } else if (lastLogPath != null) {
                             result.put("logPath", lastLogPath.toString());
                         }
                     }
@@ -2290,7 +2347,16 @@ public class BuilderTask {
                                             taskLogger.info("Log file already in correct location for attempt " + attemptNum + " (" + status + "): " + destLogFile.toString());
                                         }
                                     } else {
-                                        taskLogger.warning("Local log file not found for: " + logFileName);
+                                        // The local tester may keep its request logs elsewhere (another
+                                        // log root); its /log endpoint still knows where they are.
+                                        String logContent = fetchLogContentFromRemoteTester(host, port, logFileName);
+                                        if (logContent != null && !logContent.isEmpty()) {
+                                            Path destLogFile = Paths.get(testsDir, logFileName);
+                                            Files.write(destLogFile, logContent.getBytes("UTF-8"));
+                                            taskLogger.info("Local log file not found; fetched attempt " + attemptNum + " log (" + status + ") from the tester to: " + destLogFile);
+                                        } else {
+                                            taskLogger.warning("Local log file not found for: " + logFileName);
+                                        }
                                     }
                                 } else {
                                     // Remote tester - fetch log content via HTTP with retry
@@ -2329,10 +2395,9 @@ public class BuilderTask {
                         }
                         
                         // Set logPath to the final attempt for backward compatibility
-                        if (metadata.length() > 0) {
-                            JSONObject lastAttemptMeta = metadata.getJSONObject(metadata.length() - 1);
-                            String lastFileName = lastAttemptMeta.getString("logFileName");
-                            result.put("logPath", Paths.get(testsDir, lastFileName).toString());
+                        String finalLog = finalAttemptLogName(metadata);
+                        if (finalLog != null) {
+                            result.put("logPath", Paths.get(testsDir, finalLog).toString());
                         }
                     }
                     
@@ -2370,10 +2435,9 @@ public class BuilderTask {
                         }
                         
                         // Set logPath to the final attempt for backward compatibility
-                        if (allAttemptLogs.length() > 0) {
-                            JSONObject lastAttemptLog = allAttemptLogs.getJSONObject(allAttemptLogs.length() - 1);
-                            String lastFileName = lastAttemptLog.getString("logFileName");
-                            result.put("logPath", Paths.get(testsDir, lastFileName).toString());
+                        String finalLog = finalAttemptLogName(allAttemptLogs);
+                        if (finalLog != null) {
+                            result.put("logPath", Paths.get(testsDir, finalLog).toString());
                         }
                     }
                 } catch (Exception e) {
@@ -2455,6 +2519,35 @@ public class BuilderTask {
                 }
             }
         }
+    }
+
+    /**
+     * The run log of the final attempt in attemptLogMetadata, or null. Artifacts (entries with an
+     * artifactType: answer diff, case source, VM case files) follow the attempt logs, so the last
+     * entry was the case source for every SQL result and the report's log link opened the .sql.
+     */
+    static String finalAttemptLogName(JSONArray metadata) {
+        if (metadata == null || metadata.length() == 0) {
+            return null;
+        }
+        String last = null;
+        int lastAttempt = Integer.MIN_VALUE;
+        for (int i = 0; i < metadata.length(); i++) {
+            JSONObject entry = metadata.optJSONObject(i);
+            if (entry == null || entry.has("artifactType") || entry.optString("logFileName", "").isEmpty()) {
+                continue;
+            }
+            int attempt = entry.optInt("attempt", 0);
+            if (attempt >= lastAttempt) {
+                lastAttempt = attempt;
+                last = entry.getString("logFileName");
+            }
+        }
+        if (last == null) {
+            JSONObject entry = metadata.optJSONObject(metadata.length() - 1);
+            last = entry != null ? entry.optString("logFileName", null) : null;
+        }
+        return last == null || last.isEmpty() ? null : last;
     }
 
     /**

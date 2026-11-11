@@ -7,9 +7,12 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.logging.Logger;
@@ -35,7 +38,57 @@ public final class GitCredentials {
             return;
         }
         pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+        // A fetch stalled on a dead connection waited forever (these commands have no timeout), holding
+        // the VM's case lock and a QAHome consumer VM with it: abort below 1 KB/s for 5 minutes
+        pb.environment().putIfAbsent("GIT_HTTP_LOW_SPEED_LIMIT", "1000");
+        pb.environment().putIfAbsent("GIT_HTTP_LOW_SPEED_TIME", "300");
         pb.environment().putAll(environment);
+    }
+
+    /**
+     * Gives ctpHome a conf/common.conf with git_user, git_pwd and git_email where it lacks them, as
+     * a regression VM's CTP has: CTP's run_git_update exits at once without the file, and with it
+     * fetches the public cubrid-testcases (credentials or not). Keys already in the file are kept;
+     * missing ones are appended, and a new file is readable by its owner only. Returns the keys added.
+     */
+    public static List<String> installCommonConf(Path ctpHome, String user, String password, String email) {
+        Path commonConf = ctpHome.resolve("conf").resolve("common.conf");
+        List<String> added = new ArrayList<>();
+        try {
+            Properties existing = new Properties();
+            boolean exists = Files.isRegularFile(commonConf);
+            if (exists) {
+                try (Reader in = new InputStreamReader(new FileInputStream(commonConf.toFile()), StandardCharsets.UTF_8)) {
+                    existing.load(in);
+                }
+            }
+            StringBuilder lines = new StringBuilder();
+            String[][] entries = {{"git_user", user}, {"git_pwd", password}, {"git_email", email}};
+            for (String[] entry : entries) {
+                if (!existing.containsKey(entry[0])) {
+                    lines.append(entry[0]).append('=').append(entry[1] == null ? "" : entry[1].trim()).append('\n');
+                    added.add(entry[0]);
+                }
+            }
+            if (added.isEmpty()) {
+                return added;
+            }
+            if (!exists) {
+                Files.createDirectories(commonConf.getParent());
+                Files.createFile(commonConf, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+            } else if (Files.size(commonConf) > 0) {
+                byte[] content = Files.readAllBytes(commonConf);
+                if (content[content.length - 1] != '\n') {
+                    lines.insert(0, '\n');
+                }
+            }
+            Files.write(commonConf, lines.toString().getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+            String who = user == null || user.trim().isEmpty() ? "no credentials (public repositories only)" : "user " + user.trim();
+            logger.info((exists ? "Added " + added + " to " : "Installed ") + commonConf + ": " + who);
+        } catch (IOException e) {
+            logger.warning("Could not install " + commonConf + ": " + e.getMessage());
+        }
+        return added;
     }
 
     /**

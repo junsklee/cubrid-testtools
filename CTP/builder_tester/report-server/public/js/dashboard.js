@@ -249,6 +249,19 @@
                     }
                 }
 
+                // The monitored request, while it waits or runs: nothing else polled it, so a queued
+                // request kept its first queue position and never showed that it had started.
+                try {
+                    const monitoredId = sessionStorage.getItem('viewTaskId') || sessionStorage.getItem('activeTaskId');
+                    const waitingOrRunning = monitoredId && (newSnap.running === monitoredId
+                        || (Array.isArray(newSnap.queued) && newSnap.queued.includes(monitoredId)));
+                    if (waitingOrRunning && monitoredId !== prevRunning && typeof window.__pollStatus === 'function') {
+                        window.__pollStatus(monitoredId);
+                    }
+                } catch (e) {
+                    // ignore
+                }
+
                 const pinnedId = sessionStorage.getItem('activeTaskId');
                 const viewingId = currentId || sessionStorage.getItem('viewTaskId') || pinnedId;
 
@@ -1703,16 +1716,19 @@
                 
                 if (!response.ok) {
                     let errorMessage = `Build request failed: ${response.status} ${response.statusText}`;
+                    // Read the body once: response.text() after a failed response.json() threw
+                    // "body stream already read" and hid the real error (e.g. the rate limiter's text).
+                    // The Builder answers {message}, the gateway's own errors {error}.
+                    const errorText = await response.text().catch(() => '');
+                    let detail = errorText;
                     try {
-                        const errorData = await response.json();
-                        if (errorData.message) {
-                            errorMessage += `\n${errorData.message}`;
-                        }
+                        const errorData = JSON.parse(errorText);
+                        detail = errorData.message || errorData.error || errorText;
                     } catch {
-                        const errorText = await response.text();
-                        if (errorText) {
-                            errorMessage += `\n${errorText}`;
-                        }
+                        // not JSON: show the text as it is
+                    }
+                    if (detail) {
+                        errorMessage += `\n${detail}`;
                     }
                     throw new Error(errorMessage);
                 }
@@ -1747,7 +1763,17 @@
         }
 
         // Start status monitoring with real-time updates
-        function startStatusMonitoring(request) {
+        // Stops the monitor startStatusMonitoring last started (its log tail): a new monitor left the
+        // old one's tail loop writing into the shared log area, and its completion check
+        // wrote the old request's "Completed" into the new request's monitor.
+        let stopCurrentMonitor = null;
+
+        // options.restore: resuming after a page load, so the request viewed then is viewed again.
+        // Otherwise (a submission, a queue click) the monitor views the request it was started for.
+        function startStatusMonitoring(request, options = {}) {
+            if (stopCurrentMonitor) {
+                stopCurrentMonitor();
+            }
             const monitor = document.getElementById('statusMonitor');
             const refreshBtn = document.getElementById('refreshStatusBtn');
             const tailBtn = document.getElementById('tailBuilderLogBtn');
@@ -1761,7 +1787,7 @@
             }
 
             const pinnedTaskId = taskId;
-            let viewTaskId = sessionStorage.getItem('viewTaskId') || pinnedTaskId;
+            let viewTaskId = (options.restore && sessionStorage.getItem('viewTaskId')) || pinnedTaskId;
             sessionStorage.setItem('viewTaskId', viewTaskId);
             if (pinnedTaskId && request && typeof request === 'object') {
                 requestMetaCache.set(pinnedTaskId, request);
@@ -1973,6 +1999,28 @@
                         return;
                     }
                     
+                    if (response.ok && statusData && statusData.status === 'queued') {
+                        const pos = statusData.queuePosition;
+                        statusElement.textContent = pos ? `Queued (${pos})` : 'Queued';
+                        statusElement.parentElement.className = 'status checking';
+                        progressDetails.textContent = pos ? `Waiting in build queue (position ${pos})` : 'Waiting in build queue';
+                        progressFill.style.width = '0%';
+                        return;
+                    }
+                    if (response.ok && statusData && ['removed', 'cancelled', 'interrupted'].includes(statusData.status)) {
+                        // Taken off the queue (or stopped) through /queue/remove, or cut off by a Builder restart
+                        const when = statusData.removedAt ? new Date(statusData.removedAt).toLocaleString() : '';
+                        const label = { removed: 'Removed', cancelled: 'Cancelled', interrupted: 'Interrupted' }[statusData.status];
+                        statusElement.textContent = label;
+                        statusElement.parentElement.className = 'status offline';
+                        progressDetails.textContent = statusData.status === 'interrupted'
+                            ? (statusData.message || 'Interrupted by a Builder restart')
+                            : (statusData.status === 'removed' ? 'Removed from the queue' : 'Cancelled while running')
+                                + (when ? ` at ${when}` : '') + (statusData.removedBy ? ` by ${statusData.removedBy}` : '');
+                        progressFill.style.width = '0%';
+                        return;
+                    }
+
                     if (response.ok && statusData) {
                         // Update status based on response
                         if (statusData.status === 'completed') {
@@ -2192,6 +2240,10 @@
         let logTailTimer = null;
         let lastReportCheckMs = 0;
         let logTailTaskId = null;
+        // Bumped at every start/stop: a poll whose fetch was in flight across a restart must not
+        // write the other task's content, take its offset, or schedule a second loop.
+        let logTailGeneration = 0;
+        stopCurrentMonitor = () => stopBuilderLogTail();
 
         window.toggleBuilderLog = function() {
             const container = document.getElementById('logTailContainer');
@@ -2231,6 +2283,7 @@
             if (!taskId) return;
 
             logTailTaskId = taskId;
+            logTailGeneration++;
             document.getElementById('builderLogTitle').textContent = `${taskId}/builder.log`;
             logTailActive = true;
             logTailOffset = 0;
@@ -2243,6 +2296,7 @@
         function stopBuilderLogTail() {
             logTailActive = false;
             logTailTaskId = null;
+            logTailGeneration++;
             if (logTailTimer) {
                 clearTimeout(logTailTimer);
                 logTailTimer = null;
@@ -2257,12 +2311,15 @@
                 stopBuilderLogTail();
                 return;
             }
+            const generation = logTailGeneration;
+            const current = () => logTailActive && generation === logTailGeneration;
 
             try {
                 // 1MB chunks: at the server's 64KB default a 6MB builder.log took ~3 minutes to catch up
                 const url = `/log-tail/builder?taskId=${encodeURIComponent(taskId)}&offset=${logTailOffset}&knownMtimeMs=${logTailKnownMtime}&maxBytes=1048576`;
                 const response = await fetch(url);
                 const data = await response.json();
+                if (!current()) return;
 
                 if (data.status === 'ok') {
                     const area = document.getElementById('builderLogArea');
@@ -2296,7 +2353,8 @@
                         try {
                             const statusResp = await fetch(`/api/builder/status?taskId=${taskId}`);
                             const statusJson = await statusResp.json();
-                            if (statusResp.ok && statusJson && statusJson.status === 'not_found') {
+                            if (!current()) return;
+                            if (statusResp.ok && statusJson && ['not_found', 'removed', 'cancelled', 'interrupted'].includes(statusJson.status)) {
                                 console.log('Build completed (builder no longer reports task), stopping log tail.');
                                 area.textContent += '\n--- Build Finished (Monitoring Stopped) ---\n';
                                 area.scrollTop = area.scrollHeight;
@@ -2325,6 +2383,7 @@
                     logTailTimer = setTimeout(pollTail, 15000);
                 }
             } catch (err) {
+                if (!current()) return;
                 console.error('Failed to poll log tail:', err);
                 logTailTimer = setTimeout(pollTail, 20000);
             }
@@ -2386,13 +2445,13 @@
                     ${statusData.activeTasks !== undefined ? `
                     <div class="info-item">
                         <div class="info-label">Active Tasks</div>
-                        <div class="info-value">${statusData.activeTasks}</div>
+                        <div class="info-value">${Array.isArray(statusData.activeTasks) ? statusData.activeTasks.length : statusData.activeTasks}</div>
                     </div>
                     ` : ''}
-                    ${statusData.queueSize !== undefined ? `
+                    ${statusData.queuedRequests !== undefined ? `
                     <div class="info-item">
                         <div class="info-label">Queue Size</div>
-                        <div class="info-value">${statusData.queueSize}</div>
+                        <div class="info-value">${statusData.queuedRequests}</div>
                     </div>
                     ` : ''}
                     ${data.uptime ? `
@@ -2652,10 +2711,10 @@
                     const response = await fetch(`/api/builder/status?taskId=${storedTaskId}`);
                     const statusData = await response.json();
                     
-                    if (response.ok && statusData.status === 'running') {
-                        // Session is still active, restore the monitoring
+                    if (response.ok && (statusData.status === 'running' || statusData.status === 'queued')) {
+                        // Session is still active (running, or waiting for a slot), restore the monitoring
                         const request = JSON.parse(storedRequest);
-                        startStatusMonitoring(request);
+                        startStatusMonitoring(request, { restore: true });
                         showToast('Resumed monitoring active build session', 'info');
                         return;
                     }
@@ -2665,7 +2724,7 @@
                         const reportResponse = await fetch(`/report?id=${storedTaskId}`, { method: 'HEAD' });
                         if (reportResponse.ok) {
                             const request = JSON.parse(storedRequest);
-                            startStatusMonitoring(request);
+                            startStatusMonitoring(request, { restore: true });
                             showToast('Restored last build session (completed). Press Refresh to view current running build.', 'info');
                             return;
                         }

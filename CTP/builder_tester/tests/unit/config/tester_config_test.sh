@@ -23,7 +23,7 @@ cubrid_src_dir=/path/to/cubrid
 shell_tc_dir=/path/to/tests
 work_dir=/tmp/tester_work
 use_docker_tester=true
-docker_test_image=cubridci/cubridci:test_shell
+docker_test_image=cubridci/cubridci:test_rl8.10
 keep_failed_containers=false
 EOF
     

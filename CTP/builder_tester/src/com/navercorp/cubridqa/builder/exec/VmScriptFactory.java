@@ -114,6 +114,11 @@ public final class VmScriptFactory {
         s.append("(\n");
         s.append("  cd \"$CASE_DIR\" || exit 2\n");
         s.append("  ulimit -c unlimited\n");
+        // runTestCase_linux: JAVA_HOME_<context version> wins when the VM defines it; the version
+        // is CommonUtils' "64bits", and Builder-Tester builds are 64-bit
+        s.append("  if [ \"$JAVA_HOME_64BITS\" ]; then\n");
+        s.append("    export JAVA_HOME=$JAVA_HOME_64BITS\n");
+        s.append("  fi\n");
         s.append("  export TEST_BIG_SPACE=$(echo $TEST_BIG_SPACE)\n");
         s.append("  export TEST_BIG_SPACE=`if [ \"$TEST_BIG_SPACE\" = '' ]; then echo ").append(quote(bigSpaceDir))
             .append(" ; else echo $TEST_BIG_SPACE; fi`\n");
@@ -124,9 +129,12 @@ public final class VmScriptFactory {
         appendExcludedCores(s, ignoreCoreByKeywords, "  ");
         s.append("  echo > \"$RESULT_FILE\"\n");
         s.append("  ssh_info\n");
+        appendResultFileBeforeInit(s, "  ");
         s.append("  sh \"$CASE_FILE\" 2>&1\n");
         s.append(")\n");
-        s.append("echo \"").append(CASE_EXIT_PREFIX).append("$?\"\n\n");
+        s.append("CASE_EXIT=$?\n");
+        s.append("rm -f \"$CASE_DIR/").append(RESULT_FILE_BEFORE_INIT).append("\"\n");
+        s.append("echo \"").append(CASE_EXIT_PREFIX).append("$CASE_EXIT\"\n\n");
 
         s.append("echo \"").append(PHASE_PREFIX).append("final check (do_check_more_errors)\"\n");
         s.append("(\n");
@@ -228,6 +236,20 @@ public final class VmScriptFactory {
         s.append("  bt_kill \"ps -u $USER -o pid,comm| grep -v grep | grep -i expect | awk '{print \\$1}'\"\n");
         s.append("  bt_kill \"ps -u $USER -o pid,comm| grep -v grep | grep -i dos2unix | awk '{print \\$1}'\"\n");
         s.append("}\n\n");
+    }
+
+    /** Where CTP init's write before it names the result file goes (see appendResultFileBeforeInit). */
+    static final String RESULT_FILE_BEFORE_INIT = ".result_before_init";
+
+    /**
+     * CTP's init writes its "test start" line to ${cur_path}/$result_file before it sets
+     * result_file (init.sh, need_count_time), so every case logged "init.sh: line 708: .../cases/:
+     * Is a directory". That one write gets a scratch file; init names the real result file right
+     * after. Not the case's own .result: the case's helper scripts would inherit the name and write
+     * into it, which in regression (result_file unset) they cannot.
+     */
+    static void appendResultFileBeforeInit(StringBuilder s, String indent) {
+        s.append(indent).append("export result_file=").append(RESULT_FILE_BEFORE_INIT).append("\n");
     }
 
     private static void appendExcludedCores(StringBuilder s, String ignoreCoreByKeywords, String indent) {

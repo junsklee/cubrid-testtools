@@ -115,7 +115,14 @@ curl "http://localhost:8089/status?taskId=req_20250814_123034_6077"
 ```
 
 Possible responses:
-- `{ "status": "running", "taskId": "...", "progress": { ... } }`
+- `{ "status": "running", "taskId": "...", "progress": { ... } }` (`"cancelRequested": true` while a cancel takes effect)
+- `{ "status": "queued", "taskId": "...", "queuePosition": 1 }`: accepted, waiting for a free slot
+- `{ "status": "removed" | "cancelled", "taskId": "...", "removedAt": <ms>, "removedBy": "<client>", "message": "..." }`:
+  taken off the queue (or stopped while running) through `POST /queue/remove`, e.g. the dashboard's
+  remove button; its logs and report are deleted.
+- `{ "status": "interrupted", "taskId": "...", "removedAt": <ms>, "message": "..." }`: the Builder restarted while the
+  request was running (its callback gets an error too); queued requests are queued again after a restart.
+  These records are kept for the last 1000 requests in `log/system/ended_requests.jsonl`.
 - `{ "status": "not_found", "taskId": "..." }`
 
 ## Direct Tester invocation

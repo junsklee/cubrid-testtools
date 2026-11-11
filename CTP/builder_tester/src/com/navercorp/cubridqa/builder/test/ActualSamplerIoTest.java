@@ -53,7 +53,7 @@ public class ActualSamplerIoTest {
         // Create a container with I/O activity
         String containerId = createTestContainer(
             "while true; do " +
-            "dd if=/dev/zero of=/tmp/test bs=5M count=5 2>/dev/null; " +
+            "dd if=/dev/zero of=/tmp/test bs=5M count=5 conv=fsync 2>/dev/null; " +
             "dd if=/tmp/test of=/dev/null bs=5M 2>/dev/null; " +
             "sleep 1; done"
         );
@@ -65,10 +65,10 @@ public class ActualSamplerIoTest {
             BuilderConfig config = new BuilderConfig(
                 System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
-            ActualSampler sampler = new ActualSampler(config);
+            ActualSampler sampler = testSampler(config);
 
             // First sample - should establish baseline (zero I/O)
-            UtilizationSnapshot snapshot1 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot1 = sampleNow(sampler);
 
             assert snapshot1.getTotalIoReadBytesPerSec() == 0 :
                 "First sample I/O read should be 0 (baseline), got " + snapshot1.getTotalIoReadBytesPerSec();
@@ -93,10 +93,11 @@ public class ActualSamplerIoTest {
 
         cleanupTestContainers();
 
-        // Create container with consistent I/O pattern (write ~10MB per iteration)
+        // Create container with consistent I/O pattern (write ~10MB per iteration). Synced: on cgroup v1,
+        // buffered writes are flushed by kernel threads and charged to the root cgroup, not the container
         String containerId = createTestContainer(
             "while true; do " +
-            "dd if=/dev/zero of=/tmp/data bs=1M count=10 2>/dev/null; " +
+            "dd if=/dev/zero of=/tmp/data bs=1M count=10 conv=fsync 2>/dev/null; " +
             "sleep 1; done"
         );
 
@@ -106,16 +107,16 @@ public class ActualSamplerIoTest {
             BuilderConfig config = new BuilderConfig(
                 System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
-            ActualSampler sampler = new ActualSampler(config);
+            ActualSampler sampler = testSampler(config);
 
             // Sample 1: Baseline
-            UtilizationSnapshot snapshot1 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot1 = sampleNow(sampler);
             assert snapshot1.getTotalIoWriteBytesPerSec() == 0 : "Sample 1 should be baseline (zero)";
 
             Thread.sleep(SAMPLE_INTERVAL_MS);
 
             // Sample 2: Should show I/O activity
-            UtilizationSnapshot snapshot2 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot2 = sampleNow(sampler);
             long ioWrite2 = snapshot2.getTotalIoWriteBytesPerSec();
 
             assert ioWrite2 > 0 : "Sample 2 I/O write should be > 0, got " + ioWrite2;
@@ -124,7 +125,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(SAMPLE_INTERVAL_MS);
 
             // Sample 3: Should continue tracking
-            UtilizationSnapshot snapshot3 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot3 = sampleNow(sampler);
             long ioWrite3 = snapshot3.getTotalIoWriteBytesPerSec();
 
             assert ioWrite3 > 0 : "Sample 3 I/O write should be > 0, got " + ioWrite3;
@@ -133,7 +134,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(SAMPLE_INTERVAL_MS);
 
             // Sample 4: Verify consistency
-            UtilizationSnapshot snapshot4 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot4 = sampleNow(sampler);
             long ioWrite4 = snapshot4.getTotalIoWriteBytesPerSec();
 
             assert ioWrite4 > 0 : "Sample 4 I/O write should be > 0, got " + ioWrite4;
@@ -160,7 +161,7 @@ public class ActualSamplerIoTest {
 
         String containerId = createTestContainer(
             "while true; do " +
-            "dd if=/dev/zero of=/tmp/test bs=2M count=10 2>/dev/null; " +
+            "dd if=/dev/zero of=/tmp/test bs=2M count=10 conv=fsync 2>/dev/null; " +
             "sleep 1; done"
         );
 
@@ -170,14 +171,14 @@ public class ActualSamplerIoTest {
             BuilderConfig config = new BuilderConfig(
                 System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
-            ActualSampler sampler = new ActualSampler(config);
+            ActualSampler sampler = testSampler(config);
 
             // Sample 1: Baseline
-            sampler.sampleCurrentUtilization();
+            sampleNow(sampler);
             Thread.sleep(SAMPLE_INTERVAL_MS);
 
             // Sample 2: Should show I/O
-            UtilizationSnapshot snapshot2 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot2 = sampleNow(sampler);
             long ioWrite2 = snapshot2.getTotalIoWriteBytesPerSec();
             assert ioWrite2 > 0 : "Sample 2 should show I/O activity";
             System.out.println("  ✓ Before restart - I/O write: " + String.format("%.1f", ioWrite2 / MB) + " MB/s");
@@ -188,7 +189,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(2000);
 
             // Sample 3: After restart, should detect reset and return zero (new baseline)
-            UtilizationSnapshot snapshot3 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot3 = sampleNow(sampler);
             // Note: The restart detection happens internally, metrics should still be collected
             System.out.println("  ✓ After restart - I/O write: " +
                 String.format("%.1f", snapshot3.getTotalIoWriteBytesPerSec() / MB) + " MB/s");
@@ -196,7 +197,7 @@ public class ActualSamplerIoTest {
             Thread.sleep(SAMPLE_INTERVAL_MS);
 
             // Sample 4: Should resume normal tracking with new baseline
-            UtilizationSnapshot snapshot4 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot4 = sampleNow(sampler);
             long ioWrite4 = snapshot4.getTotalIoWriteBytesPerSec();
             System.out.println("  ✓ After baseline reset - I/O write: " +
                 String.format("%.1f", ioWrite4 / MB) + " MB/s");
@@ -220,14 +221,14 @@ public class ActualSamplerIoTest {
         // Create two containers with different I/O patterns
         String container1 = createTestContainer(
             "while true; do " +
-            "dd if=/dev/zero of=/tmp/c1 bs=3M count=5 2>/dev/null; " +
+            "dd if=/dev/zero of=/tmp/c1 bs=3M count=5 conv=fsync 2>/dev/null; " +
             "sleep 1; done",
             TEST_CONTAINER_NAME + "_1"
         );
 
         String container2 = createTestContainer(
             "while true; do " +
-            "dd if=/dev/zero of=/tmp/c2 bs=2M count=5 2>/dev/null; " +
+            "dd if=/dev/zero of=/tmp/c2 bs=2M count=5 conv=fsync 2>/dev/null; " +
             "sleep 1; done",
             TEST_CONTAINER_NAME + "_2"
         );
@@ -238,14 +239,14 @@ public class ActualSamplerIoTest {
             BuilderConfig config = new BuilderConfig(
                 System.getProperty("bt.conf", System.getProperty("user.home") + "/cubrid-testtools/CTP/builder_tester/conf/tester.conf")
             );
-            ActualSampler sampler = new ActualSampler(config);
+            ActualSampler sampler = testSampler(config);
 
             // Sample 1: Baseline for both containers
-            sampler.sampleCurrentUtilization();
+            sampleNow(sampler);
             Thread.sleep(SAMPLE_INTERVAL_MS);
 
             // Sample 2: Should show aggregated I/O from both containers
-            UtilizationSnapshot snapshot2 = sampler.sampleCurrentUtilization();
+            UtilizationSnapshot snapshot2 = sampleNow(sampler);
             long totalIoWrite = snapshot2.getTotalIoWriteBytesPerSec();
 
             assert totalIoWrite > 0 : "Aggregated I/O should be > 0";
@@ -267,6 +268,33 @@ public class ActualSamplerIoTest {
     }
 
     // Helper methods
+
+    /**
+     * A sampler the test drives: sampleCurrentUtilization() returns what the background thread
+     * last sampled (every SNAPSHOT_CACHE_TTL_MS), so the test stops that thread, drops any baseline
+     * it took, and samples on demand (sampleNow).
+     */
+    private static ActualSampler testSampler(BuilderConfig config) throws Exception {
+        ActualSampler sampler = new ActualSampler(config);
+        sampler.stop();
+        java.lang.reflect.Field thread = ActualSampler.class.getDeclaredField("backgroundSampler");
+        thread.setAccessible(true);
+        Thread background = (Thread) thread.get(sampler);
+        if (background != null) {
+            background.join(30_000);
+        }
+        java.lang.reflect.Field previous = ActualSampler.class.getDeclaredField("previousSamples");
+        previous.setAccessible(true);
+        ((java.util.Map<?, ?>) previous.get(sampler)).clear();
+        return sampler;
+    }
+
+    private static UtilizationSnapshot sampleNow(ActualSampler sampler) throws Exception {
+        java.lang.reflect.Method perform = ActualSampler.class.getDeclaredMethod("performSampling");
+        perform.setAccessible(true);
+        perform.invoke(sampler);
+        return sampler.getLatestSnapshot();
+    }
 
     private static String createTestContainer(String command) throws Exception {
         return createTestContainer(command, TEST_CONTAINER_NAME);

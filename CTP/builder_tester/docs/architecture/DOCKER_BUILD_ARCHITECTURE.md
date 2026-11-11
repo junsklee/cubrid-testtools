@@ -135,6 +135,10 @@ This mode is designed for “no setup quick edits” (e.g., tweak wait, update a
 Notes:
 - If `customShellScript` is present, the builder will synthesize a placeholder test name if needed.
 - Attachments are written next to the executed custom script (optionally into the specified test directory).
+- `customShellScriptBase64` (instead of `customShellScript`, never both) carries the script as
+  base64 of its exact bytes: a JSON string is text, and some cases' scripts are not UTF-8
+  (EUC-KR, e.g. `bug_bts_5730.sh`). The tester writes those bytes as the entry script, after the
+  attachments. Up to 5 MB decoded.
 
 ### 1.4 Build-Only Mode (Artifacts Only)
 
