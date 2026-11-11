@@ -184,7 +184,8 @@ public class Builder {
         return false;
     }
 
-    private static boolean isAllowedSqlTestPath(String t) {
+    /** A path a request may name as an SQL case: sql/**&#47;cases/&lt;name&gt;.sql (also SqlFullSuite's filter). */
+    static boolean isAllowedSqlTestPath(String t) {
         if (t == null) return false;
         boolean rootOk = false;
         for (String root : ALLOWED_SQL_TEST_ROOTS) {
@@ -216,6 +217,10 @@ public class Builder {
             return raw;
         }
         String inferred = "shell";
+        if (!buildOnly && request.optBoolean(SqlFullSuite.REQUEST_FIELD, false)) {
+            request.put("testType", "sql");
+            return "sql";
+        }
         if (!buildOnly && request.has("tests")) {
             try {
                 JSONArray tests = request.getJSONArray("tests");
@@ -467,6 +472,10 @@ public class Builder {
                             upload.optInt("port", 22),
                             remoteDirLog));
                     }
+                } else if (request.has(OfficialBuilds.REQUEST_FIELD)) {
+                    logger.info(String.format("[%s] Received request for official build(s) %s and %s",
+                        requestId, request.getJSONArray(OfficialBuilds.REQUEST_FIELD).join(", ").replace("\"", ""),
+                        request.optBoolean(SqlFullSuite.REQUEST_FIELD, false) ? "the full SQL suite" : tests.length() + " tests"));
                 } else if (request.has("prNumber")) {
                     logger.info(String.format("[%s] Received PR build request for PR #%s and %d tests",
                         requestId, request.get("prNumber").toString(), tests.length()));
@@ -668,6 +677,8 @@ public class Builder {
                     .put("maxConcurrentBuilds", MAX_CONCURRENT_REQUESTS)
                     .put("workDir", config.getWorkDir())
                     .put("dockerEnabled", config.useDocker())
+                    // The dashboard lists official builds from the store the Builder takes them from
+                    .put("officialBuildStoreUrl", config.getOfficialBuildStoreUrl())
                     .put("commitBuildMode", config.getCommitBuildMode())
                     .put("vmTesterNodes", new JSONArray(config.getVmTesterNodes()));
                 ConsumerPool consumerPool = ConsumerPool.get();
@@ -1022,8 +1033,11 @@ public class Builder {
             (request.get("prNumber") instanceof Number && ((Number) request.get("prNumber")).intValue() > 0) ||
             (request.get("prNumber") instanceof String && ((String) request.get("prNumber")).trim().matches("\\d+"))
         );
-        if (!hasCommits && !hasPrNumber) {
-            throw new IllegalArgumentException("Request must contain non-empty 'commits' array or a valid 'prNumber'");
+        if (request.has(OfficialBuilds.REQUEST_FIELD)) {
+            validateOfficialBuilds(request, buildOnly, hasCommits, hasPrNumber);
+        } else if (!hasCommits && !hasPrNumber) {
+            throw new IllegalArgumentException("Request must contain non-empty 'commits' array, a valid 'prNumber', "
+                + "or '" + OfficialBuilds.REQUEST_FIELD + "'");
         }
 
         if (!buildOnly) {
@@ -1073,6 +1087,25 @@ public class Builder {
         }
         boolean hasCustomScript = hasCustomShellScript || hasCustomSqlScript;
 
+        // Every SQL case of the SQL testcases branch, listed by BuilderTask at the commit it pins
+        boolean sqlFullSuite = request.optBoolean(SqlFullSuite.REQUEST_FIELD, false);
+        if (sqlFullSuite) {
+            if (buildOnly) {
+                throw new IllegalArgumentException("'" + SqlFullSuite.REQUEST_FIELD + "' runs tests; it cannot be combined with buildOnly");
+            }
+            if (!sqlMode) {
+                throw new IllegalArgumentException("'" + SqlFullSuite.REQUEST_FIELD + "' requires testType=sql");
+            }
+            if (hasCustomScript) {
+                throw new IllegalArgumentException("'" + SqlFullSuite.REQUEST_FIELD + "' cannot be combined with a custom script");
+            }
+            if (request.has("tests") && request.getJSONArray("tests").length() > 0) {
+                throw new IllegalArgumentException("Send either 'tests' or '" + SqlFullSuite.REQUEST_FIELD + "', not both");
+            }
+            request.put(SqlFullSuite.REQUEST_FIELD, true);
+            request.put("tests", new JSONArray());
+        }
+
         // Validate custom attachments (only allowed when customShellScript is present)
         if (request.has("customAttachments")) {
             Object raw = request.get("customAttachments");
@@ -1088,7 +1121,7 @@ public class Builder {
             }
         }
 
-        if (!buildOnly) {
+        if (!buildOnly && !sqlFullSuite) {
             if (!hasCustomScript) {
                 // Standard mode - tests array is required
                 if (!request.has("tests") || request.getJSONArray("tests").length() == 0) {
@@ -1150,7 +1183,7 @@ public class Builder {
                     );
                 }
             }
-        } else {
+        } else if (buildOnly) {
             validateBuildUpload(request);
         }
         
@@ -1160,6 +1193,72 @@ public class Builder {
         
         if (!buildOnly && !hasWorkerIp && !hasWorkerIps) {
             throw new IllegalArgumentException("Request must contain either non-empty 'workerIp' or non-empty 'workerIps' array");
+        }
+
+        // Network checks last, once everything else holds
+        checkOfficialBuildsAvailable(request);
+    }
+
+    /** officialBuilds: versions of the build store, tested as published instead of built. */
+    private void validateOfficialBuilds(JSONObject request, boolean buildOnly, boolean hasCommits, boolean hasPrNumber) {
+        if (buildOnly) {
+            throw new IllegalArgumentException("Official builds are already built; buildOnly does not apply to them");
+        }
+        if (hasCommits || hasPrNumber) {
+            throw new IllegalArgumentException("Send either '" + OfficialBuilds.REQUEST_FIELD + "' or 'commits'/'prNumber', not both");
+        }
+        String buildType = request.optString("buildType", "release");
+        if (!OfficialBuilds.isSupportedBuildType(buildType)) {
+            throw new IllegalArgumentException("Official builds are published as release and debug packages only, not '"
+                + buildType + "'");
+        }
+        List<String> versions = OfficialBuilds.parse(request.get(OfficialBuilds.REQUEST_FIELD));
+        request.put(OfficialBuilds.REQUEST_FIELD, new JSONArray(versions));
+    }
+
+    /**
+     * Each official build's package must be on the store now, so a typo or an unpublished debug
+     * package is refused here rather than failing every case on the testers. Checked last, after
+     * the cheap checks, and all at once: the dashboard's gateway gives up on /build after 30 s.
+     */
+    private void checkOfficialBuildsAvailable(JSONObject request) {
+        if (!request.has(OfficialBuilds.REQUEST_FIELD)) {
+            return;
+        }
+        String buildType = request.optString("buildType", "release").trim();
+        String store = config.getOfficialBuildStoreUrl();
+        JSONArray versions = request.getJSONArray(OfficialBuilds.REQUEST_FIELD);
+        List<String> urls = new ArrayList<>();
+        List<Callable<String>> checks = new ArrayList<>();
+        for (int i = 0; i < versions.length(); i++) {
+            String url = OfficialBuilds.packageUrl(store, versions.getString(i), buildType);
+            urls.add(url);
+            checks.add(() -> OfficialBuilds.checkAvailable(url, 5000));
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(checks.size(), 8));
+        List<String> unavailable = new ArrayList<>();
+        try {
+            List<Future<String>> answers = pool.invokeAll(checks, 15, TimeUnit.SECONDS);
+            for (int i = 0; i < answers.size(); i++) {
+                String problem;
+                try {
+                    problem = answers.get(i).get();
+                } catch (CancellationException | ExecutionException e) {
+                    problem = "no answer within 15 s";
+                }
+                if (problem != null) {
+                    unavailable.add(versions.getString(i) + " (" + urls.get(i) + ": " + problem + ")");
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while checking the official build store", e);
+        } finally {
+            pool.shutdownNow();
+        }
+        if (!unavailable.isEmpty()) {
+            throw new IllegalArgumentException("No " + (buildType.isEmpty() ? "release" : buildType.toLowerCase(Locale.ROOT))
+                + " package for official build(s): " + String.join("; ", unavailable));
         }
     }
 

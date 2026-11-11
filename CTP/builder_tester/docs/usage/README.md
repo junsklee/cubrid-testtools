@@ -57,6 +57,31 @@ curl -X POST http://localhost:8089/build \
 Notes:
 - `tests[]` entries must start with one of: `shell/`, `shell_heavy/`, `shell_perf/` (and end with `.sh`).
 
+### Official builds (no build)
+
+To test published builds instead of building commits, name their versions in `officialBuilds`
+instead of `commits`/`prNumber` (the dashboard's **CUBRID Build → Official build**):
+```bash
+curl -X POST http://localhost:8089/build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "officialBuilds": ["11.4.7.1995-f39ab8c", "11.5.0.2856-1b26459"],
+    "tests": ["shell/_01_utility/_38_csql/csql_hist/cases/csql_hist.sh"],
+    "shellTcBranch": "release/11.4",
+    "callbackUrl": "http://localhost:8888/callback",
+    "workerIps": ["localhost"],
+    "buildType": "release"
+  }'
+```
+- Each version is a directory of the build store (`official_build_store_url`); testers download
+  `<version>/drop/CUBRID-<version>-Linux.x86_64.tar.gz`, or `-debug.tar.gz` with `"buildType": "debug"`
+  (release and debug only). The Builder checks that every package exists before accepting the request.
+- At most 20 versions, of different commits. Results, reports and per-commit images identify a build
+  by its commit (the version's hash suffix); the callback adds `"buildSource": "official"` and
+  `buildVersions` (commit -> version), and lists builds oldest version first in `commitOrder`.
+- `buildOnly`, `commitBuildMode` and `reuseArtifacts` do not apply. Pick the testcases branch of the
+  build's release line (`release/11.4`; `develop` for the current line): the dashboard fills it in.
+
 Check status and health:
 ```bash
 curl http://localhost:8089/status

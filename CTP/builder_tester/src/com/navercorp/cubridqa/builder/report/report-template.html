@@ -1829,7 +1829,14 @@
                 } else if (item.sha) {
                     hashSpan.textContent = item.sha.substring(0, 7);
                 }
-                
+                // An official build: its version names it better than the commit it was built from
+                const key = typeof item === 'string' ? item : item.sha;
+                const version = rawData.buildVersions && key ? rawData.buildVersions[key] : null;
+                if (typeof version === 'string' && version) {
+                    hashSpan.title = hashSpan.textContent;
+                    hashSpan.textContent = version;
+                }
+
                 preview.appendChild(hashSpan);
             });
         }

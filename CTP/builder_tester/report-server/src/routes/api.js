@@ -8,6 +8,7 @@ const githubController = require('../controllers/githubController');
 const builderController = require('../controllers/builderController');
 const testerController = require('../controllers/testerController');
 const reportController = require('../controllers/reportController');
+const officialBuildService = require('../services/officialBuildService');
 const config = require('../config');
 
 // GitHub API routes
@@ -21,6 +22,16 @@ router.post('/builder/build/pr', (req, res) => builderController.submitPrBuild(r
 router.get('/builder/status', (req, res) => builderController.getBuildStatus(req, res));
 router.post('/builder/queue/remove', (req, res) => builderController.removeFromQueue(req, res));
 router.get('/builder/health', (req, res) => builderController.getHealth(req, res));
+
+// Official CUBRID builds of the build store (newest first), for testing without building
+router.get('/official-builds', async (req, res) => {
+    try {
+        res.json(await officialBuildService.list({ refresh: req.query.refresh === '1' }));
+    } catch (err) {
+        console.error('Error listing official builds:', err);
+        res.status(502).json({ error: err.message });
+    }
+});
 
 // Tester API routes
 router.get('/tester/health', (req, res) => testerController.getHealth(req, res));

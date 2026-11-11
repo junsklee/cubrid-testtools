@@ -224,6 +224,12 @@ public class EnvScriptFactory {
         script.append("  echo \"Detected packaged _install/CUBRID layout\"\n");
         script.append("  tar -xzf /workspace/build.tar.gz --strip-components=2 _install/CUBRID\n");
         script.append("  CUBRID_ROOT=/tmp/cubrid_install\n");
+        // An official build has everything under CUBRID/ (its first entry), where the first bin
+        // directory found below may be CUBRID/vm/jdk8/bin rather than CUBRID/bin
+        script.append("elif { tar -tf /workspace/build.tar.gz 2>/dev/null || true; } | head -1 | grep -q '^CUBRID/'; then\n");
+        script.append("  echo \"Detected official CUBRID/ layout\"\n");
+        script.append("  tar -xzf /workspace/build.tar.gz --strip-components=1\n");
+        script.append("  CUBRID_ROOT=/tmp/cubrid_install\n");
         script.append("else\n");
         script.append("  tar -xzf /workspace/build.tar.gz\n");
         script.append("  if [ -d /tmp/cubrid_install/_install/CUBRID ]; then\n");

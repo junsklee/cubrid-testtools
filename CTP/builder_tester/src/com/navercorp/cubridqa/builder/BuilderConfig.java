@@ -89,6 +89,7 @@ public class BuilderConfig {
     private static final String SQL_TC_SYNC_MODE = "sql_tc_sync_mode";
     private static final String SQL_TC_SYNC_INTERVAL_SECONDS = "sql_tc_sync_interval_seconds";
     private static final String CTP_SQL_REPO = "ctp_sql_repo";
+    private static final String OFFICIAL_BUILD_STORE_URL = "official_build_store_url";
     private static final String CTP_SQL_REF = "ctp_sql_ref";
     private static final String CTP_SQL_PIN = "ctp_sql_pin";
     private static final String CTP_SQL_PAYLOAD_KEEP = "ctp_sql_payload_keep";
@@ -706,6 +707,19 @@ public class BuilderConfig {
 
     public String getCtpSqlRepo() {
         return properties.getProperty(CTP_SQL_REPO, "https://github.com/CUBRID/cubrid-testtools.git");
+    }
+
+    /**
+     * Directory listing of the official CUBRID builds (one directory per version, each with
+     * drop/CUBRID-&lt;version&gt;-Linux.x86_64[-debug].tar.gz). Requests naming officialBuilds are
+     * tested on those packages instead of building. Always ends with '/'.
+     */
+    public String getOfficialBuildStoreUrl() {
+        String raw = properties.getProperty(OFFICIAL_BUILD_STORE_URL, OfficialBuilds.DEFAULT_STORE_URL).trim();
+        if (raw.isEmpty()) {
+            raw = OfficialBuilds.DEFAULT_STORE_URL;
+        }
+        return raw.endsWith("/") ? raw : raw + "/";
     }
 
     public String getCtpSqlRef() {

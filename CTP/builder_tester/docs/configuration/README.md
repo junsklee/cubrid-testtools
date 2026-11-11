@@ -22,6 +22,10 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `build_timeout_minutes` (int): Per-build timeout (default 180)
 - `build_cache_size` (int): Max cached builds (default 10)
 - `docker_host_root` (path): Host dir for `/work` and Gradle cache binds (default `~/docker-work`)
+- `official_build_store_url` (URL): Build store that `officialBuilds` versions come from (default
+  `http://192.168.1.91:8080/REPO_ROOT/store_01/`); testers download packages from it. The dashboard lists
+  the store the Builder reports in `/health` (the report server's `OFFICIAL_BUILD_STORE_URL` is only its
+  fallback while the Builder does not answer).
 ### Test execution configuration
 - `run_mode` (string): How tests are executed (default `until-pass`)
   - `until-pass`: May stop early on first success after `min_runs`

@@ -42,9 +42,27 @@
                 Build Test Request
             </h2>
 
-            <!-- Commits Section -->
+            <!-- Build Source: build commits from source, or test a published official build as is -->
             <div class="form-group">
-                <label class="form-label">Commits</label>
+                <label class="form-label" id="buildSourceLabel">CUBRID Build</label>
+                <div class="source-picker" role="radiogroup" aria-labelledby="buildSourceLabel">
+                    <label class="source-option" for="buildSourceSource">
+                        <input type="radio" name="buildSource" id="buildSourceSource" value="source" autocomplete="off" checked>
+                        <span class="source-option-body">
+                            <span class="source-option-title">Build from source</span>
+                            <span class="source-option-desc">Commits, a PR, or a custom script, built by the Builder</span>
+                        </span>
+                    </label>
+                    <label class="source-option" for="buildSourceOfficial">
+                        <input type="radio" name="buildSource" id="buildSourceOfficial" value="official" autocomplete="off">
+                        <span class="source-option-body">
+                            <span class="source-option-title">Official build</span>
+                            <span class="source-option-desc">A published build from the build store, tested as is</span>
+                        </span>
+                    </label>
+                </div>
+
+                <div id="sourceBuildPanel">
                 <div class="commit-selector">
                     <button id="selectModeBtn" class="mode-btn active" onclick="setCommitMode('select')">
                         Browse & Select
@@ -168,6 +186,26 @@
                         </div>
                     </div>
                 </div>
+                </div><!-- /sourceBuildPanel -->
+
+                <!-- Official builds of the build store, newest first; several may be selected to compare -->
+                <div id="officialBuildPanel" style="display: none;">
+                    <div class="series-picker" id="officialSeriesPicker" role="radiogroup" aria-label="Release line"></div>
+                    <div class="official-toolbar">
+                        <input type="search" class="form-input official-filter" id="officialBuildFilter"
+                            placeholder="Filter by version or commit" autocomplete="off" aria-label="Filter official builds">
+                        <span class="commit-counter">Selected: <span id="officialSelectedCount">0</span></span>
+                        <button type="button" class="control-btn" id="officialClearBtn" onclick="clearOfficialBuilds()">Clear</button>
+                    </div>
+                    <div class="official-selected" id="officialSelectedChips" aria-live="polite"></div>
+                    <div class="commit-list official-list" id="officialBuildList" role="listbox" aria-multiselectable="true" aria-label="Official builds">
+                        <div class="spinner"></div>
+                    </div>
+                    <p class="help-text official-help" id="officialBuildHelp">
+                        Testers download <code>drop/CUBRID-&lt;version&gt;-Linux.x86_64.tar.gz</code> (Build Type Debug: <code>-debug</code>)
+                        from the <a id="officialStoreLink" href="#" target="_blank" rel="noopener noreferrer">build store</a>. Nothing is built.
+                    </p>
+                </div>
 
             </div>
 
@@ -248,11 +286,21 @@
                     value="develop"
                     autocomplete="off"
                     placeholder="develop">
+                <p class="help-text" id="tcBranchHint" style="display: none;"></p>
             </div>
 
             <!-- Test Cases Section -->
             <div class="form-group" id="testCasesSection">
                 <label class="form-label" for="testsInput" id="testsInputLabel">Test Cases</label>
+                <div id="sqlFullSuiteRow" class="full-suite-row" style="display: none;">
+                    <label class="toggle-switch" for="sqlFullSuiteToggle">
+                        <input type="checkbox" id="sqlFullSuiteToggle" autocomplete="off">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text" style="font-weight: normal;">Run the full SQL suite</span>
+                    </label>
+                    <span class="info-icon" title="Runs every SQL case of the SQL testcases branch: all sql/**/cases/*.sql of cubrid-testcases (about 17,700 on develop), listed at the branch head when the request starts."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                </div>
+                <p class="help-text full-suite-note" id="sqlFullSuiteNote" style="display: none;"></p>
                 <textarea class="form-textarea" id="testsInput"
                     placeholder="Enter test case paths (one per line)&#10;Example:&#10;shell/_05_addition/cubridsus1961/cases/cubridsus1961.sh"></textarea>
             </div>
@@ -356,7 +404,7 @@
                         </div>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group" id="buildModeSection">
                         <label class="form-label">Build Mode</label>
                         <div class="baseline-info" id="baselineInfo">
                             <div class="baseline-options">
@@ -379,7 +427,7 @@
                         </div>
                     </div>
                     
-                    <div class="form-group">
+                    <div class="form-group" id="reuseArtifactsSection">
                         <label class="form-label">
                             Re-use Artifacts
                             <span class="info-icon" title="Reuse the previous build's workspace instead of cloning fresh, which skips rebuilding the 3rdparty libraries and recompiles only what changed.&#10;Off by default: it trades per-build isolation for speed."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>

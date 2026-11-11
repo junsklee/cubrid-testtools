@@ -1,6 +1,20 @@
         let commits = [];
         let selectedCommits = new Set();
         let commitMode = 'select';
+        // 'source': the Builder builds commits (commitMode picks how they are given);
+        // 'official': a published build of the build store is tested as is.
+        let buildSource = 'source';
+        const DEFAULT_OFFICIAL_SERIES = '11.5';
+        let officialBuilds = [];          // [{version, series, commit, build, lastModified}], newest first
+        let officialSeries = [];          // release lines in the store, newest first
+        let officialSeriesSelected = null;
+        let officialStoreUrl = '';
+        let officialBuildsState = 'idle'; // idle | loading | loaded | error
+        const selectedOfficialBuilds = new Set();
+        // The testcases branch follows the selected official builds until the user edits it
+        let tcBranchTouched = false;
+        let tcBranchSuggested = false;
+        let officialDefaultApplied = false;
         let workers = [];  // Initialize empty, will be populated on load
         let currentPage = 1;
         let isLoadingCommits = false;
@@ -162,6 +176,7 @@
             updateBaselineDisplay();
             refreshBuilderCommitMode();
             resetTestTypeToDefault();
+            resetBuildSourceToDefault();
             applyBuildOnlyState();
         });
 
@@ -182,6 +197,17 @@
             const dockerRadio = document.getElementById('executionModeDocker');
             if (dockerRadio) dockerRadio.checked = true;
             updateExecutionModeState();
+        }
+
+        // As the test type: a reload starts from building commits, without the full SQL suite
+        function resetBuildSourceToDefault() {
+            const sourceRadio = document.getElementById('buildSourceSource');
+            if (sourceRadio) sourceRadio.checked = true;
+            const fullSuite = document.getElementById('sqlFullSuiteToggle');
+            if (fullSuite) fullSuite.checked = false;
+            tcBranchTouched = false;
+            tcBranchSuggested = false;
+            setBuildSource('source', { quiet: true });
         }
 
         // Latest queue snapshot (load-first: refreshed on page load, manual refresh, and background polling)
@@ -481,6 +507,32 @@
                 });
             }
 
+            document.querySelectorAll('input[name="buildSource"]').forEach(radio => {
+                radio.addEventListener('change', () => {
+                    if (radio.checked) setBuildSource(radio.value);
+                });
+            });
+            const officialFilter = document.getElementById('officialBuildFilter');
+            if (officialFilter) {
+                officialFilter.addEventListener('input', renderOfficialList);
+            }
+            const fullSuiteToggle = document.getElementById('sqlFullSuiteToggle');
+            if (fullSuiteToggle) {
+                fullSuiteToggle.addEventListener('change', () => {
+                    applyTestCasesDisabledState();
+                    applyTcBranchSectionState();
+                });
+            }
+            const tcBranchInput = document.getElementById('tcBranchInput');
+            if (tcBranchInput) {
+                tcBranchInput.addEventListener('input', () => {
+                    tcBranchTouched = true;
+                    tcBranchSuggested = false;
+                    updateTcBranchHint();
+                    updateSqlFullSuiteNote();
+                });
+            }
+
             const reuseArtifactsToggle = document.getElementById('reuseArtifactsToggle');
             if (reuseArtifactsToggle) {
                 reuseArtifactsToggle.addEventListener('change', () => {
@@ -563,8 +615,28 @@
             return !!(toggle && toggle.checked);
         }
 
+        function isOfficialSource() {
+            return buildSource === 'official';
+        }
+
+        // Custom Script is a way of building from source; an official build has no commit to give
+        function isCustomMode() {
+            return !isOfficialSource() && commitMode === 'custom';
+        }
+
         function isBuildOnlyAvailable() {
-            return commitMode !== 'custom';
+            // An official build is already built
+            return !isOfficialSource() && commitMode !== 'custom';
+        }
+
+        // Every SQL case of the testcases branch instead of a list (SQL, not custom, not build-only)
+        function isSqlFullSuiteAvailable() {
+            return getSelectedTestType() === 'sql' && !isCustomMode() && !isBuildOnlyActive();
+        }
+
+        function isSqlFullSuiteActive() {
+            const toggle = document.getElementById('sqlFullSuiteToggle');
+            return !!(toggle && toggle.checked) && isSqlFullSuiteAvailable();
         }
 
         function isBuildOnlyActive() {
@@ -577,16 +649,25 @@
             if (!testsInput) return;
 
             const buildOnly = isBuildOnlyActive();
-            const isCustomMode = commitMode === 'custom';
-            const disabled = buildOnly || isCustomMode;
+            const customMode = isCustomMode();
+            const fullSuite = isSqlFullSuiteActive();
+            const disabled = buildOnly || customMode || fullSuite;
 
             testsInput.disabled = disabled;
             testsInput.style.opacity = disabled ? '0.5' : '1';
             testsInput.style.cursor = disabled ? 'not-allowed' : 'text';
 
-            if (isCustomMode) {
+            const fullSuiteRow = document.getElementById('sqlFullSuiteRow');
+            if (fullSuiteRow) {
+                fullSuiteRow.style.display = isSqlFullSuiteAvailable() ? 'flex' : 'none';
+            }
+            updateSqlFullSuiteNote();
+
+            if (customMode) {
                 testsInput.placeholder = 'Test cases are configured in Custom Script section above';
                 testsInput.value = '';
+            } else if (fullSuite) {
+                testsInput.placeholder = 'The full SQL suite runs every sql/**/cases/*.sql of the testcases branch';
             } else if (buildOnly) {
                 testsInput.placeholder = 'Build-only mode skips tests';
             } else if (getSelectedTestType() === 'sql') {
@@ -596,7 +677,8 @@
             }
 
             if (testsInputLabel) {
-                testsInputLabel.style.opacity = disabled ? '0.5' : '1';
+                // Under the full suite the section is in use (its toggle), only the list is off
+                testsInputLabel.style.opacity = (disabled && !fullSuite) ? '0.5' : '1';
             }
 
             // The test type selector stays usable in custom mode (so SQL custom cases
@@ -611,11 +693,17 @@
             }
         }
 
+        // The branch matters wherever the request picks it: manual commits, official builds
+        // (whose release line has its own testcases branch), and the full SQL suite
+        function isTcBranchSectionVisible() {
+            return !isBuildOnlyActive()
+                && (isOfficialSource() || commitMode === 'manual' || isSqlFullSuiteActive());
+        }
+
         function applyTcBranchSectionState() {
             const section = document.getElementById('tcBranchSection');
             if (!section) return;
-            const visible = commitMode === 'manual' && !isBuildOnlyActive();
-            section.style.display = visible ? 'block' : 'none';
+            section.style.display = isTcBranchSectionVisible() ? 'block' : 'none';
 
             // Swap the remembered branch when the test type (and therefore the repo) changes.
             const testType = getSelectedTestType();
@@ -632,6 +720,35 @@
                 icon.setAttribute('title',
                     `Selects the branch in the TC repository ${meta.repo}. Default: ${DEFAULT_TC_BRANCH}.\n\nRepo: ${meta.url}`);
             }
+            updateTcBranchHint();
+        }
+
+        function updateTcBranchHint() {
+            const hint = document.getElementById('tcBranchHint');
+            if (!hint) return;
+            const series = selectedOfficialSeries();
+            if (isOfficialSource() && tcBranchSuggested && series.length === 1) {
+                hint.textContent = `Matches the selected ${series[0]} build. Edit to test with another branch.`;
+                hint.style.display = 'block';
+            } else if (isOfficialSource() && series.length > 1) {
+                hint.textContent = `The selected builds are of ${series.join(', ')}; all are tested with this one branch.`;
+                hint.style.display = 'block';
+            } else {
+                hint.style.display = 'none';
+            }
+        }
+
+        function updateSqlFullSuiteNote() {
+            const note = document.getElementById('sqlFullSuiteNote');
+            if (!note) return;
+            if (!isSqlFullSuiteActive()) {
+                note.style.display = 'none';
+                return;
+            }
+            const branch = (document.getElementById('tcBranchInput') || {}).value || DEFAULT_TC_BRANCH;
+            note.innerHTML = `Runs every SQL case of <code>${escapeHtml(branch.trim() || DEFAULT_TC_BRANCH)}</code> `
+                + '(about 17,700 on develop), for each build.';
+            note.style.display = 'block';
         }
 
         function applyBuildOnlyState() {
@@ -975,6 +1092,10 @@
 
         // Update commit count display
         function updateCommitCount() {
+            if (isOfficialSource()) {
+                renderOfficialSelection();
+                return;
+            }
             let count = 0;
             if (commitMode === 'select') {
                 count = selectedCommits.size;
@@ -1165,6 +1286,328 @@
                 custom: 'Custom Script'
             };
             showToast(`Switched to ${modeLabelMap[mode] || mode} mode`, 'info');
+        }
+
+        // ---- Build source: build from source / official build ----
+
+        function setBuildSource(source, options = {}) {
+            buildSource = source === 'official' ? 'official' : 'source';
+            const official = isOfficialSource();
+            const radio = document.getElementById(official ? 'buildSourceOfficial' : 'buildSourceSource');
+            if (radio && !radio.checked) radio.checked = true;
+
+            const sourcePanel = document.getElementById('sourceBuildPanel');
+            const officialPanel = document.getElementById('officialBuildPanel');
+            if (sourcePanel) sourcePanel.style.display = official ? 'none' : 'block';
+            if (officialPanel) officialPanel.style.display = official ? 'block' : 'none';
+            // Building options do not apply to a published build
+            ['buildModeSection', 'reuseArtifactsSection'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = official ? 'none' : '';
+            });
+
+            if (official) {
+                if (officialBuildsState === 'idle' || officialBuildsState === 'error') {
+                    loadOfficialBuilds();
+                }
+                suggestTcBranchForOfficialBuilds();
+            } else if (tcBranchSuggested) {
+                // The branch was only matched to the official builds: building commits starts from the default again
+                setTcBranchValue(DEFAULT_TC_BRANCH);
+                tcBranchSuggested = false;
+            }
+
+            applyBuildOnlyState();
+            applyCustomFieldsForTestType();
+            updateCommitCount();
+            if (!options.quiet) {
+                showToast(official ? 'Testing an official build' : 'Building from source', 'info');
+            }
+        }
+
+        async function loadOfficialBuilds(refresh = false) {
+            const list = document.getElementById('officialBuildList');
+            officialBuildsState = 'loading';
+            if (list) list.innerHTML = '<div class="spinner"></div>';
+            try {
+                const response = await fetch(`/api/official-builds${refresh ? '?refresh=1' : ''}`);
+                const text = await response.text();
+                let data = null;
+                try { data = JSON.parse(text); } catch { /* shown below */ }
+                if (!response.ok || !data || !Array.isArray(data.builds)) {
+                    throw new Error((data && data.error) || text || `HTTP ${response.status}`);
+                }
+                officialBuilds = data.builds;
+                officialSeries = Array.isArray(data.series) ? data.series : [];
+                officialStoreUrl = data.storeUrl || '';
+                officialBuildsState = 'loaded';
+
+                const storeLink = document.getElementById('officialStoreLink');
+                if (storeLink && officialStoreUrl) storeLink.href = officialStoreUrl;
+                if (!officialSeriesSelected || !officialSeries.includes(officialSeriesSelected)) {
+                    officialSeriesSelected = officialSeries.includes(DEFAULT_OFFICIAL_SERIES)
+                        ? DEFAULT_OFFICIAL_SERIES
+                        : (officialSeries[0] || null);
+                }
+                // The first time: the newest build of the default line, ready to send
+                if (!officialDefaultApplied && selectedOfficialBuilds.size === 0) {
+                    const latest = latestOfficialBuild(officialSeriesSelected);
+                    if (latest) selectedOfficialBuilds.add(latest);
+                }
+                officialDefaultApplied = true;
+                renderOfficialSeries();
+                renderOfficialList();
+                renderOfficialSelection();
+                if (data.stale) {
+                    showToast('The build store did not answer; showing the last list it gave', 'warning');
+                }
+            } catch (error) {
+                officialBuildsState = 'error';
+                console.error('Error loading official builds:', error);
+                if (list) {
+                    list.innerHTML = '';
+                    const empty = document.createElement('div');
+                    empty.className = 'official-empty';
+                    empty.textContent = `Could not list the official builds: ${error.message}. `;
+                    const retry = document.createElement('button');
+                    retry.type = 'button';
+                    retry.className = 'control-btn';
+                    retry.textContent = 'Retry';
+                    retry.addEventListener('click', () => loadOfficialBuilds(true));
+                    empty.appendChild(retry);
+                    list.appendChild(empty);
+                }
+                showToast('Failed to load official builds', 'error');
+            }
+        }
+
+        function renderOfficialSeries() {
+            const picker = document.getElementById('officialSeriesPicker');
+            if (!picker) return;
+            picker.innerHTML = '';
+            const counts = new Map();
+            officialBuilds.forEach(b => counts.set(b.series, (counts.get(b.series) || 0) + 1));
+            officialSeries.forEach((series, i) => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'series-chip';
+                chip.setAttribute('role', 'radio');
+                const checked = series === officialSeriesSelected;
+                chip.setAttribute('aria-checked', checked ? 'true' : 'false');
+                // Roving tabindex: one stop for the group, arrows move within it
+                chip.tabIndex = checked ? 0 : -1;
+                chip.dataset.series = series;
+                chip.textContent = series;
+                const count = document.createElement('span');
+                count.className = 'series-count';
+                count.textContent = counts.get(series) || 0;
+                chip.appendChild(count);
+                chip.addEventListener('click', () => selectOfficialSeries(series));
+                chip.addEventListener('keydown', (e) => {
+                    const step = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1
+                        : (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 0;
+                    if (!step) return;
+                    e.preventDefault();
+                    const next = officialSeries[(i + step + officialSeries.length) % officialSeries.length];
+                    selectOfficialSeries(next);
+                    const nextChip = picker.querySelector(`[data-series="${next}"]`);
+                    if (nextChip) nextChip.focus();
+                });
+                picker.appendChild(chip);
+            });
+        }
+
+        function selectOfficialSeries(series) {
+            officialSeriesSelected = series;
+            renderOfficialSeries();
+            renderOfficialList();
+        }
+
+        // Version order (11.5.0.10000 after 11.5.0.9999), as the Builder orders builds
+        function compareOfficialVersions(a, b) {
+            const pa = a.split(/[.-]/).slice(0, 4).map(Number);
+            const pb = b.split(/[.-]/).slice(0, 4).map(Number);
+            for (let i = 0; i < 4; i++) {
+                if (pa[i] !== pb[i]) return pa[i] - pb[i];
+            }
+            return a.localeCompare(b);
+        }
+
+        // The highest version of a line. The list is in Last Modified order, which a directory
+        // touched on the store again (a re-upload) would put first without it being the newest.
+        function latestOfficialBuild(series) {
+            let latest = null;
+            officialBuilds.forEach(b => {
+                if (b.series === series && (!latest || compareOfficialVersions(b.version, latest) > 0)) latest = b.version;
+            });
+            return latest;
+        }
+
+        function formatRelativeAge(iso) {
+            const ts = Date.parse(iso || '');
+            if (!Number.isFinite(ts)) return '';
+            const hours = Math.floor((Date.now() - ts) / 3600000);
+            if (hours < 1) return 'just now';
+            if (hours < 24) return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+            const days = Math.floor(hours / 24);
+            if (days === 1) return '1 day ago';
+            if (days < 60) return `${days} days ago`;
+            const months = Math.floor(days / 30.44);
+            if (months < 24) return `${months} months ago`;
+            return `${Math.floor(days / 365.25)} years ago`;
+        }
+
+        function renderOfficialList() {
+            const list = document.getElementById('officialBuildList');
+            if (!list || officialBuildsState !== 'loaded') return;
+            const filter = ((document.getElementById('officialBuildFilter') || {}).value || '').trim().toLowerCase();
+            const inSeries = officialBuilds.filter(b => b.series === officialSeriesSelected);
+            const newest = latestOfficialBuild(officialSeriesSelected);
+            const shown = filter
+                ? inSeries.filter(b => b.version.toLowerCase().includes(filter) || b.commit.includes(filter))
+                : inSeries;
+
+            list.innerHTML = '';
+            if (shown.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'official-empty';
+                empty.textContent = filter
+                    ? `No ${officialSeriesSelected} build matches "${filter}".`
+                    : `No ${officialSeriesSelected || ''} builds in the build store.`;
+                list.appendChild(empty);
+                return;
+            }
+            shown.forEach((build) => {
+                const selected = selectedOfficialBuilds.has(build.version);
+                const row = document.createElement('div');
+                row.className = 'commit-item official-item' + (selected ? ' selected' : '');
+                row.dataset.version = build.version;
+                row.setAttribute('role', 'option');
+                row.setAttribute('aria-selected', selected ? 'true' : 'false');
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'commit-checkbox';
+                checkbox.checked = selected;
+                checkbox.setAttribute('aria-label', `Select ${build.version}`);
+                checkbox.addEventListener('change', () => toggleOfficialBuild(build.version));
+
+                const info = document.createElement('div');
+                info.className = 'commit-info';
+                const version = document.createElement('div');
+                version.className = 'official-version';
+                version.textContent = build.version;
+                if (build.version === newest) {
+                    const badge = document.createElement('span');
+                    badge.className = 'official-badge';
+                    badge.textContent = 'Latest';
+                    version.appendChild(badge);
+                }
+                const meta = document.createElement('div');
+                meta.className = 'official-meta';
+                const when = build.lastModified ? new Date(build.lastModified) : null;
+                meta.appendChild(document.createTextNode(when
+                    ? `${when.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${formatRelativeAge(build.lastModified)} · `
+                    : 'Date unknown · '));
+                const commitLink = document.createElement('a');
+                commitLink.href = `https://github.com/CUBRID/cubrid/commit/${encodeURIComponent(build.commit)}`;
+                commitLink.target = '_blank';
+                commitLink.rel = 'noopener noreferrer';
+                commitLink.textContent = build.commit;
+                commitLink.title = 'Commit on GitHub';
+                commitLink.addEventListener('click', (e) => e.stopPropagation());
+                meta.appendChild(commitLink);
+                info.appendChild(version);
+                info.appendChild(meta);
+
+                row.appendChild(checkbox);
+                row.appendChild(info);
+                row.addEventListener('click', (e) => {
+                    if (e.target !== checkbox) toggleOfficialBuild(build.version);
+                });
+                list.appendChild(row);
+            });
+        }
+
+        function toggleOfficialBuild(version) {
+            if (selectedOfficialBuilds.has(version)) {
+                selectedOfficialBuilds.delete(version);
+            } else {
+                selectedOfficialBuilds.add(version);
+            }
+            const row = document.querySelector(`.official-item[data-version="${version}"]`);
+            if (row) {
+                const selected = selectedOfficialBuilds.has(version);
+                row.classList.toggle('selected', selected);
+                row.setAttribute('aria-selected', selected ? 'true' : 'false');
+                const cb = row.querySelector('.commit-checkbox');
+                if (cb) cb.checked = selected;
+            }
+            renderOfficialSelection();
+        }
+
+        function clearOfficialBuilds() {
+            selectedOfficialBuilds.clear();
+            renderOfficialList();
+            renderOfficialSelection();
+        }
+
+        // Selected builds as removable chips: a selection may span release lines the list is not showing
+        function renderOfficialSelection() {
+            const chips = document.getElementById('officialSelectedChips');
+            const count = document.getElementById('officialSelectedCount');
+            if (count) count.textContent = selectedOfficialBuilds.size;
+            if (chips) {
+                chips.innerHTML = '';
+                selectedOfficialBuilds.forEach(version => {
+                    const chip = document.createElement('span');
+                    chip.className = 'official-chip';
+                    chip.appendChild(document.createTextNode(version));
+                    const remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.textContent = '×';
+                    remove.setAttribute('aria-label', `Remove ${version}`);
+                    remove.addEventListener('click', () => toggleOfficialBuild(version));
+                    chip.appendChild(remove);
+                    chips.appendChild(chip);
+                });
+            }
+            suggestTcBranchForOfficialBuilds();
+        }
+
+        function selectedOfficialSeries() {
+            const series = new Set();
+            selectedOfficialBuilds.forEach(v => {
+                const m = /^(\d+\.\d+)\./.exec(v);
+                if (m) series.add(m[1]);
+            });
+            // In the store's order (newest line first)
+            return officialSeries.filter(s => series.has(s));
+        }
+
+        // The testcases branch of a release line: develop for the newest line in the store, release/<x.y> before it
+        function testcaseBranchForSeries(series) {
+            if (officialSeries.length > 0 && series === officialSeries[0]) return DEFAULT_TC_BRANCH;
+            return `release/${series}`;
+        }
+
+        function setTcBranchValue(branch) {
+            const input = document.getElementById('tcBranchInput');
+            if (input) input.value = branch;
+            tcBranchByTestType.shell = branch;
+            tcBranchByTestType.sql = branch;
+        }
+
+        function suggestTcBranchForOfficialBuilds() {
+            if (isOfficialSource() && !tcBranchTouched) {
+                const series = selectedOfficialSeries();
+                if (series.length === 1) {
+                    setTcBranchValue(testcaseBranchForSeries(series[0]));
+                    tcBranchSuggested = true;
+                }
+            }
+            updateTcBranchHint();
+            updateSqlFullSuiteNote();
         }
 
         // Toggle advanced configuration panel
@@ -1380,7 +1823,7 @@
 
         function validateTestPathsForSubmit(tests) {
             const invalid = [];
-            if (commitMode !== 'custom' && getSelectedTestType() === 'sql') {
+            if (!isCustomMode() && getSelectedTestType() === 'sql') {
                 for (const t of (tests || [])) {
                     const v = (t || '').trim();
                     if (!v) continue;
@@ -1479,22 +1922,34 @@
             button.textContent = 'Processing...';
             
             try {
+                const official = isOfficialSource();
                 const buildOnly = isBuildOnlyActive();
-                const manualCubridBranch = commitMode === 'manual'
+                const fullSuite = isSqlFullSuiteActive();
+                const customMode = isCustomMode();
+                const manualCubridBranch = (!official && commitMode === 'manual')
                     ? getSelectedCubridBranch({ syncInput: true })
                     : null;
-                const manualTcBranch = (commitMode === 'manual' && !buildOnly)
+                const manualTcBranch = isTcBranchSectionVisible()
                     ? getSelectedTcBranch({ syncInput: true })
                     : null;
 
                 if (!isBuildOnlyAvailable() && isBuildOnlyEnabled()) {
-                    throw new Error('Build-only mode is not available in Custom Script mode');
+                    throw new Error(official
+                        ? 'Build-only mode does not apply to an official build'
+                        : 'Build-only mode is not available in Custom Script mode');
                 }
 
-                // Gather commits or PR
+                // Gather official builds, commits or PR
                 let payloadCommits = [];
                 let prNumberPayload = null;
-                if (commitMode === 'select') {
+                let officialVersions = null;
+                if (official) {
+                    if (officialBuildsState === 'loading') {
+                        throw new Error('The official builds are still loading');
+                    }
+                    officialVersions = Array.from(selectedOfficialBuilds);
+                    if (officialVersions.length === 0) throw new Error('Please select at least one official build');
+                } else if (commitMode === 'select') {
                     payloadCommits = Array.from(selectedCommits);
                     if (payloadCommits.length === 0) throw new Error('Please select at least one commit');
                 } else if (commitMode === 'manual') {
@@ -1547,7 +2002,7 @@
                 let customScriptTestPath = null;
                 let customSqlScript = null;
                 let customSqlAnswer = null;
-                const isCustomSqlMode = commitMode === 'custom' && getSelectedTestType() === 'sql';
+                const isCustomSqlMode = customMode && getSelectedTestType() === 'sql';
 
                 // Gather tests
                 const testsInput = document.getElementById('testsInput').value;
@@ -1556,7 +2011,7 @@
                     .filter(s => s.length > 0);
 
                 if (!buildOnly) {
-                    if (commitMode === 'custom') {
+                    if (customMode) {
                         if (isCustomSqlMode) {
                             // Ad-hoc SQL case: script + expected answer
                             customSqlScript = document.getElementById('customSqlScriptContent').value.trim();
@@ -1584,6 +2039,9 @@
                                 tests = ['custom_script_test'];
                             }
                         }
+                    } else if (fullSuite) {
+                        // The Builder lists every case of the testcases branch
+                        tests = [];
                     } else {
                         if (tests.length === 0) {
                             throw new Error('Please enter at least one test case');
@@ -1594,7 +2052,7 @@
                     validateTestPathsForSubmit(tests);
 
                     // Validate custom attachments (shell custom mode only)
-                    if (commitMode === 'custom' && !isCustomSqlMode) {
+                    if (customMode && !isCustomSqlMode) {
                         if (customScriptAttachmentsLoading > 0) {
                             throw new Error(`Attachments are still loading (${customScriptAttachmentsLoading} file(s)). Please wait.`);
                         }
@@ -1651,26 +2109,33 @@
                 } else if (!buildOnly) {
                     payload.workerIps = workers;
                 }
-                if (prNumberPayload) {
+                if (fullSuite) {
+                    payload.sqlFullSuite = true;
+                }
+                if (officialVersions) {
+                    payload.officialBuilds = officialVersions;
+                } else if (prNumberPayload) {
                     payload.prNumber = prNumberPayload;
                 } else {
                     payload.commits = payloadCommits;
                 }
 
-                // Advanced: opt this request into workspace reuse. Sent only when the
-                // user asked for it, so leaving it alone keeps the builder's default.
-                if ((document.getElementById('reuseArtifactsToggle') || {}).checked) {
-                    payload.reuseArtifacts = true;
-                }
+                if (!official) {
+                    // Advanced: opt this request into workspace reuse. Sent only when the
+                    // user asked for it, so leaving it alone keeps the builder's default.
+                    if ((document.getElementById('reuseArtifactsToggle') || {}).checked) {
+                        payload.reuseArtifacts = true;
+                    }
 
-                // Prefer commitBuildMode everywhere; builder also supports use_baseline_cherrypick for backward compatibility.
-                const selectedBuildMode = (document.querySelector('input[name="buildMode"]:checked') || {}).value;
-                if (selectedBuildMode) {
-                    payload.commitBuildMode = selectedBuildMode;
+                    // Prefer commitBuildMode everywhere; builder also supports use_baseline_cherrypick for backward compatibility.
+                    const selectedBuildMode = (document.querySelector('input[name="buildMode"]:checked') || {}).value;
+                    if (selectedBuildMode) {
+                        payload.commitBuildMode = selectedBuildMode;
+                    }
                 }
 
                 // Add custom script if in custom mode
-                if (!buildOnly && commitMode === 'custom') {
+                if (!buildOnly && customMode) {
                     if (isCustomSqlMode) {
                         // Ad-hoc SQL case: script + expected answer
                         payload.customSqlScript = customSqlScript;
@@ -1831,8 +2296,12 @@
             function getCounts(meta) {
                 if (!meta) return { commitCount: null, testCount: null, totalTasks: null };
                 const isPr = meta.prNumber !== undefined && meta.prNumber !== null && String(meta.prNumber).trim() !== '';
-                const commitCount = isPr ? 1 : (Array.isArray(meta.commits) ? meta.commits.length : null);
-                const testCount = Array.isArray(meta.tests) ? meta.tests.length : null;
+                const official = Array.isArray(meta.officialBuilds) && meta.officialBuilds.length > 0;
+                const commitCount = official ? meta.officialBuilds.length
+                    : isPr ? 1 : (Array.isArray(meta.commits) ? meta.commits.length : null);
+                // A full SQL suite's cases are listed once the request starts (request.json is rewritten then)
+                const testCount = Array.isArray(meta.tests) && (meta.tests.length > 0 || !meta.sqlFullSuite)
+                    ? meta.tests.length : null;
                 const totalTasks = (commitCount != null && testCount != null)
                     ? (commitCount + (commitCount * testCount))
                     : null;
@@ -1843,8 +2312,16 @@
                 const started = parseStartTimeFromRequestId(id) || (id === pinnedTaskId ? startTime : null);
                 const startedText = started ? started.toLocaleString() : 'Unknown';
                 const counts = getCounts(meta);
-                const commitsText = (meta && meta.prNumber) ? `PR #${meta.prNumber}` : (counts.commitCount != null ? counts.commitCount : 'Unknown');
-                const testsText = counts.testCount != null ? counts.testCount : 'Unknown';
+                const officialBuildsMeta = meta && Array.isArray(meta.officialBuilds) && meta.officialBuilds.length > 0
+                    ? meta.officialBuilds : null;
+                const commitsLabel = officialBuildsMeta ? 'Official Builds' : 'Commits';
+                const commitsText = officialBuildsMeta
+                    ? escapeHtml(officialBuildsMeta.length === 1 ? officialBuildsMeta[0] : `${officialBuildsMeta.length} builds`)
+                    : (meta && meta.prNumber) ? `PR #${escapeHtml(meta.prNumber)}` : (counts.commitCount != null ? counts.commitCount : 'Unknown');
+                const fullSuiteMeta = !!(meta && meta.sqlFullSuite);
+                const testsText = counts.testCount != null
+                    ? (fullSuiteMeta ? `${counts.testCount} (full SQL suite)` : counts.testCount)
+                    : (fullSuiteMeta ? 'Full SQL suite' : 'Unknown');
 
                 monitor.innerHTML = `
                     <div class="info-item">
@@ -1863,7 +2340,7 @@
                         <div class="info-value">${startedText}</div>
                     </div>
                     <div class="info-item">
-                        <div class="info-label">Commits</div>
+                        <div class="info-label">${commitsLabel}</div>
                         <div class="info-value">${commitsText}</div>
                     </div>
                     <div class="info-item">

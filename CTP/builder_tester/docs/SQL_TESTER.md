@@ -36,6 +36,11 @@ POST /build
   `sql_tc_branch`, normally `develop`). The Builder resolves the exact testcase
   commit at admission and every tester pins a git worktree to it.
 - Mixed shell+SQL requests are rejected; submit one request per type.
+- `"sqlFullSuite": true` instead of `tests` runs every case of the SQL testcases
+  branch: all `sql/**/cases/*.sql` (17,767 on `develop` and 17,398 on `release/11.4`
+  as of 2026-11), listed at the commit the Builder pins, for each build. It implies
+  `testType=sql` and cannot be combined with `tests` or a custom script. The
+  dashboard offers it as **Run the full SQL suite** under Test Cases (SQL).
 - `customShellScript` is not supported with `testType=sql`.
 
 Sample client: `bin/test_client_sql.sh`.

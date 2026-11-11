@@ -415,9 +415,19 @@ public class DockerImageBuilder {
         script.append("log \"Preparing CUBRID installation inside container\"\n");
         script.append("rm -rf /opt/cubrid\n");
         script.append("mkdir -p /opt/cubrid\n");
-        script.append("if tar -tf /mnt/build.tar.gz 2>/dev/null | grep -m1 -q '^_install/CUBRID/'; then\n");
+        // The first entry tells the layout: _install/CUBRID/ (a Builder package) or CUBRID/ (an
+        // official build, CUBRID-<version>-Linux.x86_64.tar.gz). tar's status is ignored: head stops
+        // reading after one line, and under pipefail tar's SIGPIPE fails the pipeline. That is why
+        // the former `tar -tf | grep -m1 -q` test was false even on a match, and every Builder
+        // package took the full-extract fallback below.
+        script.append("FIRST_ENTRY=$({ tar -tf /mnt/build.tar.gz 2>/dev/null || true; } | head -1)\n");
+        script.append("if [[ \"$FIRST_ENTRY\" == _install/CUBRID* ]]; then\n");
         script.append("  log \"Detected packaged _install/CUBRID layout\"\n");
         script.append("  tar -xzf /mnt/build.tar.gz -C /opt/cubrid --strip-components=2\n");
+        script.append("  CUBRID_DIR=/opt/cubrid\n");
+        script.append("elif [[ \"$FIRST_ENTRY\" == CUBRID/* ]]; then\n");
+        script.append("  log \"Detected official CUBRID/ layout\"\n");
+        script.append("  tar -xzf /mnt/build.tar.gz -C /opt/cubrid --strip-components=1\n");
         script.append("  CUBRID_DIR=/opt/cubrid\n");
         script.append("else\n");
         script.append("  log \"Extracting full archive\"\n");

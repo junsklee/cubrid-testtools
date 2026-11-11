@@ -47,6 +47,10 @@ public class BuilderTask {
     private Map<String, Long> commitTimestamps = Collections.emptyMap();
     private WorkloadDistributor workloadDistributor;
     private JSONObject ctpProvenance; // CTP payload provenance for SQL requests (base + PR SHAs)
+    /** Official builds of the request (officialBuilds), oldest first; null when it builds commits. */
+    private List<String> officialVersions;
+    /** commit -> official build version, for results and reports (empty unless officialBuilds). */
+    private final JSONObject buildVersions = new JSONObject();
 
     private static final String COMMIT_BUILD_MODE_BASELINE_CHERRYPICK = "baseline_cherrypick";
     private static final String COMMIT_BUILD_MODE_CHECKOUT = "checkout";
@@ -150,9 +154,19 @@ public class BuilderTask {
             String buildType = request.optString("buildType", "release");
             boolean hasCustomShellScript = !request.optString("customShellScript", "").trim().isEmpty()
                 || !request.optString("customShellScriptBase64", "").trim().isEmpty();
+            if (request.has(OfficialBuilds.REQUEST_FIELD)) {
+                officialVersions = OfficialBuilds.parse(request.get(OfficialBuilds.REQUEST_FIELD));
+                officialVersions.sort(OfficialBuilds.OLDEST_FIRST);
+                for (String version : officialVersions) {
+                    buildVersions.put(OfficialBuilds.commitOf(version), version);
+                }
+                request.put("buildVersions", buildVersions);
+            }
+            boolean sqlFullSuite = request.optBoolean(SqlFullSuite.REQUEST_FIELD, false);
 
             // Initialize progress totals
-            this.buildsTotal = request.has("prNumber") ? 1 : commits.length();
+            this.buildsTotal = officialVersions != null ? officialVersions.size()
+                : request.has("prNumber") ? 1 : commits.length();
             this.testsTotal = buildOnly ? 0 : this.buildsTotal * tests.length();
             this.currentPhase = "setup";
 
@@ -200,6 +214,16 @@ public class BuilderTask {
                     sqlTcResolution.branch,
                     sqlTcResolution.commit.substring(0, Math.min(12, sqlTcResolution.commit.length())),
                     sqlTcResolution.remote));
+                if (sqlFullSuite) {
+                    // Listed at the pinned commit, so the cases are the ones every tester checks out
+                    List<String> cases = SqlFullSuite.listCases(new File(config.getSqlTcDir()), sqlTcResolution.commit);
+                    tests = new JSONArray(cases);
+                    request.put("tests", tests);
+                    this.testsTotal = this.buildsTotal * tests.length();
+                    taskLogger.info(String.format("Full SQL suite: %d cases of %s at %s",
+                        tests.length(), sqlTcResolution.branch,
+                        sqlTcResolution.commit.substring(0, Math.min(12, sqlTcResolution.commit.length()))));
+                }
             }
             if (!buildOnly) {
                 // SQL cases and Docker shell cases run with this CTP (testers provision it)
@@ -222,6 +246,9 @@ public class BuilderTask {
                 } else {
                     taskLogger.info(String.format("Build-only mode: %d commit(s) (local build + upload)", commits.length()));
                 }
+            } else if (officialVersions != null) {
+                taskLogger.info(String.format("Testing %d official build(s) with %d tests across %d tester node(s)",
+                    officialVersions.size(), tests.length(), workerIps.size()));
             } else if (prNumber != null) {
                 taskLogger.info(String.format("Building PR #%d for %d tests across %d tester node(s)",
                     prNumber, tests.length(), workerIps.size()));
@@ -230,8 +257,10 @@ public class BuilderTask {
                     commits.length(), tests.length(), workerIps.size()));
             }
             
-            // Ensure CUBRID source repository is set up
-            setupCubridRepository(cubridBranch);
+            // Ensure CUBRID source repository is set up (official builds are not built)
+            if (officialVersions == null) {
+                setupCubridRepository(cubridBranch);
+            }
 
             // Custom-script requests were the only mode still persisting branch
             // names like "develop" into reports and log metadata.
@@ -297,7 +326,13 @@ public class BuilderTask {
 
             this.currentPhase = "building";
             Map<String, String> builtPackages;
-            if (prNumber != null) {
+            if (officialVersions != null) {
+                // Published packages: nothing to build, cherry-pick or reuse
+                this.commitBuildMode = COMMIT_BUILD_MODE_CHECKOUT;
+                this.baselineCommit = null;
+                this.baselineKey = OfficialBuilds.BASELINE_KEY;
+                builtPackages = resolveOfficialBuilds(officialVersions, buildType);
+            } else if (prNumber != null) {
                 // Resolve PR head and baseline (merge-base against selected CUBRID branch)
                 PRResolution pr = resolvePullRequest(prNumber, cubridBranch);
                 this.baselineCommit = pr.baselineSha;
@@ -906,6 +941,36 @@ public class BuilderTask {
         }
     }
     
+
+    /**
+     * commit -> package URL of each official build, oldest first. Testers download the package from
+     * the build store as they download a Builder package; the Builder validated that each exists.
+     */
+    private Map<String, String> resolveOfficialBuilds(List<String> versions, String buildType) {
+        String store = config.getOfficialBuildStoreUrl();
+        Map<String, String> packages = new LinkedHashMap<>();
+        List<String> order = new ArrayList<>();
+        for (String version : versions) {
+            String commit = OfficialBuilds.commitOf(version);
+            String url = OfficialBuilds.packageUrl(store, version, buildType);
+            packages.put(commit, url);
+            order.add(commit);
+            progress.put(commit, 100);
+            buildsCompleted.incrementAndGet();
+            writeOfficialBuildLog(commit, version, url);
+            taskLogger.info("Official build " + version + " (commit " + commit + "): " + url);
+        }
+        this.commitOrder = order;
+        return packages;
+    }
+
+    /** The build log an official build gets in place of a compiler's, so every commit has one. */
+    private void writeOfficialBuildLog(String commit, String version, String url) {
+        writeBuildLog(commit, "Official build " + version + " (not built by the Builder)\n"
+            + "Commit: " + commit + "\n"
+            + "Package: " + url + "\n"
+            + "Timestamp: " + new java.util.Date() + "\n");
+    }
 
     /**
      * Build commits SEQUENTIALLY using WorkloadDistributor
@@ -1947,7 +2012,11 @@ public class BuilderTask {
             // Determine if this is a local or remote tester
             String buildPackageRef;
             boolean consumerWorker = CONSUMER_WORKER.equals(workerIp);
-            if (consumerWorker) {
+            if (buildPackage.startsWith("http://") || buildPackage.startsWith("https://")) {
+                // An official build: every tester downloads it from the build store
+                buildPackageRef = buildPackage;
+                taskLogger.info("Sending package URL to tester " + workerIp + ": " + buildPackageRef);
+            } else if (consumerWorker) {
                 // QA consumer VM: download from this Builder at the address the VMs reach it on
                 File packageFile = new File(buildPackage);
                 buildPackageRef = ConsumerPool.get().getBuilderUrl() + "/download/build/"
@@ -2851,6 +2920,15 @@ public class BuilderTask {
             if (this.ctpProvenance != null) {
                 response.put("ctpProvenance", this.ctpProvenance);
             }
+            if (officialVersions != null) {
+                // Reports read 'commits' from request.json, which an official-build request has none of
+                response.put("buildSource", "official");
+                response.put("buildVersions", buildVersions);
+                response.put("commits", new JSONArray(commitOrder));
+            }
+            if (request.optBoolean(SqlFullSuite.REQUEST_FIELD, false)) {
+                response.put(SqlFullSuite.REQUEST_FIELD, true);
+            }
 
             if (commitOrder != null && !commitOrder.isEmpty()) {
                 response.put("commitOrder", new JSONArray(commitOrder));
@@ -3143,30 +3221,34 @@ public class BuilderTask {
      * Create a build log entry for cached builds to maintain consistent log structure
      */
     private void createCachedBuildLog(String commit, String packagePath, String cacheType) {
+        // Create build log content for cached build
+        StringBuilder logContent = new StringBuilder();
+        logContent.append("Build retrieved from ").append(cacheType).append("\n");
+        logContent.append("Commit: ").append(commit).append("\n");
+        logContent.append("Package: ").append(packagePath).append("\n");
+        logContent.append("Timestamp: ").append(new java.util.Date()).append("\n");
+        logContent.append("Status: CACHED (no rebuild required)\n");
+        if (new File(packagePath).exists()) {
+            logContent.append("Package size: ").append(new File(packagePath).length()).append(" bytes\n");
+        }
+        writeBuildLog(commit, logContent.toString());
+    }
+
+    /**
+     * Writes a commit's builds/build_&lt;sha7&gt;.log in the request's log directory, for a build that
+     * was not compiled for this request (a cached or an official build).
+     */
+    private void writeBuildLog(String commit, String content) {
         try {
             String requestId = RequestContext.getRequestId();
             if (requestId != null && config.isRequestGroupingEnabled()) {
                 String buildsDir = RequestLogManager.getInstance().createRequestSubdir(requestId, "builds");
-                String buildLogFile = String.format("build_%s.log", shortSha(commit));
-                Path logFile = Paths.get(buildsDir, buildLogFile);
-                
-                // Create build log content for cached build
-                StringBuilder logContent = new StringBuilder();
-                logContent.append("Build retrieved from ").append(cacheType).append("\n");
-                logContent.append("Commit: ").append(commit).append("\n");
-                logContent.append("Package: ").append(packagePath).append("\n");
-                logContent.append("Timestamp: ").append(new java.util.Date()).append("\n");
-                logContent.append("Status: CACHED (no rebuild required)\n");
-                
-                if (new File(packagePath).exists()) {
-                    logContent.append("Package size: ").append(new File(packagePath).length()).append(" bytes\n");
-                }
-                
-                Files.write(logFile, logContent.toString().getBytes("UTF-8"));
-                taskLogger.info("Created build log for cached build: " + logFile.toString());
+                Path logFile = Paths.get(buildsDir, String.format("build_%s.log", shortSha(commit)));
+                Files.write(logFile, content.getBytes("UTF-8"));
+                taskLogger.info("Created build log: " + logFile);
             }
         } catch (Exception e) {
-            taskLogger.warning("Failed to create cached build log: " + e.getMessage());
+            taskLogger.warning("Failed to create build log: " + e.getMessage());
         }
     }
     

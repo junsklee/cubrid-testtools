@@ -28,13 +28,20 @@ public class CubridInstaller {
         
         // Extract the build package
         testLogger.info("Extracting to: " + cubridInstallDir);
-        boolean hasInstallRoot = archiveHasInstallRoot(buildPackage);
+        // The official layout is told by the first entry; only other packages need the full scan
+        boolean officialRoot = archiveHasOfficialRoot(buildPackage);
+        boolean hasInstallRoot = !officialRoot && archiveHasInstallRoot(buildPackage);
         ProcessBuilder pb;
         if (hasInstallRoot) {
             pb = new ProcessBuilder("tar", "-xzf", buildPackage,
                                     "-C", cubridInstallDir.toString(),
                                     "--strip-components=2",
                                     "_install/CUBRID");
+        } else if (officialRoot) {
+            // An official build (CUBRID-<version>-Linux.x86_64.tar.gz) has everything under CUBRID/
+            pb = new ProcessBuilder("tar", "-xzf", buildPackage,
+                                    "-C", cubridInstallDir.toString(),
+                                    "--strip-components=1");
         } else {
             pb = new ProcessBuilder("tar", "-xzf", buildPackage,
                                     "-C", cubridInstallDir.toString());
@@ -168,6 +175,25 @@ public class CubridInstaller {
         return null;
     }
     
+    /** Whether the archive's first entry is CUBRID/, as in an official build's package. */
+    static boolean archiveHasOfficialRoot(String buildPackage) {
+        ProcessBuilder pb = new ProcessBuilder("tar", "-tzf", buildPackage);
+        pb.redirectErrorStream(true);
+        try {
+            Process process = pb.start();
+            String first;
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(process.getInputStream()))) {
+                first = reader.readLine();
+            } finally {
+                process.destroy();
+            }
+            return first != null && first.startsWith("CUBRID/");
+        } catch (Exception ignore) {
+            return false;
+        }
+    }
+
     private boolean archiveHasInstallRoot(String buildPackage) {
         ProcessBuilder pb = new ProcessBuilder("tar", "-tf", buildPackage);
         pb.redirectErrorStream(true);

@@ -65,6 +65,15 @@ const config = {
         defaultBranch: 'develop'
     },
 
+    // Official CUBRID builds: the build store's directory listing (one directory per version).
+    // The dashboard lists the store the Builder names in /health (official_build_store_url);
+    // storeUrl is only used while the Builder does not answer.
+    officialBuilds: {
+        storeUrl: process.env.OFFICIAL_BUILD_STORE_URL || 'http://192.168.1.91:8080/REPO_ROOT/store_01/',
+        cacheTtlMs: 5 * 60 * 1000,
+        timeoutMs: 15000
+    },
+
     // Application settings
     app: {
         name: 'CUBRID Test Report Server',
