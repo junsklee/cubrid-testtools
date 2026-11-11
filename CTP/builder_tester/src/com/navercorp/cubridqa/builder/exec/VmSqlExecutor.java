@@ -63,6 +63,162 @@ public class VmSqlExecutor implements ExecutorStrategy {
         }
     }
 
+    /**
+     * One shard of the full SQL suite as regression runs SQL on a VM: `ctp.sh sql` over the shard's
+     * tree, with the conf regression uses for the build (scenario pointed at the tree), from a copy
+     * of the VM's CTP taken for the shard. The per-case DB of this request is stopped first (CTP
+     * provisions its own) and provisioned again by the next single case.
+     */
+    public TestResult executeBatch(TestRequest request, Path workDir, Logger testLogger) throws Exception {
+        synchronized (VmShellExecutor.VM_LOCK) {
+            return executeBatchLocked(request, workDir, testLogger);
+        }
+    }
+
+    private TestResult executeBatchLocked(TestRequest request, Path workDir, Logger testLogger) throws Exception {
+        long startNs = System.nanoTime();
+        TestExecutionMetrics.Builder metrics = TestExecutionMetrics.builder()
+            .buildPackageName(request.getBuildPackage())
+            .metricsComplete(false);
+        String commitShort = request.getCommitShort() != null ? request.getCommitShort() : "unknown";
+        Path cubridHome = Paths.get(config.getVmCubridHome()).toAbsolutePath().normalize();
+        Path home = Paths.get(System.getProperty("user.home")).toAbsolutePath().normalize();
+        String unsafe = VmShellExecutor.checkCubridHome(cubridHome, home);
+        if (unsafe != null) {
+            return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR).message(unsafe), metrics, startNs);
+        }
+        Path ctpHome = VmShellExecutor.resolveCtpHome(config);
+        StringBuilder preamble = new StringBuilder();
+        VmCtp.ensureInstalled(config, ctpProvisioner, request, ctpHome, preamble, Logger.getLogger(VmSqlExecutor.class.getName()));
+        if (!Files.isRegularFile(ctpHome.resolve("bin/ctp.sh")) || !Files.isDirectory(ctpHome.resolve("sql/lib"))) {
+            return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR)
+                .message("CTP at " + ctpHome + " has no SQL tool (bin/ctp.sh, sql/lib); set vm_ctp_home"), metrics, startNs);
+        }
+        preamble.append("[builder-tester vm] user=").append(System.getProperty("user.name"))
+            .append(" CUBRID=").append(cubridHome).append(" CTP_HOME=").append(ctpHome).append('\n');
+
+        // 1. Build, as for single cases
+        try {
+            Path localPackage = buildCache.downloadIfNeeded(request.getBuildPackage(), commitShort, "unknown", testLogger);
+            VmShellExecutor.ensureInstalled(localPackage, commitShort, cubridHome, ctpHome, workDir, preamble, testLogger);
+        } catch (Exception e) {
+            testLogger.log(Level.SEVERE, "VM build install failed", e);
+            return finish(base(request).status(TestStatus.BUILD_ERROR)
+                .message("Failed to install build: " + e.getMessage()), metrics, startNs);
+        }
+
+        Path workspace = Paths.get(config.getWorkDir()).toAbsolutePath().normalize().resolve("sql_vm")
+            .resolve(safe(request.getRequestId() == null ? "adhoc" : request.getRequestId()));
+        Path shardDir = workspace.resolve("batch_" + safe(request.getSqlBatchShard()));
+        Path tree = shardDir.resolve("cubrid-testcases");
+        Path ctpCopy = shardDir.resolve("CTP");
+        int staged;
+        Path conf;
+        try {
+            Files.createDirectories(shardDir);
+            // 2. The conf regression uses for this build, its scenario pointed at the shard's tree
+            String buildVersion = installedVersion(cubridHome, workDir);
+            String wanted = selectSqlConf(buildVersion, config.getVmSqlConfRules(), config.getVmSqlDefaultConf());
+            Path sqlConf = resolveSqlConf(ctpHome, wanted, workspace, buildVersion, preamble, testLogger);
+            preamble.append("[builder-tester vm] SQL conf: ").append(sqlConf).append(" (build ").append(buildVersion).append(")\n");
+
+            // 3. CUBRID's processes stopped (the per-case DB too: CTP provisions its own)
+            VmShellExecutor.resetProcesses(cubridHome, ctpHome, shardDir, testLogger);
+            provisionedKey = null;
+            provisionedRequest = null;
+
+            // 4. The shard's tree and a CTP of its own (CTP writes its conf and results into it)
+            Path repoRoot = sqlTcSync.prepareRequestWorkspace(
+                testLogger, request.getRequestId(), request.getSqlTcBranch(), request.getSqlTcCommit());
+            staged = SqlBatch.stageShardTree(repoRoot, request.getSqlBatchDirs(), tree);
+            SafeIo.deleteDirectory(ctpCopy.toFile());
+            SafeIo.copyTestCaseDirectory(ctpHome, ctpCopy);
+            conf = ctpCopy.resolve("conf").resolve("sql_builder_tester_batch.conf");
+            Files.write(conf, withScenario(new String(Files.readAllBytes(sqlConf), StandardCharsets.UTF_8),
+                tree.resolve("sql").toString()).getBytes(StandardCharsets.UTF_8));
+            preamble.append("[builder-tester vm] shard ").append(request.getSqlBatchShard()).append(": ").append(staged)
+                .append(" cases in ").append(tree.resolve("sql")).append('\n');
+        } catch (Exception e) {
+            SafeIo.deleteDirectory(shardDir.toFile());
+            return finish(base(request).status(TestStatus.ENVIRONMENT_ERROR)
+                .message("Failed to stage the SQL shard: " + e.getMessage()), metrics, startNs);
+        }
+
+        // 5. One CTP SQL run over the tree
+        int timeout = SqlBatchDockerExecutor.timeoutMinutes(request);
+        long startedAt = System.currentTimeMillis();
+        Path pgidFile = shardDir.resolve("ctp.pgid");
+        Path out = shardDir.resolve("ctp_sql.out");
+        boolean timedOut = false;
+        boolean cancelled = false;
+        try {
+            String run = "echo $$ > " + VmScriptFactory.quote(pgidFile.toString())
+                + "; export CUBRID=" + VmScriptFactory.quote(cubridHome.toString())
+                + " CTP_HOME=" + VmScriptFactory.quote(ctpCopy.toString())
+                + "; export LD_LIBRARY_PATH=\"$CUBRID/lib:$CUBRID/cci/lib:${LD_LIBRARY_PATH:-}\" PATH=\"$CUBRID/bin:$CTP_HOME/bin:$PATH\""
+                + "; cd \"$HOME\" && exec \"$CTP_HOME/bin/ctp.sh\" sql -c " + VmScriptFactory.quote(conf.toString());
+            ProcessBuilder pb = new ProcessBuilder("setsid", "bash", "-lc", run);
+            pb.directory(shardDir.toFile());
+            pb.redirectErrorStream(true);
+            pb.redirectOutput(out.toFile());
+            Process process = pb.start();
+            long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeout);
+            boolean done = false;
+            while (!done && System.nanoTime() < deadline) {
+                done = process.waitFor(5, TimeUnit.SECONDS);
+                if (!done && CancelledRequests.isCancelled(request.getRequestId())) {
+                    cancelled = true;
+                    break;
+                }
+            }
+            if (!done) {
+                timedOut = !cancelled;
+                killProcessGroup(pgidFile, shardDir, testLogger);
+                process.destroyForcibly();
+            }
+        } catch (Exception e) {
+            testLogger.log(Level.WARNING, "CTP SQL shard failed to start", e);
+            preamble.append("CTP SQL shard failed to start: ").append(e).append('\n');
+        }
+        String console = preamble + (Files.exists(out) ? new String(Files.readAllBytes(out), StandardCharsets.UTF_8) : "")
+            + (timedOut ? "\n===== TIMEOUT after " + timeout + " minutes =====\n" : "");
+
+        // 6. The verdicts, and CUBRID left stopped for whatever runs next
+        java.util.Map<String, SqlBatch.Verdict> verdicts;
+        try {
+            verdicts = SqlBatch.collect(ctpCopy.resolve("sql/result"), startedAt, tree.toString());
+        } catch (Exception e) {
+            testLogger.warning("Could not read the shard's summary_info: " + e.getMessage());
+            verdicts = new java.util.LinkedHashMap<>();
+        }
+        try {
+            VmShellExecutor.resetProcesses(cubridHome, ctpHome, shardDir, testLogger);
+        } catch (Exception e) {
+            testLogger.warning("Could not stop CUBRID after the shard: " + e.getMessage());
+        }
+        TestResult.Builder result = SqlBatchDockerExecutor.summarize(request, verdicts, staged, console, timedOut,
+            cancelled, requestTestsDir(), "vm", testLogger);
+        SafeIo.deleteDirectory(shardDir.toFile());
+        return finish(result, metrics, startNs);
+    }
+
+    /** conf with its scenario key set to scenario (appended when the conf has none). */
+    static String withScenario(String conf, String scenario) {
+        StringBuilder out = new StringBuilder();
+        boolean set = false;
+        for (String line : conf.split("\n", -1)) {
+            if (line.matches("\\s*scenario\\s*=.*")) {
+                out.append("scenario=").append(scenario);
+                set = true;
+            } else {
+                out.append(line);
+            }
+            out.append('\n');
+        }
+        String result = out.substring(0, out.length() - 1);
+        return set ? result : result + (result.endsWith("\n") ? "" : "\n") + "scenario=" + scenario + "\n";
+    }
+
     private TestResult executeLocked(TestRequest request, Path workDir, Logger testLogger) throws Exception {
         long startNs = System.nanoTime();
         TestExecutionMetrics.Builder metrics = TestExecutionMetrics.builder()

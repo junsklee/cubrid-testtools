@@ -40,6 +40,7 @@ public class TestOrchestrator {
     private final SqlDockerExecutor sqlDockerExecutor;
     private volatile VmShellExecutor vmShellExecutor;
     private volatile VmSqlExecutor vmSqlExecutor;
+    private volatile com.navercorp.cubridqa.builder.exec.SqlBatchDockerExecutor sqlBatchDockerExecutor;
     private final boolean useDocker;
     private final Object dockerManager; // DockerManager - using Object to avoid compile dependency
     private final Object dockerUtils; // DockerUtils - using Object to avoid compile dependency
@@ -97,6 +98,11 @@ public class TestOrchestrator {
     /** Executor for SQL cases under execution_mode=vm (the VM's own CTP SQL tool). */
     public void setVmSqlExecutor(VmSqlExecutor vmSqlExecutor) {
         this.vmSqlExecutor = vmSqlExecutor;
+    }
+
+    /** Executor for full-suite SQL shards in Docker (one CTP run over a shard's directories). */
+    public void setSqlBatchDockerExecutor(com.navercorp.cubridqa.builder.exec.SqlBatchDockerExecutor executor) {
+        this.sqlBatchDockerExecutor = executor;
     }
 
     /**
@@ -447,6 +453,30 @@ public class TestOrchestrator {
         
         boolean keepAliveRequested = testRequest.isKeepAlive();
         try {
+            // A full-suite SQL shard: one CTP SQL run over its directories (the VM's CTP on a VM
+            // tester, the test image's entrypoint in Docker), as cubridci runs its shards
+            if (testRequest.isSqlBatch()) {
+                TestResult result;
+                if (config.isVmMode()) {
+                    if (vmSqlExecutor == null) {
+                        throw new IllegalStateException("execution_mode=vm but no VM SQL executor is configured");
+                    }
+                    testLogger.info("Running full-suite SQL shard " + testRequest.getSqlBatchShard() + " on this VM (ctp.sh sql)");
+                    result = vmSqlExecutor.executeBatch(testRequest, workDir, testLogger);
+                } else if (sqlBatchDockerExecutor != null && useDocker && isDockerAvailable()) {
+                    result = sqlBatchDockerExecutor.execute(testRequest, workDir, testLogger);
+                } else {
+                    result = TestResult.builder()
+                        .testName(testRequest.getTestName())
+                        .commit(testRequest.getCommit())
+                        .commitShort(testRequest.getCommitShort())
+                        .status(TestStatus.ENVIRONMENT_ERROR)
+                        .message("A full-suite SQL shard needs Docker on this tester node")
+                        .timestamp(System.currentTimeMillis())
+                        .build();
+                }
+                return new RunOutcome(testRequest, result, convertToJSONObject(result));
+            }
             // SQL testcases: the VM's own CTP on a VM tester, else a dedicated Docker path (no direct fallback)
             if (testRequest.isSqlTest() && config.isVmMode()) {
                 if (vmSqlExecutor == null) {

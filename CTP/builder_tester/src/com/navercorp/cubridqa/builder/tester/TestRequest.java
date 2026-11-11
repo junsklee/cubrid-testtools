@@ -39,6 +39,11 @@ public class TestRequest {
     private final String ctpSqlBaseSha; // Exact CTP base SHA resolved by Builder (may be null)
     private final String customSqlScript; // Ad-hoc SQL case contents (custom SQL mode)
     private final String customSqlAnswer; // Expected .answer for the ad-hoc SQL case
+    // A full-suite shard (sqlBatch): its top-level sql/ directories, run as one CTP SQL run
+    private final List<String> sqlBatchDirs;
+    private final String sqlBatchShard;
+    private final int sqlBatchTimeoutMinutes;
+    private final int sqlBatchMemoryLimitMb;
 
     public TestRequest(JSONObject json) {
         this.testPath = json.getString("testPath");
@@ -58,6 +63,27 @@ public class TestRequest {
         this.testName = json.optString("testName", null);
         this.containerName = json.optString("containerName", null);
         this.attemptNumber = json.optInt("attemptNumber", 1);
+        org.json.JSONObject batch = json.optJSONObject("sqlBatch");
+        if (batch != null && batch.optJSONArray("dirs") != null) {
+            List<String> dirs = new java.util.ArrayList<>();
+            org.json.JSONArray raw = batch.getJSONArray("dirs");
+            for (int i = 0; i < raw.length(); i++) {
+                String d = raw.optString(i, "").trim();
+                // Top-level directories of sql/ only: they name copies and paths on the tester
+                if (d.matches("sql/_[A-Za-z0-9_.-]+") && !d.contains("..")) {
+                    dirs.add(d);
+                }
+            }
+            this.sqlBatchDirs = java.util.Collections.unmodifiableList(dirs);
+            this.sqlBatchShard = batch.optString("shard", "0").replaceAll("[^A-Za-z0-9_-]", "_");
+            this.sqlBatchTimeoutMinutes = batch.optInt("timeoutMinutes", 180);
+            this.sqlBatchMemoryLimitMb = Math.max(1024, Math.min(65536, batch.optInt("memoryLimitMb", 4096)));
+        } else {
+            this.sqlBatchDirs = null;
+            this.sqlBatchShard = null;
+            this.sqlBatchTimeoutMinutes = 180;
+            this.sqlBatchMemoryLimitMb = 4096;
+        }
         this.buildType = json.optString("buildType", "release");
         String scriptBase64 = json.optString("customShellScriptBase64", "").trim();
         this.customShellScriptBase64 = scriptBase64.isEmpty() ? null : scriptBase64;
@@ -165,4 +191,11 @@ public class TestRequest {
     public String getCustomSqlScript() { return customSqlScript; }
     public String getCustomSqlAnswer() { return customSqlAnswer; }
     public boolean hasCustomSqlScript() { return customSqlScript != null && !customSqlScript.isEmpty(); }
+    /** A shard of the full SQL suite: its directories run as one CTP SQL run, not one case. */
+    public boolean isSqlBatch() { return isSqlTest() && sqlBatchDirs != null && !sqlBatchDirs.isEmpty(); }
+    public List<String> getSqlBatchDirs() { return sqlBatchDirs; }
+    public String getSqlBatchShard() { return sqlBatchShard; }
+    public int getSqlBatchTimeoutMinutes() { return sqlBatchTimeoutMinutes; }
+    /** A shard container's hard memory limit (1 GB to 64 GB, default 4 GB). */
+    public int getSqlBatchMemoryLimitMb() { return sqlBatchMemoryLimitMb; }
 }

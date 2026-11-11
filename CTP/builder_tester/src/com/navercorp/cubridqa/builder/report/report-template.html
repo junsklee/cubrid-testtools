@@ -438,6 +438,13 @@
             padding: 0 2rem 6px;
         }
 
+        /* The baseline over its builds: as wide as the cards, centred when they fit */
+        .baseline-rail .rail-tree {
+            width: fit-content;
+            min-width: 280px;
+            margin: 0 auto;
+        }
+
         /* Horizontal rail */
         .baseline-rail .rail {
             position: relative;
@@ -445,18 +452,24 @@
             gap: 1rem;
             justify-content: flex-start;
             padding-top: 16px;
-            min-width: 100%;
             width: fit-content;
         }
 
-        /* Horizontal line */
+        /* The bus from the first card's stem to the last's (cards are 280px wide) */
         .baseline-rail .rail::before {
             content: "";
             position: absolute;
             top: 0;
-            left: 0;
-            right: 0;
+            left: 140px;
+            right: 140px;
             border-top: 2px solid #d0d7de;
+        }
+
+        .baseline-rail .rail-legend {
+            margin: 0.75rem 0 0;
+            color: #6b7280;
+            font-size: 0.8125rem;
+            text-align: center;
         }
 
         /* Commit card as rail leaf nodes */
@@ -513,20 +526,17 @@
             border-left: 2px solid #d0d7de;
         }
 
-        /* Adjust rail for wider cards */
-        .baseline-rail .rail {
-            min-width: max(100%, 800px);
-            gap: 1rem;
-        }
-
         .baseline-rail.checkout-mode .base,
         .baseline-rail.checkout-mode .base::after {
             display: none;
         }
 
+        /* Checkout: each build contains the ones before it, so a chain with room for its arrows,
+           and cards of one height so the arrows line up */
         .baseline-rail.checkout-mode .rail {
-            padding-top: 14px;
-            align-items: center;
+            padding-top: 0;
+            align-items: stretch;
+            gap: 2.25rem;
         }
 
         .baseline-rail.checkout-mode .rail::before {
@@ -536,8 +546,8 @@
         .baseline-rail.checkout-mode .commit-connector {
             position: absolute;
             top: 50%;
-            left: 100%;
-            width: 26px;
+            left: calc(100% + 2px);
+            width: 20px;
             height: 3px;
             background: #94a3b8;
             border-radius: 2px;
@@ -559,19 +569,23 @@
             content: none;
         }
 
-        .baseline-rail.checkout-mode .commit-card.checkout-start::after {
-            content: "";
-            position: absolute;
-            top: -14px;
-            left: 50%;
-            transform: translateX(-50%);
-            height: 14px;
-            border-left: 2px solid #94a3b8;
+        .baseline-rail.checkout-mode .commit-card:last-child .commit-connector,
+        .baseline-rail.checkout-mode.single-commit .commit-connector,
+        .baseline-rail.independent-mode .commit-connector {
+            display: none;
         }
 
-        .baseline-rail.checkout-mode .commit-card:last-child .commit-connector,
-        .baseline-rail.checkout-mode.single-commit .commit-connector {
-            display: none;
+        /* Official builds: published builds side by side, none built on another */
+        .baseline-rail.independent-mode .rail {
+            gap: 1rem;
+        }
+
+        .baseline-rail .commit-card .build-version {
+            display: block;
+            margin-top: 0.375rem;
+            font-family: ui-monospace, 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+            font-size: 0.75rem;
+            color: #6b7280;
         }
 
 
@@ -1373,18 +1387,21 @@
                     <div class="commit-tree-container">
                         <!-- Baseline Rail -->
                         <div class="baseline-rail" id="baselineRail" style="display: none;" aria-label="Commits derived from baseline">
-                            <a class="base" href="#" id="baselineRailLink" target="_blank" rel="noopener noreferrer">
-                                <div class="base-content">
-                                    <div class="base-title">Baseline</div>
-                                    <div class="hash" id="baselineRailHash">-</div>
-                                </div>
-                            </a>
-                            
                             <div class="rail-wrap">
-                                <div class="rail" role="list" id="commitRail">
-                                    <!-- Commit chips will be populated here -->
+                                <!-- The baseline and its builds size to the cards and scroll together -->
+                                <div class="rail-tree">
+                                    <a class="base" href="#" id="baselineRailLink" target="_blank" rel="noopener noreferrer">
+                                        <div class="base-content">
+                                            <div class="base-title">Baseline</div>
+                                            <div class="hash" id="baselineRailHash">-</div>
+                                        </div>
+                                    </a>
+                                    <div class="rail" role="list" id="commitRail">
+                                        <!-- Commit chips will be populated here -->
+                                    </div>
                                 </div>
                             </div>
+                            <p class="rail-legend" id="railLegend"></p>
                         </div>
 
                     </div>
@@ -1481,6 +1498,13 @@
         // Test names, file names, commits and messages come from requests and testers.
         // Every value placed in an HTML string goes through escHtml, and every value passed
         // to an inline onclick handler goes through jsArg (a JS string literal, HTML-escaped).
+        // The official build version a tested commit stands for (buildVersions: commit -> version), or null
+        function buildVersionOf(commit) {
+            const versions = rawData.buildVersions;
+            const v = versions && commit ? versions[commit] : null;
+            return typeof v === 'string' && v ? v : null;
+        }
+
         function escHtml(value) {
             return String(value == null ? '' : value)
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -1622,12 +1646,18 @@
             document.getElementById('buildType').textContent = rawData.buildType || 'release';
             document.getElementById('minRuns').textContent = rawData.minRuns || '1';
             document.getElementById('maxRuns').textContent = rawData.maxRuns || '2';
-            document.getElementById('shellTcBranch').textContent = rawData.shellTcBranch || '-';
+            // The testcases the request ran: SQL cases come from cubrid-testcases, shell cases from
+            // cubrid-testcases-private-ex (an SQL report showed '-' for both)
+            const sqlReport = (rawData.testType || '') === 'sql';
+            const tcBranch = sqlReport ? rawData.sqlTcBranch : rawData.shellTcBranch;
+            const tcCommit = sqlReport ? rawData.sqlTcCommit : rawData.shellTcCommit;
+            const tcRepo = sqlReport ? 'cubrid-testcases' : 'cubrid-testcases-private-ex';
+            document.getElementById('shellTcBranch').textContent = tcBranch || '-';
 
             const shellTcCommitLink = document.getElementById('shellTcCommitLink');
-            if (rawData.shellTcCommit) {
-                shellTcCommitLink.href = `https://github.com/CUBRID/cubrid-testcases-private-ex/commit/${rawData.shellTcCommit}`;
-                shellTcCommitLink.textContent = rawData.shellTcCommit.substring(0, 12);
+            if (typeof tcCommit === 'string' && /^[0-9a-f]{7,40}$/.test(tcCommit)) {
+                shellTcCommitLink.href = `https://github.com/CUBRID/${tcRepo}/commit/${tcCommit}`;
+                shellTcCommitLink.textContent = tcCommit.substring(0, 12);
             } else {
                 shellTcCommitLink.href = '#';
                 shellTcCommitLink.textContent = '-';
@@ -1830,9 +1860,8 @@
                     hashSpan.textContent = item.sha.substring(0, 7);
                 }
                 // An official build: its version names it better than the commit it was built from
-                const key = typeof item === 'string' ? item : item.sha;
-                const version = rawData.buildVersions && key ? rawData.buildVersions[key] : null;
-                if (typeof version === 'string' && version) {
+                const version = buildVersionOf(typeof item === 'string' ? item : item.sha);
+                if (version) {
                     hashSpan.title = hashSpan.textContent;
                     hashSpan.textContent = version;
                 }
@@ -2153,8 +2182,9 @@
             commits.forEach(commit => {
                 const th = document.createElement('th');
                 th.className = 'commit-col';
-                th.textContent = commit.substring(0, 7);
-                th.title = commit;
+                const version = buildVersionOf(commit);
+                th.textContent = version || commit.substring(0, 7);
+                th.title = version ? version + ' (commit ' + commit + ')' : commit;
                 headerRow.appendChild(th);
             });
             const thFail = document.createElement('th'); thFail.textContent = 'Fail Num'; headerRow.appendChild(thFail);
@@ -2881,6 +2911,19 @@
             }
 
             baselineRail.classList.toggle('single-commit', commitDetails.length <= 1);
+            // Official builds are published builds, none built on another: no chain between them
+            const officialBuilds = rawData.buildSource === 'official';
+            baselineRail.classList.toggle('independent-mode', officialBuilds);
+            const legend = document.getElementById('railLegend');
+            if (legend) {
+                legend.textContent = officialBuilds
+                    ? 'Official builds, tested as published; oldest version first.'
+                    : commitBuildMode === 'checkout'
+                        ? (commitDetails.length > 1
+                            ? 'Each commit built from its own checkout, oldest first: each build contains the commits before it.'
+                            : 'Built from its own checkout.')
+                        : 'Each commit cherry-picked alone onto the baseline: each build is the baseline plus that one commit.';
+            }
 
             if (commitBuildMode === 'checkout') {
                 baselineRail.classList.add('checkout-mode');
@@ -2934,9 +2977,6 @@
                 // Create commit card element
                 const card = document.createElement('a');
                 card.className = 'commit-card';
-                if (commitBuildMode === 'checkout' && index === 0) {
-                    card.classList.add('checkout-start');
-                }
                 card.setAttribute('role', 'listitem');
                 card.href = commit.html_url;
                 card.target = '_blank';
@@ -2959,6 +2999,7 @@
                 card.innerHTML = `
                     <div class="commit-header">
                         <span class="commit-sha">${escHtml(commitSha.substring(0, 7))}</span>
+                        ${buildVersionOf(commitSha) ? `<span class="build-version">${escHtml(buildVersionOf(commitSha))}</span>` : ''}
                     </div>
                     <div class="commit-message">${escapeHtml(truncatedMessage)}</div>
                     <div class="commit-meta">

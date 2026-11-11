@@ -41,6 +41,36 @@ POST /build
   as of 2026-11), listed at the commit the Builder pins, for each build. It implies
   `testType=sql` and cannot be combined with `tests` or a custom script. The
   dashboard offers it as **Run the full SQL suite** under Test Cases (SQL).
+  Optional `"sqlSuiteDirs": ["sql/_13_issues", ...]` limits it to some top-level directories.
+
+### How the full suite runs (CTP batches, then one by one)
+
+As cubridci's `gha-ci.yml` runs the SQL suite (`plan` / `shard` / `collect`, and `/run rerun`):
+
+1. **Shards.** Each build's cases are split into `sql_batch_shards` (default 10) shards of
+   whole top-level `sql/_*` directories, the largest directory first into the shard with the
+   fewest cases. A shard's tree is the testcases' `sql/` without the other shards' `_*`
+   directories, which is what `/entrypoint.sh keep dir` leaves.
+2. **One CTP run a shard.** Docker: in the per-commit image (the test image with the build
+   installed), the tree at `/home/cubrid-testcases`, the request's CTP at
+   `/home/cubrid-testtools`, then the image's own `/entrypoint.sh test sql` (one `ctp.sh sql`
+   with `conf/sql.conf`) and `/entrypoint.sh results sql`. A Docker tester runs up to
+   `sql_batch_per_tester` (default 2) shards at once, each in a container with a hard memory limit
+   (`sql_batch_shard_mem_mb`, default 4 GB, applied whatever `docker_enforce_memory_limits` says). VM: `ctp.sh sql` with the conf regression
+   uses for the build, its scenario pointed at the tree, from a copy of the VM's CTP; one shard
+   at a time a VM. Each case's verdict comes from CTP's `summary_info`
+   (`sql_batch_<commit>_<shard>.cases.tsv` in the request's `tests/`, with the run's log).
+3. **The failures one by one.** Cases a shard reported `nok`, or never ran, run again as single
+   cases: retries per the request's run mode, a fresh environment for a failure, a diff each.
+   A case that failed in its batch and passes alone is reported flaky, with `batchVerdict`.
+   A shard that leaves no verdict runs once more; twice, its cases are execution errors.
+   More than `sql_batch_rerun_max` (default 1000) failures in a build mean the build and the
+   testcases branch do not match (an 11.4 build on `develop`'s cases): those are reported from
+   the batch as they are, with the reason, instead of re-run for hours.
+
+Cases that passed in their batch are reported from the batch (`"batch": "<shard>"`, the shard's
+log as their log); the callback's `sqlBatch` says how many shards ran and how many cases were
+re-run one by one.
 - `customShellScript` is not supported with `testType=sql`.
 
 Sample client: `bin/test_client_sql.sh`.

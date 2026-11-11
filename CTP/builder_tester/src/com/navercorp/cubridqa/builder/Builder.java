@@ -1105,6 +1105,27 @@ public class Builder {
             request.put(SqlFullSuite.REQUEST_FIELD, true);
             request.put("tests", new JSONArray());
         }
+        if (request.has(SqlFullSuite.DIRS_FIELD)) {
+            Object raw = request.get(SqlFullSuite.DIRS_FIELD);
+            if (!sqlFullSuite) {
+                throw new IllegalArgumentException("'" + SqlFullSuite.DIRS_FIELD + "' limits the full SQL suite; it requires '"
+                    + SqlFullSuite.REQUEST_FIELD + "'");
+            }
+            if (!(raw instanceof JSONArray) || ((JSONArray) raw).length() == 0 || ((JSONArray) raw).length() > 100) {
+                throw new IllegalArgumentException("'" + SqlFullSuite.DIRS_FIELD + "' must be an array of 1 to 100 top-level sql/ directories");
+            }
+            JSONArray dirs = (JSONArray) raw;
+            Set<String> seen = new LinkedHashSet<>();
+            for (int i = 0; i < dirs.length(); i++) {
+                String d = String.valueOf(dirs.get(i)).trim().replaceAll("/+$", "");
+                if (!SqlFullSuite.isTopLevelDir(d)) {
+                    throw new IllegalArgumentException("Invalid entry in '" + SqlFullSuite.DIRS_FIELD + "': " + d
+                        + ". Expected a top-level sql/ directory such as sql/_01_object");
+                }
+                seen.add(d);
+            }
+            request.put(SqlFullSuite.DIRS_FIELD, new JSONArray(seen));
+        }
 
         // Validate custom attachments (only allowed when customShellScript is present)
         if (request.has("customAttachments")) {

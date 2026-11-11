@@ -5,6 +5,7 @@ package com.navercorp.cubridqa.builder;
 
 import com.navercorp.cubridqa.builder.logging.RequestIds;
 import com.navercorp.cubridqa.builder.consumer.ConsumerPool;
+import com.navercorp.cubridqa.builder.exec.SqlBatch;
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
@@ -51,6 +52,15 @@ public class BuilderTask {
     private List<String> officialVersions;
     /** commit -> official build version, for results and reports (empty unless officialBuilds). */
     private final JSONObject buildVersions = new JSONObject();
+    /** The full SQL suite's shards by label, while it runs in CTP batches (runFullSuiteInBatches). */
+    private final Map<String, SqlFullSuite.Shard> batchShards = new ConcurrentHashMap<>();
+    /** What the batch phase did, for the callback: shards, cases re-run one by one. */
+    private JSONObject sqlBatchSummary;
+    // Live batch progress for /status: shards a build, shard runs to do and done, cases re-run alone
+    private volatile int batchShardsPerBuild;
+    private volatile int batchShardRunsTotal;
+    private final AtomicInteger batchShardRunsDone = new AtomicInteger();
+    private volatile int batchRerunTotal = -1;
 
     private static final String COMMIT_BUILD_MODE_BASELINE_CHERRYPICK = "baseline_cherrypick";
     private static final String COMMIT_BUILD_MODE_CHECKOUT = "checkout";
@@ -217,6 +227,19 @@ public class BuilderTask {
                 if (sqlFullSuite) {
                     // Listed at the pinned commit, so the cases are the ones every tester checks out
                     List<String> cases = SqlFullSuite.listCases(new File(config.getSqlTcDir()), sqlTcResolution.commit);
+                    JSONArray scope = request.optJSONArray(SqlFullSuite.DIRS_FIELD);
+                    if (scope != null && scope.length() > 0) {
+                        Set<String> dirs = new LinkedHashSet<>();
+                        for (int i = 0; i < scope.length(); i++) {
+                            dirs.add(scope.getString(i));
+                        }
+                        cases = SqlFullSuite.limitTo(cases, dirs);
+                        if (cases.isEmpty()) {
+                            throw new IllegalArgumentException("No SQL cases in " + dirs + " at "
+                                + sqlTcResolution.commit.substring(0, Math.min(12, sqlTcResolution.commit.length())));
+                        }
+                        taskLogger.info("Full SQL suite limited to " + dirs);
+                    }
                     tests = new JSONArray(cases);
                     request.put("tests", tests);
                     this.testsTotal = this.buildsTotal * tests.length();
@@ -421,13 +444,21 @@ public class BuilderTask {
                     config.getConsumerQueue(), consumerPool.getMaxParallel()));
                 consumerPool.open(consumerRequestId, "bt_" + consumerRequestId);
                 try {
-                    distributeTestsLegacy(builtPackages, tests, workerCapacities, dispatchCounts, finalBuildType,
-                        testRequestId, totalTestExecutions, testersUsed);
+                    if (sqlFullSuite && config.isSqlFullSuiteBatch()) {
+                        runFullSuiteInBatches(builtPackages, tests, workerIps, workerCapacities, workerPeakCaps,
+                            dispatchCounts, finalBuildType, testRequestId, testersUsed, true);
+                    } else {
+                        distributeTestsLegacy(builtPackages, tests, workerCapacities, dispatchCounts, finalBuildType,
+                            testRequestId, totalTestExecutions, testersUsed);
+                    }
                 } finally {
                     consumerPool.close(consumerRequestId);
                 }
                 // Each runner finalizes the request on its own VM before it exits
                 testersUsed.remove(CONSUMER_WORKER);
+            } else if (sqlFullSuite && config.isSqlFullSuiteBatch()) {
+                runFullSuiteInBatches(builtPackages, tests, workerIps, workerCapacities, workerPeakCaps,
+                    dispatchCounts, finalBuildType, testRequestId, testersUsed, false);
             } else if (config.isSmartSchedulingEnabled()) {
                 taskLogger.info("Using SMART SCHEDULING for test distribution");
                 distributeTestsWithSmartScheduling(
@@ -1966,8 +1997,21 @@ public class BuilderTask {
             String testDir, testScript, testName;
             boolean sqlTest = "sql".equals(request.optString("testType", "shell"));
 
+            // A full-suite shard ("sqlbatch:03of10"): its directories run as one CTP SQL run
+            SqlFullSuite.Shard batchShard = null;
+            if (sqlTest && testPath.startsWith(SqlFullSuite.BATCH_TEST_PREFIX)) {
+                batchShard = batchShards.get(testPath.substring(SqlFullSuite.BATCH_TEST_PREFIX.length()));
+                if (batchShard == null) {
+                    throw new IllegalStateException("No full-suite shard " + testPath);
+                }
+            }
+
             // Check if this is a custom script placeholder
-            if (sqlTest) {
+            if (batchShard != null) {
+                testName = "sql_batch_" + batchShard.label();
+                testDir = "";
+                testScript = "";
+            } else if (sqlTest) {
                 if (testPath.equals("custom_script_test")) {
                     // Ad-hoc SQL case (custom SQL mode): the tester materializes the
                     // provided script/answer into a synthetic cases/answers structure.
@@ -2166,6 +2210,25 @@ public class BuilderTask {
             int perAttemptTimeoutMin = config.getTestReadTimeoutMinutes();
             int maxRuns = Math.max(1, Math.max(maxRunsOverride, config.getMaxRuns()));
             long readTimeoutMsLong = (long) perAttemptTimeoutMin * 60_000L * (long) (maxRuns + 1);
+            if (batchShard != null) {
+                // One CTP run over the shard, after the package and image (and a wait for a slot)
+                testRequest.put("sqlBatch", new JSONObject()
+                    .put("shard", batchShard.label())
+                    .put("of", batchShard.of)
+                    .put("dirs", new JSONArray(batchShard.dirs))
+                    .put("cases", batchShard.cases.size())
+                    .put("timeoutMinutes", config.getSqlBatchTimeoutMinutes())
+                    .put("memoryLimitMb", config.getSqlBatchShardMemMb()));
+                testRequest.put("runMode", "fixed-runs").put("minRuns", 1).put("maxRuns", 1);
+                testRequest.remove("timeBudgetMs");
+                if (!consumerWorker) {
+                    testRequest.put("predicted", new JSONObject()
+                        .put("memMb", config.getSqlBatchShardMemMb())
+                        .put("cpuPct", 200.0)
+                        .put("confidence", 0.0));
+                }
+                readTimeoutMsLong = (config.getSqlBatchTimeoutMinutes() + 60L) * 60_000L;
+            }
             int readTimeoutMs = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, readTimeoutMsLong));
 
             int httpStatus;
@@ -2360,6 +2423,14 @@ public class BuilderTask {
                         result.put("attemptLogMetadata", responseJson.getJSONArray("attemptLogMetadata"));
                     } catch (Exception ignore) { }
                 }
+                // A full-suite shard's verdicts, one line a case
+                if (batchShard != null) {
+                    for (Map.Entry<String, byte[]> entry : logFiles.entrySet()) {
+                        if (entry.getKey().endsWith(SqlBatch.VERDICTS_SUFFIX)) {
+                            result.put("batchVerdicts", new String(entry.getValue(), java.nio.charset.StandardCharsets.UTF_8));
+                        }
+                    }
+                }
             }
             // A consumer VM sends its logs with the result; there is no host to fetch them from
             else if (responseJson.has("attemptLogMetadata") && consumerWorker) {
@@ -2474,6 +2545,32 @@ public class BuilderTask {
                     result.put("attemptLogMetadata", metadata);
                 } catch (Exception e) {
                     taskLogger.warning("Failed to process attempt log metadata: " + e.getMessage());
+                }
+            }
+            // A shard's verdicts that came without the files: a tester on this host writes them straight
+            // into the request's tests/ (no multipart), a remote one keeps them for its /log endpoint
+            if (batchShard != null && !result.has("batchVerdicts")) {
+                JSONArray meta = responseJson.optJSONArray("attemptLogMetadata");
+                for (int i = 0; meta != null && i < meta.length(); i++) {
+                    JSONObject entry = meta.optJSONObject(i);
+                    String name = entry == null ? "" : entry.optString("logFileName", "");
+                    if (!name.endsWith(SqlBatch.VERDICTS_SUFFIX) || !name.matches("[A-Za-z0-9_.-]+")) {
+                        continue;
+                    }
+                    try {
+                        Path local = requestId != null ? findLocalLogFile(requestId, name) : null;
+                        String tsv = local != null && Files.isRegularFile(local)
+                            ? new String(Files.readAllBytes(local), java.nio.charset.StandardCharsets.UTF_8)
+                            : (consumerWorker ? null : fetchLogContentFromRemoteTester(host, port, name));
+                        if (tsv != null) {
+                            result.put("batchVerdicts", tsv);
+                        }
+                    } catch (Exception e) {
+                        taskLogger.warning("Could not read the verdicts of " + testName + ": " + e.getMessage());
+                    }
+                }
+                if (!result.has("logPath") && responseJson.has("logPath")) {
+                    result.put("logPath", responseJson.optString("logPath"));
                 }
             }
             // Handle multiple attempt logs from tester (old JSON-embedded format for backward compatibility)
@@ -2928,6 +3025,9 @@ public class BuilderTask {
             }
             if (request.optBoolean(SqlFullSuite.REQUEST_FIELD, false)) {
                 response.put(SqlFullSuite.REQUEST_FIELD, true);
+                if (sqlBatchSummary != null) {
+                    response.put("sqlBatch", sqlBatchSummary);
+                }
             }
 
             if (commitOrder != null && !commitOrder.isEmpty()) {
@@ -3211,6 +3311,14 @@ public class BuilderTask {
         }
         
         summary.put("percent", percent);
+        if (batchShardRunsTotal > 0) {
+            // The full SQL suite in CTP batches: shards, then the failed cases one by one
+            summary.put("sqlBatch", new JSONObject()
+                .put("shards", batchShardsPerBuild)
+                .put("shardRuns", batchShardRunsTotal)
+                .put("shardRunsDone", batchShardRunsDone.get())
+                .put("rerun", batchRerunTotal));
+        }
         summary.put("totalTasks", totalTasks);
         summary.put("completedTasks", completedTasks);
         
@@ -3446,6 +3554,262 @@ public class BuilderTask {
     /**
      * Legacy distribution: shared work queue pulled by all tester threads.
      */
+    /** A build's shard to run. */
+    private static final class BatchJob {
+        final String commit;
+        final String buildPackage;
+        final SqlFullSuite.Shard shard;
+        int attempt = 1;
+
+        BatchJob(String commit, String buildPackage, SqlFullSuite.Shard shard) {
+            this.commit = commit;
+            this.buildPackage = buildPackage;
+            this.shard = shard;
+        }
+    }
+
+    /**
+     * The full SQL suite as cubridci's gha-ci runs it, then its re-run of the failures, in one request.
+     * Phase 1: each build's cases in shards of whole top-level sql/ directories, each shard one
+     * normal CTP SQL run on a tester (Docker: the test image's entrypoint; VM: ctp.sh sql), a
+     * Docker tester running up to sql_batch_per_tester at once. A shard that leaves no verdict
+     * runs once more. Phase 2: the cases a shard reported nok, or never ran, one by one as single
+     * cases (retries, a fresh environment for a failure, a diff each).
+     */
+    private void runFullSuiteInBatches(Map<String, String> builtPackages, JSONArray tests, List<String> workerIps,
+                                       Map<String, Integer> workerCapacities, Map<String, Integer> workerPeakCaps,
+                                       Map<String, AtomicInteger> dispatchCounts, String buildType, String testRequestId,
+                                       Set<String> testersUsed, boolean consumerMode) throws InterruptedException {
+        if (isCancelRequested()) {
+            return;
+        }
+        List<String> cases = new ArrayList<>();
+        for (int i = 0; i < tests.length(); i++) {
+            cases.add(tests.getString(i));
+        }
+        List<SqlFullSuite.Shard> plan = SqlFullSuite.planShards(cases, config.getSqlBatchShards());
+        batchShards.clear();
+        for (SqlFullSuite.Shard shard : plan) {
+            batchShards.put(shard.label(), shard);
+        }
+        taskLogger.info(String.format("Full SQL suite: %d cases in %d CTP batch(es) of whole sql/ directories per build,"
+            + " then the failed cases one by one", cases.size(), plan.size()));
+        for (SqlFullSuite.Shard shard : plan) {
+            taskLogger.info(String.format("  shard %s: %d cases in %s", shard.label(), shard.cases.size(), String.join(", ", shard.dirs)));
+        }
+
+        // Phase 1
+        LinkedBlockingDeque<BatchJob> queue = new LinkedBlockingDeque<>();
+        this.batchShardsPerBuild = plan.size();
+        for (Map.Entry<String, String> build : builtPackages.entrySet()) {
+            if (build.getValue() == null || build.getValue().isEmpty()) {
+                for (String c : cases) {
+                    results.add(new JSONObject().put("commit", build.getKey()).put("test", c).put("testType", "sql")
+                        .put("status", "build_failed").put("message", "Build failed for commit " + build.getKey()));
+                }
+                continue;
+            }
+            for (SqlFullSuite.Shard shard : plan) {
+                queue.add(new BatchJob(build.getKey(), build.getValue(), shard));
+            }
+        }
+        Map<String, List<String>> rerun = new ConcurrentHashMap<>();
+        Map<String, String> rerunWhy = new ConcurrentHashMap<>();
+        AtomicInteger outstanding = new AtomicInteger(queue.size());
+        this.batchShardRunsTotal = queue.size();
+        AtomicInteger shardsRun = new AtomicInteger();
+        List<Runnable> slots = new ArrayList<>();
+        for (String worker : workerIps) {
+            int capacity = Math.max(1, workerCapacities.getOrDefault(worker, 1));
+            int slotsHere = consumerMode ? capacity : Math.min(capacity, config.getSqlBatchPerTester());
+            for (int s = 0; s < slotsHere; s++) {
+                slots.add(() -> runBatchSlot(worker, queue, outstanding, shardsRun, rerun, rerunWhy, buildType,
+                    testRequestId, testersUsed));
+            }
+        }
+        taskLogger.info(String.format("Running %d shard(s) on %d slot(s) across %d tester(s)",
+            queue.size(), slots.size(), workerIps.size()));
+        ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, slots.size()));
+        try {
+            List<Future<?>> running = new ArrayList<>();
+            for (Runnable slot : slots) {
+                running.add(pool.submit(slot));
+            }
+            for (Future<?> f : running) {
+                try {
+                    f.get();
+                } catch (ExecutionException e) {
+                    taskLogger.log(Level.WARNING, "A full-suite shard slot failed", e.getCause());
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // Phase 2: each build's failed cases, one by one
+        int rerunTotal = 0;
+        int toRerun = 0;
+        for (List<String> failed : rerun.values()) {
+            toRerun += failed.size() > config.getSqlBatchRerunMax() ? 0 : failed.size();
+        }
+        this.batchRerunTotal = toRerun;
+        for (Map.Entry<String, String> build : builtPackages.entrySet()) {
+            List<String> failed = rerun.get(build.getKey());
+            if (failed == null || failed.isEmpty() || isCancelRequested()) {
+                continue;
+            }
+            List<String> sorted = new ArrayList<>(failed);
+            Collections.sort(sorted);
+            int cap = config.getSqlBatchRerunMax();
+            if (sorted.size() > cap) {
+                // So many failures say the build and the testcases branch do not match (an 11.4 build
+                // on develop's cases), not that cases broke: re-running them one by one would take
+                // hours to say the same. The batch's verdicts are the results.
+                taskLogger.warning(String.format("%d case(s) of %s failed or did not run in their CTP batch, over"
+                    + " sql_batch_rerun_max (%d): reporting the batch's verdicts without re-running them",
+                    sorted.size(), shortSha(build.getKey()), cap));
+                for (String c : sorted) {
+                    String why = rerunWhy.getOrDefault(build.getKey() + "|" + c, "nok in its CTP batch");
+                    boolean notRun = why.startsWith("not run");
+                    results.add(new JSONObject().put("commit", build.getKey()).put("test", c).put("testType", "sql")
+                        .put("status", notRun ? "execution_error" : "fail").put("attempts", 1)
+                        .put("batchVerdict", why)
+                        .put("message", why + "; not re-run alone: " + sorted.size()
+                            + " failures in this build exceed sql_batch_rerun_max (" + cap + ")"));
+                }
+                testsCompleted.addAndGet(sorted.size());
+                continue;
+            }
+            rerunTotal += sorted.size();
+            taskLogger.info(String.format("Re-running %d case(s) of %s one by one (nok or not run in their CTP batch)",
+                sorted.size(), shortSha(build.getKey())));
+            Map<String, String> one = new LinkedHashMap<>();
+            one.put(build.getKey(), build.getValue());
+            JSONArray failedTests = new JSONArray(sorted);
+            if (consumerMode || !config.isSmartSchedulingEnabled()) {
+                distributeTestsLegacy(one, failedTests, workerCapacities, dispatchCounts, buildType, testRequestId,
+                    sorted.size(), testersUsed);
+            } else {
+                distributeTestsWithSmartScheduling(one, failedTests, workerIps, buildType, testRequestId,
+                    workerCapacities, workerPeakCaps, testersUsed);
+            }
+            markRerunResults(build.getKey(), new HashSet<>(sorted), rerunWhy);
+        }
+        this.sqlBatchSummary = new JSONObject()
+            .put("shards", plan.size())
+            .put("shardRuns", shardsRun.get())
+            .put("rerunOneByOne", rerunTotal);
+        taskLogger.info(String.format("Full SQL suite: %d shard run(s); %d case(s) re-run one by one",
+            shardsRun.get(), rerunTotal));
+    }
+
+    /** One slot on worker: takes shards until none are left, and records their verdicts. */
+    private void runBatchSlot(String worker, LinkedBlockingDeque<BatchJob> queue, AtomicInteger outstanding,
+                              AtomicInteger shardsRun, Map<String, List<String>> rerun, Map<String, String> rerunWhy,
+                              String buildType, String testRequestId, Set<String> testersUsed) {
+        if (testRequestId != null) {
+            RequestContext.setRequestId(testRequestId);
+        }
+        try {
+            while (!isCancelRequested() && outstanding.get() > 0) {
+                BatchJob job;
+                try {
+                    job = queue.poll(2, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (job == null) {
+                    continue;
+                }
+                String label = job.shard.label();
+                this.currentTest = "sql batch " + label + " (" + shortSha(job.commit) + ")";
+                JSONObject res;
+                try {
+                    res = runTest(job.commit, job.buildPackage, SqlFullSuite.BATCH_TEST_PREFIX + label, worker,
+                        this.baselineKey, buildType, null);
+                } catch (Exception e) {
+                    res = new JSONObject().put("status", "execution_error").put("message", String.valueOf(e.getMessage()));
+                }
+                testersUsed.add(worker);
+                shardsRun.incrementAndGet();
+                String tsv = res.optString("batchVerdicts", null);
+                if (tsv == null || tsv.trim().isEmpty()) {
+                    if (job.attempt == 1 && !isCancelRequested()) {
+                        taskLogger.warning(String.format("Shard %s of %s on %s left no verdict (%s); running it once more",
+                            label, shortSha(job.commit), worker, res.optString("message")));
+                        job.attempt = 2;
+                        queue.addLast(job);
+                        continue;
+                    }
+                    String message = "CTP batch shard " + label + " ran twice without a verdict: " + res.optString("message");
+                    for (String c : job.shard.cases) {
+                        results.add(new JSONObject().put("commit", job.commit).put("test", c).put("testType", "sql")
+                            .put("status", "execution_error").put("message", message).put("batch", label));
+                    }
+                    testsCompleted.addAndGet(job.shard.cases.size());
+                    outstanding.decrementAndGet();
+                    batchShardRunsDone.incrementAndGet();
+                    continue;
+                }
+                Map<String, SqlBatch.Verdict> verdicts = SqlBatch.fromTsv(tsv);
+                String logPath = res.optString("logPath", "");
+                int ok = 0;
+                int nok = 0;
+                int unrun = 0;
+                for (String c : job.shard.cases) {
+                    SqlBatch.Verdict v = verdicts.get(c);
+                    if (v != null && v.ok) {
+                        JSONObject pass = new JSONObject().put("commit", job.commit).put("test", c).put("testType", "sql")
+                            .put("status", "pass").put("message", "").put("attempts", 1)
+                            .put("batch", label).put("durationMs", v.ms);
+                        if (!logPath.isEmpty()) {
+                            pass.put("logPath", logPath);
+                        }
+                        results.add(pass);
+                        ok++;
+                    } else {
+                        rerun.computeIfAbsent(job.commit, k -> Collections.synchronizedList(new ArrayList<>())).add(c);
+                        rerunWhy.put(job.commit + "|" + c, (v == null ? "not run" : "nok") + " in CTP batch shard " + label);
+                        if (v == null) {
+                            unrun++;
+                        } else {
+                            nok++;
+                        }
+                    }
+                }
+                testsCompleted.addAndGet(ok);
+                taskLogger.info(String.format("Shard %s of %s on %s: %d ok, %d nok, %d not run", label,
+                    shortSha(job.commit), worker, ok, nok, unrun));
+                outstanding.decrementAndGet();
+                batchShardRunsDone.incrementAndGet();
+            }
+        } finally {
+            RequestContext.clear();
+        }
+    }
+
+    /**
+     * Notes on a re-run case's result what its batch said: a pass alone after a batch nok is a
+     * case whose outcome depends on what ran before it (marked flaky, as mixed attempts are).
+     */
+    private void markRerunResults(String commit, Set<String> rerunCases, Map<String, String> rerunWhy) {
+        synchronized (results) {
+            for (JSONObject r : results) {
+                if (!commit.equals(r.optString("commit")) || r.has("batch") || !rerunCases.contains(r.optString("test"))) {
+                    continue;
+                }
+                String why = rerunWhy.getOrDefault(commit + "|" + r.optString("test"), "nok in its CTP batch");
+                r.put("batchVerdict", why);
+                if ("pass".equals(r.optString("status")) && why.startsWith("nok")) {
+                    r.put("flaky", true);
+                    String msg = r.optString("message", "");
+                    r.put("message", why + "; passed when run alone" + (msg.isEmpty() ? "" : ". " + msg));
+                }
+            }
+        }
+    }
+
     private void distributeTestsLegacy(Map<String, String> builtPackages, JSONArray tests,
                                        Map<String, Integer> workerCapacities, Map<String, AtomicInteger> dispatchCounts,
                                        String buildType, String testRequestId, int totalTestExecutions,

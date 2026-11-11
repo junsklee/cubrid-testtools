@@ -714,6 +714,60 @@ public class BuilderConfig {
      * drop/CUBRID-&lt;version&gt;-Linux.x86_64[-debug].tar.gz). Requests naming officialBuilds are
      * tested on those packages instead of building. Always ends with '/'.
      */
+    /**
+     * sqlFullSuite runs as cubridci's gha-ci runs the SQL suite: shards of whole top-level sql/
+     * directories, each one normal CTP SQL run on a tester, then the failed cases one by one.
+     * false runs every case one by one.
+     */
+    public boolean isSqlFullSuiteBatch() {
+        return Boolean.parseBoolean(properties.getProperty("sql_full_suite_batch", "true").trim());
+    }
+
+    /** How many shards a build's full SQL suite is split into (gha-ci's sql default: 10). */
+    public int getSqlBatchShards() {
+        return intProperty("sql_batch_shards", 10, 1, 64);
+    }
+
+    /**
+     * How many shards one Docker tester runs at once. Each runs a CUBRID server and CTP, so this
+     * is the tester's memory divided by sql_batch_shard_mem_mb, not its case slots. A VM tester
+     * runs one at a time; VM (regression) runs one a VM.
+     */
+    public int getSqlBatchPerTester() {
+        return intProperty("sql_batch_per_tester", 2, 1, 64);
+    }
+
+    /**
+     * The most failed cases of a build re-run one by one after its batches. More say the build and
+     * the testcases branch do not match; then the batch's verdicts are reported as they are.
+     */
+    public int getSqlBatchRerunMax() {
+        return intProperty("sql_batch_rerun_max", 1000, 0, 100000);
+    }
+
+    /** A shard's wall clock on the tester. */
+    public int getSqlBatchTimeoutMinutes() {
+        return intProperty("sql_batch_timeout_minutes", 180, 10, 1440);
+    }
+
+    /**
+     * A shard's memory: its hard container limit in Docker (applied whatever the tester's
+     * docker_enforce_memory_limits says), and what it declares to the tester's admission control.
+     */
+    public int getSqlBatchShardMemMb() {
+        return intProperty("sql_batch_shard_mem_mb", 4096, 1024, 65536);
+    }
+
+    private int intProperty(String key, int dflt, int min, int max) {
+        int value;
+        try {
+            value = Integer.parseInt(properties.getProperty(key, String.valueOf(dflt)).trim());
+        } catch (NumberFormatException e) {
+            value = dflt;
+        }
+        return Math.max(min, Math.min(max, value));
+    }
+
     public String getOfficialBuildStoreUrl() {
         String raw = properties.getProperty(OFFICIAL_BUILD_STORE_URL, OfficialBuilds.DEFAULT_STORE_URL).trim();
         if (raw.isEmpty()) {

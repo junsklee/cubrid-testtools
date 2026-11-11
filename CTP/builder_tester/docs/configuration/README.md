@@ -22,6 +22,11 @@ Both services read Properties files with environment expansion (supports `~/` an
 - `build_timeout_minutes` (int): Per-build timeout (default 180)
 - `build_cache_size` (int): Max cached builds (default 10)
 - `docker_host_root` (path): Host dir for `/work` and Gradle cache binds (default `~/docker-work`)
+- `sql_full_suite_batch` (bool, default true): the full SQL suite (`sqlFullSuite`) runs as CTP batches
+  (see `docs/SQL_TESTER.md`, "How the full suite runs"); false runs every case one by one.
+- `sql_batch_shards` (int, default 10), `sql_batch_per_tester` (int, default 2: shards a Docker tester runs
+  at once), `sql_batch_timeout_minutes` (int, default 180), `sql_batch_rerun_max` (int, default 1000: failed cases of a build re-run one by one at most; past it the batch verdicts are reported as they are), `sql_batch_shard_mem_mb` (int, default 4096: a shard container's hard memory limit, always applied, and
+  the memory a shard declares to the tester's admission control).
 - `official_build_store_url` (URL): Build store that `officialBuilds` versions come from (default
   `http://192.168.1.91:8080/REPO_ROOT/store_01/`); testers download packages from it. The dashboard lists
   the store the Builder reports in `/health` (the report server's `OFFICIAL_BUILD_STORE_URL` is only its

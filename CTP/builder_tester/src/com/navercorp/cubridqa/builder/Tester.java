@@ -209,6 +209,11 @@ public class Tester {
             nodeCapacity,
             actualSampler
         );
+        if (useDocker) {
+            // Full-suite SQL shards: one CTP run over a shard's directories, in the per-commit image
+            testOrchestrator.setSqlBatchDockerExecutor(new com.navercorp.cubridqa.builder.exec.SqlBatchDockerExecutor(
+                config, buildCache, sqlTcSync, imageBuilder, ctpProvisioner));
+        }
         if (config.isVmMode()) {
             if (config.isVmInstallCommonConf()) {
                 com.navercorp.cubridqa.builder.git.GitCredentials.installCommonConf(VmShellExecutor.resolveCtpHome(config),

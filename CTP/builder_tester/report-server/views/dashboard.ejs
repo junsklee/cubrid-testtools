@@ -299,7 +299,7 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-text" style="font-weight: normal;">Run the full SQL suite</span>
                     </label>
-                    <span class="info-icon" title="Runs every SQL case of the SQL testcases branch: all sql/**/cases/*.sql of cubrid-testcases (about 17,700 on develop), listed at the branch head when the request starts."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
+                    <span class="info-icon" title="Runs every SQL case of the SQL testcases branch: all sql/**/cases/*.sql of cubrid-testcases (about 17,700 on develop), listed at the branch head when the request starts.&#10;&#10;As cubridci&apos;s gha-ci runs it: shards of whole top-level sql/ directories, each one normal CTP SQL run (ctp.sh sql), then the cases that failed or did not run, one by one with retries and a diff each."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
                 </div>
                 <p class="help-text full-suite-note" id="sqlFullSuiteNote" style="display: none;"></p>
                 <textarea class="form-textarea" id="testsInput"

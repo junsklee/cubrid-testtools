@@ -2512,7 +2512,19 @@
     justify-self: end;
 }
 
-.verdict-pill .vp-icon { font-size: 0.72rem; line-height: 1; }
+.verdict-pill .vp-icon { font-size: 0.72rem; line-height: 1; flex-shrink: 0; }
+
+/* A long verdict ends in an ellipsis (the tooltip has it all): it must never take the row's
+   width from the request id and date, as "Error: The Builder restarted..." did */
+.verdict-pill .vp-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.report-row .verdict-pill {
+    max-width: 11rem;
+}
 
 .verdict-pill.v-success {
     background: rgba(31, 138, 80, 0.10);

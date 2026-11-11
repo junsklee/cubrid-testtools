@@ -746,8 +746,9 @@
                 return;
             }
             const branch = (document.getElementById('tcBranchInput') || {}).value || DEFAULT_TC_BRANCH;
-            note.innerHTML = `Runs every SQL case of <code>${escapeHtml(branch.trim() || DEFAULT_TC_BRANCH)}</code> `
-                + '(about 17,700 on develop), for each build.';
+            note.innerHTML = `Every SQL case of <code>${escapeHtml(branch.trim() || DEFAULT_TC_BRANCH)}</code> `
+                + '(about 17,700 on develop), for each build: run as CTP batches of whole sql/ directories, '
+                + 'as cubridci does, then the failed cases one by one.';
             note.style.display = 'block';
         }
 
@@ -2316,9 +2317,10 @@
                     ? escapeHtml(officialBuildsMeta.length === 1 ? officialBuildsMeta[0] : `${officialBuildsMeta.length} builds`)
                     : (meta && meta.prNumber) ? `PR #${escapeHtml(meta.prNumber)}` : (counts.commitCount != null ? counts.commitCount : 'Unknown');
                 const fullSuiteMeta = !!(meta && meta.sqlFullSuite);
+                // A full suite says what its number is: SQL cases, run in shards (set once /status has them)
                 const testsText = counts.testCount != null
-                    ? (fullSuiteMeta ? `${counts.testCount} (full SQL suite)` : counts.testCount)
-                    : (fullSuiteMeta ? 'Full SQL suite' : 'Unknown');
+                    ? (fullSuiteMeta ? `${counts.testCount.toLocaleString()} SQL cases (full SQL suite)` : counts.testCount)
+                    : (fullSuiteMeta ? 'Full SQL suite (cases listed when it starts)' : 'Unknown');
 
                 monitor.innerHTML = `
                     <div class="info-item">
@@ -2342,7 +2344,7 @@
                     </div>
                     <div class="info-item">
                         <div class="info-label">Tests</div>
-                        <div class="info-value">${testsText}</div>
+                        <div class="info-value" id="monitor-tests">${testsText}</div>
                     </div>
                     <div class="info-item">
                         <div class="info-label">Progress</div>
@@ -2522,7 +2524,23 @@
                                 statusElement.textContent = phaseText;
                                 
                                 let taskText = '';
-                                if (ps.currentTest) {
+                                const batch = ps.sqlBatch;
+                                if (batch && batch.shardRuns > 0) {
+                                    // The full SQL suite: N cases in S CTP batches, then the failed ones alone
+                                    const builds = Math.max(1, ps.buildsTotal || 1);
+                                    const cases = Math.round((ps.testsTotal || 0) / builds);
+                                    const testsEl = document.getElementById('monitor-tests');
+                                    if (testsEl) {
+                                        testsEl.textContent = `${cases.toLocaleString()} SQL cases in ${batch.shards} shard${batch.shards === 1 ? '' : 's'}`
+                                            + (builds > 1 ? ` × ${builds} builds` : '') + ' (full SQL suite)';
+                                    }
+                                }
+                                if (batch && batch.shardRuns > 0 && batch.shardRunsDone < batch.shardRuns) {
+                                    taskText = `CTP batches: ${batch.shardRunsDone}/${batch.shardRuns} shards done`;
+                                } else if (batch && batch.shardRuns > 0 && batch.rerun > 0) {
+                                    taskText = `Re-running ${batch.rerun} failed case${batch.rerun === 1 ? '' : 's'} one by one`
+                                        + (ps.currentTest ? ` (now ${ps.currentTest.split('/').pop()})` : '');
+                                } else if (ps.currentTest) {
                                     taskText = `Test: ${ps.currentTest}`;
                                     if (ps.currentCommit) taskText += ` on ${ps.currentCommit.substring(0, 7)}`;
                                 } else if (ps.currentCommit) {
@@ -2552,7 +2570,10 @@
                                 progressFill.style.width = `${pct}%`;
                                 
                                 const ps = statusData.progressSummary;
-                                if (ps.totalTasks > 0) {
+                                if (ps.sqlBatch && ps.sqlBatch.shardRuns > 0 && ps.testsTotal > 0) {
+                                    // Cases, not tasks: the build counts as a task, which read as one more case
+                                    progressDetails.textContent += ` · ${ps.testsCompleted.toLocaleString()}/${ps.testsTotal.toLocaleString()} cases`;
+                                } else if (ps.totalTasks > 0) {
                                     progressDetails.textContent += ` (${ps.completedTasks}/${ps.totalTasks})`;
                                 }
                             } else if (statusData.progress !== undefined && statusData.progress !== null) {
@@ -3303,6 +3324,12 @@
          */
         function shortVerdict(verdict) {
             const text = (verdict.text || '').toLowerCase();
+            // An error's text is a whole message (the tooltip has it): the pill names the kind
+            if (verdict.class === 'verdict-error' || text.startsWith('error')) {
+                if (text.includes('restarted')) return 'Interrupted';
+                if (text.includes('cancel')) return 'Cancelled';
+                return 'Error';
+            }
             // Checked before the build cases: the text reads "Build successful
             // ... - artifact upload failed", and the upload is what needs acting on.
             if (text.includes('upload failed')) return 'Upload failed';
@@ -3324,7 +3351,7 @@
             const cls = (verdict.class || 'verdict-preexisting').replace('verdict-', 'v-');
             const icon = VERDICT_ICON[verdict.class] || '○';
             return '<span class="verdict-pill ' + cls + '" title="' + escapeAttr(verdict.text) + '">' +
-                   '<span class="vp-icon">' + icon + '</span>' + escapeHtml(shortVerdict(verdict)) + '</span>';
+                   '<span class="vp-icon">' + icon + '</span><span class="vp-text">' + escapeHtml(shortVerdict(verdict)) + '</span></span>';
         }
 
         function countChips(counts) {
