@@ -88,3 +88,6 @@ todelete/
 /report-server/**/*.bak
 /report-server/**/*.orig
 /report-server/**/*~
+
+#etc
+.netrc
