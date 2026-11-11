@@ -477,68 +477,147 @@
             font-weight: 600;
         }
 
-        /* Build source: two radio cards - build from source, or an official build */
-        .source-picker {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.5rem;
-            margin-bottom: 0.875rem;
-        }
-
-        .source-option {
-            display: flex;
-            align-items: flex-start;
-            gap: 0.625rem;
-            padding: 0.6875rem 0.875rem;
-            background: var(--field);
+        /* Segmented control: a radio group drawn as one track with a sliding thumb. The native
+           radios stay (visually hidden) for keyboard, screen readers and the form's change events;
+           --seg-count on the track sizes the thumb. */
+        .segmented {
+            position: relative;
+            display: inline-grid;
+            grid-auto-flow: column;
+            grid-auto-columns: 1fr;
+            padding: 3px;
+            background: var(--sunken);
             border: 1px solid var(--line);
-            border-radius: var(--r-lg);
-            box-shadow: var(--shadow-xs);
+            border-radius: 9px;
+            isolation: isolate;
+        }
+
+        .segmented::before {
+            content: '';
+            position: absolute;
+            z-index: -1;
+            top: 3px;
+            bottom: 3px;
+            left: 3px;
+            width: calc((100% - 6px) / var(--seg-count, 2));
+            background: var(--field);
+            border-radius: 6px;
+            box-shadow: 0 1px 2px rgba(28, 36, 48, 0.10), 0 0 0 1px rgba(28, 36, 48, 0.04);
+            transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        .segmented:has(> .segment:nth-child(2) > input:checked)::before { transform: translateX(100%); }
+        .segmented:has(> .segment:nth-child(3) > input:checked)::before { transform: translateX(200%); }
+        .segmented:has(> .segment:nth-child(4) > input:checked)::before { transform: translateX(300%); }
+
+        .segmented-block {
+            display: grid;
+            width: 100%;
+        }
+
+        .segment {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4375rem;
+            min-width: 0;
+            padding: 0.375rem 0.875rem;
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 0.8125rem;
+            font-weight: 500;
+            line-height: 1.35;
+            white-space: nowrap;
             cursor: pointer;
-            transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+            user-select: none;
+            transition: color 0.15s ease;
         }
 
-        .source-option:hover {
-            border-color: var(--border-hover);
+        .segment input {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
         }
 
-        .source-option input {
-            margin-top: 0.1875rem;
-            accent-color: var(--cubrid-teal);
+        .segment svg {
+            width: 15px;
+            height: 15px;
             flex-shrink: 0;
         }
 
-        .source-option:has(input:checked) {
-            background: var(--accent-soft);
-            border-color: var(--cubrid-teal);
-            box-shadow: inset 0 0 0 1px var(--cubrid-teal);
-        }
-
-        .source-option:has(input:focus-visible) {
-            box-shadow: var(--ring);
-        }
-
-        .source-option-body {
-            display: flex;
-            flex-direction: column;
-            gap: 0.125rem;
-            min-width: 0;
-        }
-
-        .source-option-title {
-            font-size: 0.875rem;
-            font-weight: 600;
+        .segment:hover {
             color: var(--text-primary);
         }
 
-        .source-option:has(input:checked) .source-option-title {
+        .segment:has(input:checked) {
             color: var(--teal-ink);
+            font-weight: 600;
         }
 
-        .source-option-desc {
-            font-size: 0.75rem;
-            line-height: 1.4;
+        .segment:has(input:focus-visible) {
+            box-shadow: var(--ring);
+        }
+
+        .segment:has(input:disabled) {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        .segment-note {
+            display: block;
+            margin-top: 0.5rem;
             color: var(--text-secondary);
+            font-size: 0.8125rem;
+            line-height: 1.5;
+        }
+
+        .segment-note[hidden] {
+            display: none;
+        }
+
+        /* A field's label with its switch on the right (the build source) */
+        .section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .section-head .form-label {
+            margin-bottom: 0;
+        }
+
+        /* Build mode: the baseline line under the switch (shown in baseline cherry-pick mode) */
+        #baselineInfo:has(#buildModeCheckout:checked) #baselineSha {
+            display: none !important;
+        }
+
+        .mode-field .baseline-line a {
+            color: var(--cubrid-teal);
+            font-family: var(--font-data);
+            font-weight: 600;
+        }
+
+        .mode-field .baseline-note {
+            color: var(--text-secondary);
+            margin-left: 0.25rem;
+        }
+
+        .mode-field.has-baseline .baseline-line {
+            padding: 0.5rem 0.75rem;
+            background: #FFFAF0;
+            border-left: 3px solid var(--warn-amber);
+            border-radius: 4px;
+            color: var(--text-primary);
+        }
+
+        .mode-field.baseline-error .baseline-line,
+        .mode-field.baseline-error .baseline-line a {
+            color: var(--error);
         }
 
         /* Official builds: release-line chips, filter, selection, list */
@@ -598,13 +677,60 @@
             margin-bottom: 0.5rem;
         }
 
-        .official-toolbar .official-filter {
+        .search-field {
+            position: relative;
             flex: 1;
             min-width: 0;
         }
 
-        .official-toolbar .commit-counter {
+        .search-field .search-icon {
+            position: absolute;
+            top: 50%;
+            left: 0.6875rem;
+            width: 15px;
+            height: 15px;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            pointer-events: none;
+        }
+
+        .search-field .official-filter {
+            padding-left: 2.125rem;
+        }
+
+        .selection-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.625rem;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--teal-ink);
+            font-size: 0.75rem;
+            font-weight: 600;
             white-space: nowrap;
+        }
+
+        .ghost-btn {
+            padding: 0.375rem 0.5rem;
+            border: none;
+            border-radius: var(--r-sm);
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 0.8125rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .ghost-btn:hover {
+            background: rgba(28, 36, 48, 0.05);
+            color: var(--text-primary);
+        }
+
+        .ghost-btn:focus-visible {
+            outline: none;
+            box-shadow: var(--ring);
         }
 
         .official-selected {
@@ -671,6 +797,10 @@
             vertical-align: 1px;
         }
 
+        .official-item.selected .official-badge {
+            background: var(--field);
+        }
+
         .official-meta {
             margin-top: 0.1875rem;
             color: var(--text-secondary);
@@ -712,15 +842,20 @@
         }
 
         @media (max-width: 640px) {
-            .source-picker {
-                grid-template-columns: 1fr;
+            .section-head {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .section-head .segmented {
+                display: grid;
             }
 
             .official-toolbar {
                 flex-wrap: wrap;
             }
 
-            .official-toolbar .official-filter {
+            .official-toolbar .search-field {
                 flex-basis: 100%;
             }
         }
@@ -796,26 +931,65 @@
             border: 1px solid var(--line);
             border-radius: 8px;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
             display: flex;
             align-items: center;
             gap: 0.75rem;
         }
 
         .commit-item:hover {
-            background: var(--sunken);
-            transform: translateX(4px);
+            border-color: var(--border-hover);
         }
 
         .commit-item.selected {
-            background: rgba(60, 90, 120, 0.2);
-            border: 1px solid rgba(60, 90, 120, 0.4);
+            background: var(--accent-soft);
+            border-color: rgba(60, 90, 120, 0.45);
+            box-shadow: inset 3px 0 0 var(--cubrid-teal);
         }
 
+        /* A checkbox drawn to match: rounded box, accent fill and a check mark when on */
         .commit-checkbox {
-            width: 20px;
-            height: 20px;
-            accent-color: var(--cubrid-teal);
+            appearance: none;
+            -webkit-appearance: none;
+            display: grid;
+            place-content: center;
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            background: var(--field);
+            border: 1.5px solid #B8AE9C;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .commit-checkbox::after {
+            content: '';
+            width: 10px;
+            height: 10px;
+            background: #fff;
+            clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+            transform: scale(0);
+            transition: transform 0.12s ease;
+        }
+
+        .commit-checkbox:hover {
+            border-color: var(--cubrid-teal);
+        }
+
+        .commit-checkbox:checked {
+            background: var(--cubrid-teal);
+            border-color: var(--cubrid-teal);
+        }
+
+        .commit-checkbox:checked::after {
+            transform: scale(1);
+        }
+
+        .commit-checkbox:focus-visible {
+            outline: none;
+            box-shadow: var(--ring);
         }
 
         .commit-info {
@@ -844,107 +1018,6 @@
 
         .commit-item .commit-sha a:hover {
             color: var(--teal-ink);
-        }
-
-        .baseline-info {
-            margin-top: 1rem;
-            padding: 0.75rem 1rem;
-            background: var(--sunken);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            font-size: 0.875rem;
-            color: var(--text-secondary);
-            display: flex;
-            gap: 0.5rem;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .baseline-option {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 0.25rem;
-        }
-
-        .baseline-choice {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
-
-        .baseline-desc {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            margin-left: 1.4rem;
-        }
-
-        .baseline-options {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 0.75rem;
-        }
-
-        .baseline-radio {
-            accent-color: var(--cubrid-teal);
-        }
-
-        .baseline-info .baseline-label {
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .baseline-info .baseline-value {
-            color: inherit;
-        }
-
-        /* Ensure the baseline SHA line only appears in Baseline cherry-pick mode.
-           This also overrides any stale inline display styles from older cached JS. */
-        .baseline-info:has(#buildModeCheckout:checked) #baselineSha {
-            display: none !important;
-        }
-
-        .baseline-info:has(#buildModeBaseline:checked) #baselineSha {
-            display: inline !important;
-        }
-
-        .baseline-info .baseline-value a {
-            color: var(--cubrid-teal);
-            font-weight: 600;
-            text-decoration: underline;
-        }
-
-        .baseline-info .baseline-value a:hover {
-            color: var(--teal-ink);
-        }
-
-        .baseline-info .baseline-note {
-            color: var(--secondary);
-            margin-left: 0.25rem;
-        }
-
-        .baseline-info.has-baseline {
-            border-color: rgba(138, 96, 0, 0.45);
-            background: #fffaf0;
-        }
-
-        .baseline-info.has-baseline .baseline-label {
-            color: #fef3c7;
-        }
-
-        .baseline-info.baseline-error {
-            border-color: rgba(239, 68, 68, 0.5);
-            color: var(--error);
-        }
-
-        .baseline-info.baseline-error .baseline-label,
-        .baseline-info.baseline-error .baseline-value {
-            color: var(--error);
-        }
-
-        .baseline-info.baseline-error .baseline-value a {
-            color: var(--error);
         }
 
         .commit-message {

@@ -207,7 +207,7 @@
             if (fullSuite) fullSuite.checked = false;
             tcBranchTouched = false;
             tcBranchSuggested = false;
-            setBuildSource('source', { quiet: true });
+            setBuildSource('source');
         }
 
         // Latest queue snapshot (load-first: refreshed on page load, manual refresh, and background polling)
@@ -1290,7 +1290,7 @@
 
         // ---- Build source: build from source / official build ----
 
-        function setBuildSource(source, options = {}) {
+        function setBuildSource(source) {
             buildSource = source === 'official' ? 'official' : 'source';
             const official = isOfficialSource();
             const radio = document.getElementById(official ? 'buildSourceOfficial' : 'buildSourceSource');
@@ -1320,9 +1320,6 @@
             applyBuildOnlyState();
             applyCustomFieldsForTestType();
             updateCommitCount();
-            if (!options.quiet) {
-                showToast(official ? 'Testing an official build' : 'Building from source', 'info');
-            }
         }
 
         async function loadOfficialBuilds(refresh = false) {

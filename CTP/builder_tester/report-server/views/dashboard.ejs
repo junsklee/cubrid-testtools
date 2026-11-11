@@ -44,22 +44,20 @@
 
             <!-- Build Source: build commits from source, or test a published official build as is -->
             <div class="form-group">
-                <label class="form-label" id="buildSourceLabel">CUBRID Build</label>
-                <div class="source-picker" role="radiogroup" aria-labelledby="buildSourceLabel">
-                    <label class="source-option" for="buildSourceSource">
-                        <input type="radio" name="buildSource" id="buildSourceSource" value="source" autocomplete="off" checked>
-                        <span class="source-option-body">
-                            <span class="source-option-title">Build from source</span>
-                            <span class="source-option-desc">Commits, a PR, or a custom script, built by the Builder</span>
-                        </span>
-                    </label>
-                    <label class="source-option" for="buildSourceOfficial">
-                        <input type="radio" name="buildSource" id="buildSourceOfficial" value="official" autocomplete="off">
-                        <span class="source-option-body">
-                            <span class="source-option-title">Official build</span>
-                            <span class="source-option-desc">A published build from the build store, tested as is</span>
-                        </span>
-                    </label>
+                <div class="section-head">
+                    <span class="form-label" id="buildSourceLabel">CUBRID Build</span>
+                    <div class="segmented" role="radiogroup" aria-labelledby="buildSourceLabel" style="--seg-count: 2;">
+                        <label class="segment" for="buildSourceSource" title="Commits, a PR, or a custom script, built by the Builder">
+                            <input type="radio" name="buildSource" id="buildSourceSource" value="source" autocomplete="off" checked>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M2.5 12h6.3M15.2 12h6.3"/></svg>
+                            <span>From source</span>
+                        </label>
+                        <label class="segment" for="buildSourceOfficial" title="A published build from the build store, tested as is">
+                            <input type="radio" name="buildSource" id="buildSourceOfficial" value="official" autocomplete="off">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8 20.5 7.4v9.2L12 21.2l-8.5-4.6V7.4z"/><path d="M3.8 7.6 12 12l8.2-4.4M12 12v9"/></svg>
+                            <span>Official build</span>
+                        </label>
+                    </div>
                 </div>
 
                 <div id="sourceBuildPanel">
@@ -192,10 +190,13 @@
                 <div id="officialBuildPanel" style="display: none;">
                     <div class="series-picker" id="officialSeriesPicker" role="radiogroup" aria-label="Release line"></div>
                     <div class="official-toolbar">
-                        <input type="search" class="form-input official-filter" id="officialBuildFilter"
-                            placeholder="Filter by version or commit" autocomplete="off" aria-label="Filter official builds">
-                        <span class="commit-counter">Selected: <span id="officialSelectedCount">0</span></span>
-                        <button type="button" class="control-btn" id="officialClearBtn" onclick="clearOfficialBuilds()">Clear</button>
+                        <div class="search-field">
+                            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+                            <input type="search" class="form-input official-filter" id="officialBuildFilter"
+                                placeholder="Filter by version or commit" autocomplete="off" aria-label="Filter official builds">
+                        </div>
+                        <span class="selection-pill"><span id="officialSelectedCount">0</span> selected</span>
+                        <button type="button" class="ghost-btn" id="officialClearBtn" onclick="clearOfficialBuilds()">Clear</button>
                     </div>
                     <div class="official-selected" id="officialSelectedChips" aria-live="polite"></div>
                     <div class="commit-list official-list" id="officialBuildList" role="listbox" aria-multiselectable="true" aria-label="Official builds">
@@ -348,33 +349,22 @@
 
                     <!-- Execution mode decides whether the worker list applies (Docker) or VMs run the cases -->
                     <div class="form-group">
-                        <label class="form-label">Execution Mode</label>
-                        <div class="baseline-info" id="executionModeInfo">
-                            <div class="baseline-options">
-                            <label class="baseline-option" for="executionModeDocker">
-                                <span class="baseline-choice">
-                                    <input type="radio" id="executionModeDocker" name="executionMode" class="baseline-radio" value="docker" checked>
-                                    <span class="baseline-label">Docker (default)</span>
-                                    <span class="info-icon" title="Runs each case in a Docker container on the worker nodes, several cases in parallel."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
-                                </span>
+                        <label class="form-label" id="executionModeLabel">Execution Mode</label>
+                        <div class="segmented segmented-block" role="radiogroup" aria-labelledby="executionModeLabel" style="--seg-count: 3;">
+                            <label class="segment" for="executionModeDocker" title="Runs each case in a Docker container on the worker nodes, several cases in parallel. (default)">
+                                <input type="radio" id="executionModeDocker" name="executionMode" value="docker" checked>
+                                <span>Docker</span>
                             </label>
-                            <label class="baseline-option" for="executionModeVm">
-                                <span class="baseline-choice">
-                                    <input type="radio" id="executionModeVm" name="executionMode" class="baseline-radio" value="vm">
-                                    <span class="baseline-label">VM</span>
-                                    <span class="info-icon" title="Runs cases one at a time on each dedicated QA VM tester listed below, with the VM's own CTP, the way QAHome regression does. Shell: process reset, conf restore, core and fatal-error checks. SQL: the VM's CTP SQL tool and SQL conf.&#10;Starts from the VM testers configured on the Builder (vm_tester_nodes); add or remove VM testers below."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
-                                </span>
+                            <label class="segment" for="executionModeVm" title="Runs cases one at a time on each dedicated QA VM tester listed below, with the VM's own CTP, the way QAHome regression does. Shell: process reset, conf restore, core and fatal-error checks. SQL: the VM's CTP SQL tool and SQL conf.&#10;Starts from the VM testers configured on the Builder (vm_tester_nodes); add or remove VM testers below.">
+                                <input type="radio" id="executionModeVm" name="executionMode" value="vm">
+                                <span>VM</span>
                             </label>
-                            <label class="baseline-option" for="executionModeConsumer">
-                                <span class="baseline-choice">
-                                    <input type="radio" id="executionModeConsumer" name="executionMode" class="baseline-radio" value="consumer">
-                                    <span class="baseline-label">VM (regression)</span>
-                                    <span class="info-icon" title="Runs shell or SQL cases like VM mode, on the QAHome regression VMs while they are idle: the request waits in the Builder-Tester queue next to the regression queues, and each VM that takes it runs cases one at a time until none are left.&#10;Cases may wait while the VMs run regression."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
-                                </span>
+                            <label class="segment" for="executionModeConsumer" title="Runs shell or SQL cases like VM mode, on the QAHome regression VMs while they are idle: the request waits in the Builder-Tester queue next to the regression queues, and each VM that takes it runs cases one at a time until none are left.&#10;Cases may wait while the VMs run regression.">
+                                <input type="radio" id="executionModeConsumer" name="executionMode" value="consumer">
+                                <span>VM (regression)</span>
                             </label>
-                            </div>
-                            <span class="baseline-value" id="executionModeNote" style="flex-basis: 100%;">Cases run in Docker containers on the worker nodes.</span>
                         </div>
+                        <p class="segment-note" id="executionModeNote">Cases run in Docker containers on the worker nodes.</p>
                     </div>
 
                     <!-- Worker Configuration -->
@@ -405,25 +395,19 @@
                     </div>
 
                     <div class="form-group" id="buildModeSection">
-                        <label class="form-label">Build Mode</label>
-                        <div class="baseline-info" id="baselineInfo">
-                            <div class="baseline-options">
-                            <label class="baseline-option" for="buildModeCheckout">
-                                <span class="baseline-choice">
-                                    <input type="radio" id="buildModeCheckout" name="buildMode" class="baseline-radio" value="checkout" checked>
-                                    <span class="baseline-label">Checkout (default)</span>
-                                    <span class="info-icon" title="Build each commit by direct checkout (no baseline cherry-pick)."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
-                                </span>
-                            </label>
-                            <label class="baseline-option" for="buildModeBaseline">
-                                <span class="baseline-choice">
-                                    <input type="radio" id="buildModeBaseline" name="buildMode" class="baseline-radio" value="baseline_cherrypick">
-                                    <span class="baseline-label">Baseline cherry-pick</span>
-                                    <span class="info-icon" title="Builds each commit by cherry-picking on top of the baseline, which is the earliest commit's parent.&#10;Warning: Commits are not independent variables; later commits depend on earlier changes, so results can be unstable or non-linear."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><path d="M8 7.3v4.2" stroke-linecap="round"/><circle cx="8" cy="4.5" r="0.95" fill="currentColor" stroke="none"/></svg></span>
-                                </span>
-                            </label>
+                        <label class="form-label" id="buildModeLabel">Build Mode</label>
+                        <div class="mode-field" id="baselineInfo">
+                            <div class="segmented segmented-block" role="radiogroup" aria-labelledby="buildModeLabel" style="--seg-count: 2;">
+                                <label class="segment" for="buildModeCheckout" title="Build each commit by direct checkout (no baseline cherry-pick). (default)">
+                                    <input type="radio" id="buildModeCheckout" name="buildMode" value="checkout" checked>
+                                    <span>Checkout</span>
+                                </label>
+                                <label class="segment" for="buildModeBaseline" title="Builds each commit by cherry-picking on top of the baseline, which is the earliest commit's parent.&#10;Warning: Commits are not independent variables; later commits depend on earlier changes, so results can be unstable or non-linear.">
+                                    <input type="radio" id="buildModeBaseline" name="buildMode" value="baseline_cherrypick">
+                                    <span>Baseline cherry-pick</span>
+                                </label>
                             </div>
-                            <span class="baseline-value" id="baselineSha">Select commits to determine baseline.</span>
+                            <p class="segment-note baseline-line" id="baselineSha">Select commits to determine baseline.</p>
                         </div>
                     </div>
                     
